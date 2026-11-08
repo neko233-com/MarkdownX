@@ -1,0 +1,69 @@
+{
+  "format": "markdownx.book",
+  "version": 1,
+  "id": "projectile-lab",
+  "title": {
+    "zh": "物理实验室：抛物线",
+    "en": "Physics Lab: Projectile"
+  },
+  "subtitle": {
+    "zh": "调参数、发射、记录，再把结论写下来。",
+    "en": "Tune, launch, record, then write the conclusion."
+  },
+  "authors": [
+    "MarkdownX 物理组"
+  ],
+  "languages": [
+    "zh",
+    "en"
+  ],
+  "default_language": "zh",
+  "cover": "",
+  "theme": {
+    "accent": "#2f6b5f",
+    "background": "",
+    "text": "",
+    "font": "serif"
+  },
+  "reading": {
+    "layout": "scroll",
+    "max_width": 760,
+    "show_toc": true
+  },
+  "chapters": [
+    {
+      "id": "launch",
+      "title": {
+        "zh": "抛体运动",
+        "en": "Projectile Motion"
+      },
+      "format": "docxxml",
+      "content": "<h2>把一秒钟拆成很多帧</h2>\n<p>抛体运动最迷人的地方，是水平方向与竖直方向互不打扰。水平方向匀速，竖直方向只受重力。把这两个动作叠在一起，就得到一条抛物线。</p>\n<interactive type=\"canvas\" title=\"调整角度与初速度，然后发射\" height=\"420\"><![CDATA[{\"kind\":\"projectile\",\"angle\":45,\"speed\":14}]]></interactive>\n<p>固定初速度，把角度从 30° 调到 60°。射程先变长、再变短；45° 附近最远。最大高度却一直随角度上升。</p>\n<callout emoji=\"🧪\" background-color=\"light-blue\" border-color=\"blue\"><p><b>实验：</b>保持角度 45°，把初速度翻倍。射程会变成几倍？先猜，再按“发射”。</p></callout>\n<table><thead><tr><th><p>量</p></th><th><p>公式</p></th><th><p>单位</p></th></tr></thead><tbody><tr><td><p>飞行时间</p></td><td><p><latex>T = 2v_0 \\sin\\theta / g</latex></p></td><td><p>s</p></td></tr><tr><td><p>最大高度</p></td><td><p><latex>H = v_0^2 \\sin^2\\theta / (2g)</latex></p></td><td><p>m</p></td></tr><tr><td><p>射程</p></td><td><p><latex>R = v_0^2 \\sin 2\\theta / g</latex></p></td><td><p>m</p></td></tr></tbody></table>",
+      "content_en": "<h2>Split one second into many frames</h2>\n<p>The beautiful thing about projectile motion is that the horizontal and vertical stories ignore each other. Horizontally the speed is constant; vertically only gravity acts. Stack the two and you get a parabola.</p>\n<interactive type=\"canvas\" title=\"Set the angle and speed, then launch\" height=\"420\"><![CDATA[{\"kind\":\"projectile\",\"angle\":45,\"speed\":14}]]></interactive>\n<p>Keep the launch speed fixed and sweep the angle from 30° to 60°. The range first grows, then shrinks; it peaks near 45°. The maximum height, meanwhile, keeps climbing with the angle.</p>\n<callout emoji=\"🧪\" background-color=\"light-blue\" border-color=\"blue\"><p><b>Experiment:</b> at 45°, double the launch speed. What happens to the range? Guess first, then press Launch.</p></callout>\n<table><thead><tr><th><p>Quantity</p></th><th><p>Formula</p></th><th><p>Unit</p></th></tr></thead><tbody><tr><td><p>Flight time</p></td><td><p><latex>T = 2v_0 \\sin\\theta / g</latex></p></td><td><p>s</p></td></tr><tr><td><p>Apex height</p></td><td><p><latex>H = v_0^2 \\sin^2\\theta / (2g)</latex></p></td><td><p>m</p></td></tr><tr><td><p>Range</p></td><td><p><latex>R = v_0^2 \\sin 2\\theta / g</latex></p></td><td><p>m</p></td></tr></tbody></table>"
+    },
+    {
+      "id": "sandbox",
+      "title": {
+        "zh": "HTML 沙箱",
+        "en": "The HTML Sandbox"
+      },
+      "format": "docxxml",
+      "content": "<h2>沙箱里的小实验</h2>\n<p>有些现象很难用几个参数描述。MarkdownX 允许把一段完整的 HTML/JS 放进独立沙箱：它不能读取这本书，也不能访问外部页面，但可以画布、动画、响应点击。</p>\n<interactive type=\"html\" title=\"单摆：点一下，给它一个推力\" height=\"300\"><![CDATA[<!doctype html>\n<html><body style=\"margin:0;display:grid;place-items:center;height:100%;background:#fbf8f1\">\n<canvas id=\"c\" width=\"520\" height=\"260\" style=\"max-width:100%\"></canvas>\n<script>\nconst c = document.getElementById('c'), x = c.getContext('2d');\nlet a = 0.7, v = 0, last = performance.now();\nfunction frame(t) {\n  const dt = Math.min(0.032, (t - last) / 1000); last = t;\n  v += (-9.8 / 0.9) * Math.sin(a) * dt; a += v * dt; v *= 0.999;\n  x.clearRect(0, 0, c.width, c.height);\n  const ox = c.width / 2, oy = 24, len = 190;\n  const px = ox + Math.sin(a) * len, py = oy + Math.cos(a) * len;\n  x.strokeStyle = '#d8d0c0'; x.lineWidth = 1;\n  for (let i = 0; i < 5; i++) { x.beginPath(); x.arc(ox, oy, 40 + i * 36, 0, Math.PI * 2); x.stroke(); }\n  x.strokeStyle = '#24211c'; x.lineWidth = 3; x.beginPath(); x.moveTo(ox, oy); x.lineTo(px, py); x.stroke();\n  x.fillStyle = '#b45309'; x.beginPath(); x.arc(px, py, 15, 0, Math.PI * 2); x.fill();\n  x.fillStyle = '#7a7264'; x.font = '12px system-ui'; x.fillText('点击画布，给单摆一个推力', 14, c.height - 14);\n  requestAnimationFrame(frame);\n}\nc.addEventListener('click', () => { v += 1.4; });\nrequestAnimationFrame(frame);\n</script></body></html>]]></interactive>\n<p>上面的单摆每一帧都在解 <latex>\\ddot{\\theta} = -(g/L)\\sin\\theta</latex>。它不是视频，而是读者可以打断、重新推动的模型。</p>\n<callout emoji=\"🔒\" background-color=\"light-gray\" border-color=\"gray\"><p><b>边界：</b>HTML 组件运行在 <code>sandbox=\"allow-scripts\"</code> 的 iframe 里，无法读取宿主页面或本地文件。需要教材级稳定的交互时，优先用 Canvas 组件。</p></callout>",
+      "content_en": "<h2>A small experiment in a sandbox</h2>\n<p>Some phenomena are hard to capture with a handful of parameters. MarkdownX can place a complete HTML/JS experiment in an isolated sandbox: it cannot read the book or reach the surrounding page, but it can draw, animate and respond to clicks.</p>\n<interactive type=\"html\" title=\"Pendulum: click to give it a push\" height=\"300\"><![CDATA[<!doctype html>\n<html><body style=\"margin:0;display:grid;place-items:center;height:100%;background:#fbf8f1\">\n<canvas id=\"c\" width=\"520\" height=\"260\" style=\"max-width:100%\"></canvas>\n<script>\nconst c = document.getElementById('c'), x = c.getContext('2d');\nlet a = 0.7, v = 0, last = performance.now();\nfunction frame(t) {\n  const dt = Math.min(0.032, (t - last) / 1000); last = t;\n  v += (-9.8 / 0.9) * Math.sin(a) * dt; a += v * dt; v *= 0.999;\n  x.clearRect(0, 0, c.width, c.height);\n  const ox = c.width / 2, oy = 24, len = 190;\n  const px = ox + Math.sin(a) * len, py = oy + Math.cos(a) * len;\n  x.strokeStyle = '#d8d0c0'; x.lineWidth = 1;\n  for (let i = 0; i < 5; i++) { x.beginPath(); x.arc(ox, oy, 40 + i * 36, 0, Math.PI * 2); x.stroke(); }\n  x.strokeStyle = '#24211c'; x.lineWidth = 3; x.beginPath(); x.moveTo(ox, oy); x.lineTo(px, py); x.stroke();\n  x.fillStyle = '#b45309'; x.beginPath(); x.arc(px, py, 15, 0, Math.PI * 2); x.fill();\n  x.fillStyle = '#7a7264'; x.font = '12px system-ui'; x.fillText('点击画布，给单摆一个推力', 14, c.height - 14);\n  requestAnimationFrame(frame);\n}\nc.addEventListener('click', () => { v += 1.4; });\nrequestAnimationFrame(frame);\n</script></body></html>]]></interactive>\n<p>The pendulum above solves <latex>\\ddot{\\theta} = -(g/L)\\sin\\theta</latex> every frame. It is not a video; it is a model the reader can interrupt and push again.</p>\n<callout emoji=\"🔒\" background-color=\"light-gray\" border-color=\"gray\"><p><b>Boundary:</b> HTML widgets run in an iframe with <code>sandbox=\"allow-scripts\"</code> and cannot read the host page or local files. For stable textbook interactions, prefer the Canvas blocks.</p></callout>"
+    },
+    {
+      "id": "record",
+      "title": {
+        "zh": "实验记录",
+        "en": "Lab Notes"
+      },
+      "format": "docxxml",
+      "content": "<h2>记录一次实验</h2>\n<p>下面是一段把发射数据记下来的小程序。它展示的是“书里可以放代码”，而不是让读者真的运行它。</p>\n<pre lang=\"python\" caption=\"记录射程与角度\"><code>import math\n\ndef range_at(v0, angle_deg, g=9.8):\n    angle = math.radians(angle_deg)\n    return v0 * v0 * math.sin(2 * angle) / g\n\nfor angle in (15, 30, 45, 60, 75):\n    print(angle, round(range_at(14, angle), 2))</code></pre>\n<p>把输出抄进下面的表，再和画布上的读数对一遍。数据与图像互相校验，结论才站得住。</p>\n<table><thead><tr><th><p>角度</p></th><th><p>射程 / m</p></th><th><p>你的预测</p></th></tr></thead><tbody><tr><td><p>30°</p></td><td><p></p></td><td><p></p></td></tr><tr><td><p>45°</p></td><td><p></p></td><td><p></p></td></tr><tr><td><p>60°</p></td><td><p></p></td><td><p></p></td></tr></tbody></table>",
+      "content_en": "<h2>Record one experiment</h2>\n<p>Here is a tiny program that tabulates launch data. It shows that a book can hold code, not that the reader has to run it.</p>\n<pre lang=\"python\" caption=\"Record range by angle\"><code>import math\n\ndef range_at(v0, angle_deg, g=9.8):\n    angle = math.radians(angle_deg)\n    return v0 * v0 * math.sin(2 * angle) / g\n\nfor angle in (15, 30, 45, 60, 75):\n    print(angle, round(range_at(14, angle), 2))</code></pre>\n<p>Copy the output into the table below and compare it with the readings on the canvas. Data and picture check each other; that is what makes a conclusion hold.</p>\n<table><thead><tr><th><p>Angle</p></th><th><p>Range / m</p></th><th><p>Your prediction</p></th></tr></thead><tbody><tr><td><p>30°</p></td><td><p></p></td><td><p></p></td></tr><tr><td><p>45°</p></td><td><p></p></td><td><p></p></td></tr><tr><td><p>60°</p></td><td><p></p></td><td><p></p></td></tr></tbody></table>"
+    }
+  ],
+  "assets": {},
+  "created": 1794134527843,
+  "modified": 1794134527843,
+  "generator": "MarkdownX examples/build.py"
+}

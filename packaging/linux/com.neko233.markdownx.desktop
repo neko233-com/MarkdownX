@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MarkdownX
+Comment=Interactive books for learning
+Exec=markdownx %f
+Icon=com.neko233.markdownx
+Terminal=false
+Categories=Education;Office;TextEditor;
+MimeType=application/vnd.markdownx.book+json;
+StartupWMClass=com.neko233.markdownx

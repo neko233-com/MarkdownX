@@ -1,0 +1,85 @@
+{
+  "books": [
+    {
+      "file": "quadratics.mdxb",
+      "kicker": "Mathematics · 数学",
+      "cover": {
+        "bg": "#8a3f06",
+        "ink": "#fff7ec",
+        "glyph": "ƒ"
+      },
+      "zh": {
+        "title": "二次函数",
+        "blurb": "拖动 a、b、c，看顶点与判别式如何改变一条抛物线。",
+        "tags": [
+          "数学",
+          "Canvas",
+          "双语"
+        ]
+      },
+      "en": {
+        "title": "Quadratics",
+        "blurb": "Drag a, b and c and watch the vertex and discriminant reshape a parabola.",
+        "tags": [
+          "Math",
+          "Canvas",
+          "Bilingual"
+        ]
+      }
+    },
+    {
+      "file": "projectile-lab.mdxb",
+      "kicker": "Physics · 物理",
+      "cover": {
+        "bg": "#23473f",
+        "ink": "#eef2e8",
+        "glyph": "→"
+      },
+      "zh": {
+        "title": "抛体实验室",
+        "blurb": "调整角度与初速度，发射，然后把数据抄进表格。",
+        "tags": [
+          "物理",
+          "Canvas",
+          "HTML 沙箱"
+        ]
+      },
+      "en": {
+        "title": "Projectile Lab",
+        "blurb": "Tune the angle and speed, launch, then copy the data into the table.",
+        "tags": [
+          "Physics",
+          "Canvas",
+          "HTML sandbox"
+        ]
+      }
+    },
+    {
+      "file": "type-specimen.mdxb",
+      "kicker": "Typography · 排版",
+      "cover": {
+        "bg": "#3e3457",
+        "ink": "#f1ecff",
+        "glyph": "Aa"
+      },
+      "zh": {
+        "title": "双语排版样本",
+        "blurb": "Markdown 与 DocxXML 同页，中文与英文各自成篇。",
+        "tags": [
+          "排版",
+          "Markdown",
+          "DocxXML"
+        ]
+      },
+      "en": {
+        "title": "Bilingual Specimen",
+        "blurb": "Markdown and DocxXML side by side, Chinese and English each on their own terms.",
+        "tags": [
+          "Type",
+          "Markdown",
+          "DocxXML"
+        ]
+      }
+    }
+  ]
+}

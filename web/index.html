@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fbf8f1">
+  <title>MarkdownX — 会动的书</title>
+  <meta name="description" content="MarkdownX 是一个把文字、Canvas 与 HTML 小实验装进同一本书的阅读器。A reader for books you can touch.">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2324211c'/><path d='M15 44V20h6l11 15 11-15h6v24h-6V30L32 44 21 30v14z' fill='%23fbf8f1'/></svg>">
+</head>
+<body>
+  <div id="app">
+    <section id="landing" class="landing">
+      <header class="landing-nav">
+        <a class="brand" href="#" aria-label="MarkdownX">
+          <span class="brand-mark" aria-hidden="true">M</span>
+          <span class="brand-word">MarkdownX</span>
+        </a>
+        <nav class="landing-links">
+          <a href="#examples">示例 · Examples</a>
+          <a href="#about">关于 · About</a>
+          <button id="landing-theme" class="icon-button" type="button" aria-label="切换明暗 / Toggle theme">◐</button>
+        </nav>
+      </header>
+
+      <main class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="pulse"></span> Interactive books · 动态书</p>
+          <h1>书不该只是<br><em>读</em>到这里。</h1>
+          <p class="hero-lede">MarkdownX 把文字、图表、Canvas 与 HTML 小实验放进同一本书。写一次，桌面与浏览器都能打开；一个 <code>.mdxb</code> 文件就是整本书。</p>
+          <div class="hero-actions">
+            <button id="open-book" class="button primary" type="button">打开一本书 <span aria-hidden="true">↗</span></button>
+            <a class="button ghost" href="#examples">看看示例</a>
+          </div>
+          <p class="hero-meta">无需账号 · 本地阅读 · 中英双语 · 单文件</p>
+        </div>
+
+        <div class="hero-art" aria-hidden="true">
+          <div class="book-stack">
+            <div class="book-cover back"><span>Physics</span><small>Lab notes</small></div>
+            <div class="book-cover mid"><span>数学</span><small>二次函数</small></div>
+            <div class="book-cover front">
+              <span class="book-kicker">MarkdownX Book</span>
+              <strong>会动的<br>教科书</strong>
+              <span class="book-line"></span>
+              <small>文字 · 图表 · 实验</small>
+            </div>
+          </div>
+          <div class="orbit orbit-a"></div>
+          <div class="orbit orbit-b"></div>
+        </div>
+      </main>
+
+      <section id="examples" class="examples">
+        <div class="section-head">
+          <h2>从一本书开始</h2>
+          <p>三个可以动手的样本，覆盖教材、实验与排版。</p>
+        </div>
+        <div id="example-grid" class="example-grid" aria-live="polite">
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+        </div>
+        <p id="examples-note" class="examples-note"></p>
+      </section>
+
+      <section id="about" class="about">
+        <div class="about-item">
+          <span class="about-num">01</span>
+          <h3>写，像写 Markdown 一样</h3>
+          <p>章节可以是 Markdown，也可以是飞书 DocxXML。标题、列表、表格、引用与代码都保留原有结构。</p>
+        </div>
+        <div class="about-item">
+          <span class="about-num">02</span>
+          <h3>动，像做实验一样</h3>
+          <p>Canvas 组件用 JSON 描述；需要更多自由时，放一段沙箱 HTML。读者拖动、发射、观察，而不是只看结论。</p>
+        </div>
+        <div class="about-item">
+          <span class="about-num">03</span>
+          <h3>走，装进一个文件</h3>
+          <p>图片与章节一起装进 <code>.mdxb</code>。发给学生、放进 U 盘、挂到网页，打开就能读。</p>
+        </div>
+      </section>
+
+      <footer class="landing-footer">
+        <span>MarkdownX · 下一代学生书籍</span>
+        <span>Open source · MIT</span>
+      </footer>
+    </section>
+
+    <section id="reader" class="reader" hidden>
+      <header class="topbar">
+        <button id="toc-toggle" class="icon-button menu-button" type="button" aria-label="目录 / Contents" aria-expanded="false">☰</button>
+        <button id="reader-home" class="brand compact" type="button" aria-label="返回书架 / Back to library">
+          <span class="brand-mark" aria-hidden="true">M</span>
+          <span class="brand-word">MarkdownX</span>
+        </button>
+        <div class="topbar-title" id="topbar-title"></div>
+        <div class="topbar-actions">
+          <button id="lang-toggle" class="text-button" type="button" aria-label="切换语言 / Switch language">EN</button>
+          <button id="reader-theme" class="icon-button" type="button" aria-label="切换明暗 / Toggle theme">◐</button>
+          <button id="close-book" class="icon-button" type="button" aria-label="关闭 / Close">×</button>
+        </div>
+        <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+      </header>
+
+      <div class="reader-layout">
+        <aside id="toc" class="toc" aria-label="目录 / Contents">
+          <div class="toc-book">
+            <div id="toc-cover" class="toc-cover" aria-hidden="true"></div>
+            <p id="toc-kicker" class="toc-kicker"></p>
+            <h2 id="toc-title"></h2>
+            <p id="toc-subtitle"></p>
+            <p id="toc-author"></p>
+          </div>
+          <nav id="toc-list" class="toc-list"></nav>
+          <div class="toc-foot">
+            <span id="toc-count"></span>
+            <span>MarkdownX</span>
+          </div>
+        </aside>
+        <div id="toc-scrim" class="toc-scrim" hidden></div>
+
+        <main class="reader-main">
+          <article id="chapter" class="chapter" tabindex="-1"></article>
+          <nav class="chapter-nav" aria-label="章节导航 / Chapter navigation">
+            <button id="prev-chapter" class="chapter-link" type="button"><span>←</span><span></span></button>
+            <button id="next-chapter" class="chapter-link next" type="button"><span></span><span>→</span></button>
+          </nav>
+          <footer class="reader-footer">
+            <span id="reader-footer-title"></span>
+            <span>Made with MarkdownX</span>
+          </footer>
+        </main>
+      </div>
+    </section>
+  </div>
+
+  <input id="file-input" type="file" accept=".mdxb,application/vnd.markdownx.book+json,application/json" hidden>
+  <div id="drop-overlay" class="drop-overlay" hidden>
+    <div class="drop-card"><strong>松开打开这本书</strong><span>Drop the .mdxb file to open</span></div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+{
+  "format": "markdownx.book",
+  "version": 1,
+  "id": "type-specimen",
+  "title": {
+    "zh": "双语排版样本",
+    "en": "A Bilingual Type Specimen"
+  },
+  "subtitle": {
+    "zh": "同一本书，两种语言，各自呼吸。",
+    "en": "One book, two languages, each with its own breath."
+  },
+  "authors": [
+    "MarkdownX 设计组"
+  ],
+  "languages": [
+    "zh",
+    "en"
+  ],
+  "default_language": "zh",
+  "cover": "",
+  "theme": {
+    "accent": "#5b4b8a",
+    "background": "",
+    "text": "",
+    "font": "serif"
+  },
+  "reading": {
+    "layout": "scroll",
+    "max_width": 760,
+    "show_toc": true
+  },
+  "chapters": [
+    {
+      "id": "markdown",
+      "title": {
+        "zh": "Markdown 的一页",
+        "en": "A Markdown page"
+      },
+      "format": "markdown",
+      "content": "## 一本书的两种呼吸\n\nMarkdown 适合**写得快**的部分。它像草稿纸：标题、列表、引用、代码，抬手就有。\n\n> 好的排版不是把页面填满，而是让读者知道下一步该看哪里。\n\n### 一份最小的样式表\n\n| 元素 | 作用 | 读者感知 |\n| --- | --- | --- |\n| 衬线正文 | 长文阅读 | 慢下来 |\n| 无衬线标签 | 导航与注释 | 快速定位 |\n| 等宽代码 | 结构与参数 | 精确 |\n\n```js\nconst book = {\n  title: \"会动的教科书\",\n  languages: [\"zh\", \"en\"],\n  interactive: true,\n};\n```\n\n```mdxb-canvas\n{\"title\":\"把参数写进 Markdown\",\"height\":320,\"source\":\"{\\\"kind\\\":\\\"quadratic\\\",\\\"a\\\":1,\\\"b\\\":0,\\\"c\\\":0,\\\"xMin\\\":-4,\\\"xMax\\\":4,\\\"yMin\\\":-4,\\\"yMax\\\":8}\"}\n```\n\n最后一行代码块不是普通代码，而是一个 Canvas 组件的 JSON 外壳。Markdown 也能长出可交互的部分。",
+      "content_en": "## Two ways for a book to breathe\n\nMarkdown is for the parts you want to **write quickly**. It is scratch paper: headings, lists, quotes and code are one keystroke away.\n\n> Good typography is not about filling the page. It is about telling the reader where to look next.\n\n### A minimal type table\n\n| Element | Job | How it feels |\n| --- | --- | --- |\n| Serif body | Long-form reading | Slow down |\n| Sans labels | Navigation and notes | Locate fast |\n| Mono code | Structure and parameters | Be exact |\n\n```js\nconst book = {\n  title: \"A textbook that moves\",\n  languages: [\"zh\", \"en\"],\n  interactive: true,\n};\n```\n\n```mdxb-canvas\n{\"title\":\"Parameters inside Markdown\",\"height\":320,\"source\":\"{\\\"kind\\\":\\\"quadratic\\\",\\\"a\\\":1,\\\"b\\\":0,\\\"c\\\":0,\\\"xMin\\\":-4,\\\"xMax\\\":4,\\\"yMin\\\":-4,\\\"yMax\\\":8}\"}\n```\n\nThat last fence is not ordinary code; it is the JSON shell of a Canvas block. Markdown can grow interactive parts too."
+    },
+    {
+      "id": "docxxml",
+      "title": {
+        "zh": "DocxXML 的一页",
+        "en": "A DocxXML page"
+      },
+      "format": "docxxml",
+      "content": "<h2>同一页，三种语气</h2>\n<p>标题是断言，正文是解释，注释是旁白。把它们放在同一页，读者才知道哪里该快、哪里该慢。</p>\n<grid><column width-ratio=\"0.55\"><h3>正文</h3><p>用衬线字体承载长句。行高 <code>1.82</code>，每行大约 34 个汉字，视线不必来回折返。</p></column><column width-ratio=\"0.45\"><h3>旁注</h3><p>用无衬线字体承载标签、图注与控件。它不抢正文的注意力，但随时可以被找到。</p></column></grid>\n<callout emoji=\"Aa\" background-color=\"light-purple\" border-color=\"purple\"><p><b>双语不是翻译：</b>中文段落更短、更依赖语境；英文段落更依赖连接词。两种版本应该分别写，而不是逐句替换。</p></callout>\n<table><thead><tr><th><p>层级</p></th><th><p>字体</p></th><th><p>用途</p></th></tr></thead><tbody><tr><td><p>H1</p></td><td><p>衬线 54px</p></td><td><p>章标题</p></td></tr><tr><td><p>H2</p></td><td><p>衬线 30px</p></td><td><p>节标题</p></td></tr><tr><td><p>Body</p></td><td><p>衬线 18px</p></td><td><p>正文</p></td></tr><tr><td><p>UI</p></td><td><p>无衬线 12px</p></td><td><p>标签与控件</p></td></tr></tbody></table>\n<checkbox done=\"true\">读一遍中文，再读一遍英文。</checkbox>\n<checkbox done=\"false\">把一段英文改短，看看意思有没有丢。</checkbox>",
+      "content_en": "<h2>One page, three voices</h2>\n<p>A heading asserts. Body text explains. A note stands beside the page. Put all three together and the reader knows where to speed up and where to linger.</p>\n<grid><column width-ratio=\"0.55\"><h3>Body</h3><p>Set long sentences in a serif. Line height <code>1.82</code>, roughly 34 Chinese characters per line, so the eye does not shuttle back and forth.</p></column><column width-ratio=\"0.45\"><h3>Margin</h3><p>Set labels, captions and controls in a sans. They should not compete with the body, but they must stay findable.</p></column></grid>\n<callout emoji=\"Aa\" background-color=\"light-purple\" border-color=\"purple\"><p><b>Bilingual is not translation:</b> Chinese paragraphs lean shorter and more on context; English paragraphs lean on connectives. Write each version on its own terms, not sentence by sentence.</p></callout>\n<table><thead><tr><th><p>Level</p></th><th><p>Face</p></th><th><p>Job</p></th></tr></thead><tbody><tr><td><p>H1</p></td><td><p>Serif 54px</p></td><td><p>Chapter</p></td></tr><tr><td><p>H2</p></td><td><p>Serif 30px</p></td><td><p>Section</p></td></tr><tr><td><p>Body</p></td><td><p>Serif 18px</p></td><td><p>Reading</p></td></tr><tr><td><p>UI</p></td><td><p>Sans 12px</p></td><td><p>Labels and controls</p></td></tr></tbody></table>\n<checkbox done=\"true\">Read the Chinese once, then the English.</checkbox>\n<checkbox done=\"false\">Shorten one English paragraph and see what survives.</checkbox>"
+    }
+  ],
+  "assets": {},
+  "created": 1794134527843,
+  "modified": 1794134527843,
+  "generator": "MarkdownX examples/build.py"
+}

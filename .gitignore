@@ -1,0 +1,14 @@
+/target
+/dist
+/dist-preview
+.DS_Store
+/archive/
+/shared-mock/*
+!/shared-mock/library/
+!/shared-mock/guides/
+
+/dist-release.*
+.wrangler/
+
+.dsh-*
+

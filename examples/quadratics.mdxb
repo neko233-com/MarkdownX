@@ -1,0 +1,59 @@
+{
+  "format": "markdownx.book",
+  "version": 1,
+  "id": "quadratics",
+  "title": {
+    "zh": "二次函数：把抛物线握在手里",
+    "en": "Quadratics in Your Hands"
+  },
+  "subtitle": {
+    "zh": "从一条曲线开始，读懂三个参数。",
+    "en": "Start with one curve and learn to read three parameters."
+  },
+  "authors": [
+    "MarkdownX 教材组"
+  ],
+  "languages": [
+    "zh",
+    "en"
+  ],
+  "default_language": "zh",
+  "cover": "",
+  "theme": {
+    "accent": "#b45309",
+    "background": "",
+    "text": "",
+    "font": "serif"
+  },
+  "reading": {
+    "layout": "scroll",
+    "max_width": 760,
+    "show_toc": true
+  },
+  "chapters": [
+    {
+      "id": "curve",
+      "title": {
+        "zh": "从一条曲线开始",
+        "en": "Start with a Curve"
+      },
+      "format": "docxxml",
+      "content": "<h2>一条曲线，三个旋钮</h2>\n<p>二次函数 <latex>y = ax^2 + bx + c</latex> 看起来只有三项，却同时决定了三件事：开口朝哪边、曲线有多窄、以及它从哪里穿过坐标轴。</p>\n<interactive type=\"canvas\" title=\"拖动 a、b、c，看曲线怎么变\" height=\"400\"><![CDATA[{\"kind\":\"quadratic\",\"a\":1,\"b\":0,\"c\":0,\"xMin\":-4,\"xMax\":4,\"yMin\":-4,\"yMax\":8}]]></interactive>\n<p>先把 <b>a</b> 从 1 推到 −1。曲线翻了个身；再把 <b>c</b> 往下拉，整条曲线跟着下沉。每一个参数都不是符号，而是一个可以抓住的把手。</p>\n<callout emoji=\"✳️\" background-color=\"light-orange\" border-color=\"orange\"><p><b>观察：</b>当 <code>a &gt; 0</code> 时开口向上，函数有最小值；当 <code>a &lt; 0</code> 时开口向下，函数有最大值。顶点就是那个“最”的地方。</p></callout>\n<h2>读图的三件事</h2>\n<ul><li><b>开口方向</b>由 a 的符号决定。</li><li><b>对称轴</b>是 <latex>x = -b / (2a)</latex>。</li><li><b>与 y 轴的交点</b>永远是 <latex>(0, c)</latex>。</li></ul>\n<blockquote><p>先看见，再命名。图不是公式的插图，公式是图的笔记。</p></blockquote>",
+      "content_en": "<h2>One curve, three knobs</h2>\n<p>A quadratic <latex>y = ax^2 + bx + c</latex> has only three terms, yet they decide three things at once: which way the curve opens, how narrow it is, and where it crosses the axes.</p>\n<interactive type=\"canvas\" title=\"Drag a, b and c to reshape the curve\" height=\"400\"><![CDATA[{\"kind\":\"quadratic\",\"a\":1,\"b\":0,\"c\":0,\"xMin\":-4,\"xMax\":4,\"yMin\":-4,\"yMax\":8}]]></interactive>\n<p>Push <b>a</b> from 1 to −1 and the curve flips over. Pull <b>c</b> down and the whole curve follows. Each parameter is not a symbol; it is a handle you can hold.</p>\n<callout emoji=\"✳️\" background-color=\"light-orange\" border-color=\"orange\"><p><b>Notice:</b> when <code>a &gt; 0</code> the curve opens upward and has a minimum; when <code>a &lt; 0</code> it opens downward and has a maximum. The vertex is that “most” point.</p></callout>\n<h2>Three things to read from the graph</h2>\n<ul><li><b>Direction</b> is the sign of a.</li><li><b>The axis of symmetry</b> is <latex>x = -b / (2a)</latex>.</li><li><b>The y-intercept</b> is always <latex>(0, c)</latex>.</li></ul>\n<blockquote><p>See it first, then name it. The graph is not an illustration of the formula; the formula is a note about the graph.</p></blockquote>"
+    },
+    {
+      "id": "vertex",
+      "title": {
+        "zh": "顶点与判别式",
+        "en": "Vertex and Discriminant"
+      },
+      "format": "docxxml",
+      "content": "<h2>顶点从哪里来</h2>\n<p>把 <latex>y = ax^2 + bx + c</latex> 配方，就能把顶点从公式里“请”出来：</p>\n<p><latex>y = a\\left(x + \\frac{b}{2a}\\right)^2 + c - \\frac{b^2}{4a}</latex></p>\n<p>所以顶点是 <latex>(-b/(2a),\\ c - b^2/(4a))</latex>。判别式 <latex>\\Delta = b^2 - 4ac</latex> 则告诉我们曲线与 x 轴有没有交点。</p>\n<interactive type=\"canvas\" title=\"a = −0.5 时，顶点落在哪里？\" height=\"380\"><![CDATA[{\"kind\":\"quadratic\",\"a\":-0.5,\"b\":3,\"c\":1,\"xMin\":-3,\"xMax\":8,\"yMin\":-3,\"yMax\":8}]]></interactive>\n<table><thead><tr><th><p>判别式</p></th><th><p>实根个数</p></th><th><p>图像</p></th></tr></thead><tbody><tr><td><p><latex>\\Delta &gt; 0</latex></p></td><td><p>2</p></td><td><p>与 x 轴交两次</p></td></tr><tr><td><p><latex>\\Delta = 0</latex></p></td><td><p>1</p></td><td><p>顶点落在 x 轴上</p></td></tr><tr><td><p><latex>\\Delta &lt; 0</latex></p></td><td><p>0</p></td><td><p>与 x 轴不相交</p></td></tr></tbody></table>\n<h2>轮到你</h2>\n<checkbox done=\"false\">把 a 调成 0，观察图像变成什么。它还是二次函数吗？</checkbox>\n<checkbox done=\"false\">找到一组 a、b、c，让顶点正好落在 (2, 3)。</checkbox>\n<checkbox done=\"false\">用判别式解释：为什么 a &lt; 0 且 c &lt; 0 时，曲线一定穿过 x 轴两次？</checkbox>",
+      "content_en": "<h2>Where the vertex comes from</h2>\n<p>Complete the square on <latex>y = ax^2 + bx + c</latex> and the vertex falls out of the formula:</p>\n<p><latex>y = a\\left(x + \\frac{b}{2a}\\right)^2 + c - \\frac{b^2}{4a}</latex></p>\n<p>So the vertex is <latex>(-b/(2a),\\ c - b^2/(4a))</latex>. The discriminant <latex>\\Delta = b^2 - 4ac</latex> tells us whether the curve meets the x-axis at all.</p>\n<interactive type=\"canvas\" title=\"With a = −0.5, where is the vertex?\" height=\"380\"><![CDATA[{\"kind\":\"quadratic\",\"a\":-0.5,\"b\":3,\"c\":1,\"xMin\":-3,\"xMax\":8,\"yMin\":-3,\"yMax\":8}]]></interactive>\n<table><thead><tr><th><p>Discriminant</p></th><th><p>Real roots</p></th><th><p>Graph</p></th></tr></thead><tbody><tr><td><p><latex>\\Delta &gt; 0</latex></p></td><td><p>2</p></td><td><p>Crosses the x-axis twice</p></td></tr><tr><td><p><latex>\\Delta = 0</latex></p></td><td><p>1</p></td><td><p>Vertex sits on the x-axis</p></td></tr><tr><td><p><latex>\\Delta &lt; 0</latex></p></td><td><p>0</p></td><td><p>Never meets the x-axis</p></td></tr></tbody></table>\n<h2>Your turn</h2>\n<checkbox done=\"false\">Set a to 0 and watch the graph. Is it still a quadratic?</checkbox>\n<checkbox done=\"false\">Find a, b and c so the vertex lands exactly on (2, 3).</checkbox>\n<checkbox done=\"false\">Use the discriminant to explain why a &lt; 0 and c &lt; 0 always gives two x-intercepts.</checkbox>"
+    }
+  ],
+  "assets": {},
+  "created": 1794134527843,
+  "modified": 1794134527843,
+  "generator": "MarkdownX examples/build.py"
+}

@@ -1,0 +1,34 @@
+<title>Write: Markdown and DocxXML</title>
+<p>MarkdownX reads and writes two formats. Markdown is the quick, portable path; DocxXML is the native format and keeps every block, including interactive ones. You can mix them in one book: a chapter can be either.</p>
+<h1>Markdown is the fast path</h1>
+<p>Type Markdown directly, or paste it from another editor. Headings, lists, tasks, quotes, tables, fenced code and images are recognised on import.</p>
+<pre lang="markdown" caption="A small chapter"><code># A small chapter
+
+- one idea per line
+- **bold** and `code`
+- [a link](https://example.com)
+
+&gt; A quote can carry the argument.
+</code></pre>
+<p>Use <code># </code> through <code>###### </code> for headings. A line starting with <code>- </code> becomes a list, <code>- [ ] </code> a task, and a blank line starts a new paragraph.</p>
+<h1>DocxXML is the native format</h1>
+<p>DocxXML is what the desktop library stores. It is XML with one element per block, so a table, a callout or an interactive widget survives a round trip without being flattened into text.</p>
+<pre lang="xml" caption="The same chapter in DocxXML"><code>&lt;title&gt;A small chapter&lt;/title&gt;
+&lt;h1&gt;One idea per line&lt;/h1&gt;
+&lt;callout emoji="✦" background-color="light-blue"&gt;&lt;p&gt;A quote can carry the argument.&lt;/p&gt;&lt;/callout&gt;</code></pre>
+<p>You rarely need to type DocxXML by hand. The editor produces it, the importer reads it, and <code>.mdxb</code> stores it chapter by chapter. The full grammar is in <code>docs/FORMAT.md</code>.</p>
+<h1>Import and export</h1>
+<ul><li><b>Import</b> a Markdown file with <code>⌘ ⇧ I</code>; it becomes a page in the library.</li><li><b>Export</b> Markdown from the page menu; images and attachments are copied beside it.</li><li><b>Export a book</b> with “Download as → MarkdownX book (.mdxb)” to keep the page tree and every interactive block.</li></ul>
+<callout emoji="↗" background-color="light-yellow" border-color="yellow"><p>A Markdown export is for reading and diffing. Use <code>.mdxb</code> when the book should still be interactive after it leaves your machine.</p></callout>
+<h1>Blocks you will use</h1>
+<table><colgroup><col width="210"/><col width="480"/></colgroup><thead><tr><th><p>Block</p></th><th><p>How to make it</p></th></tr></thead><tbody>
+<tr><td><p>Heading</p></td><td><p><code># </code>, or <code>⌘ ⌥ 1</code></p></td></tr>
+<tr><td><p>Table</p></td><td><p><code>/table</code>, then Tab between cells</p></td></tr>
+<tr><td><p>Code</p></td><td><p><code>```</code> with a language name</p></td></tr>
+<tr><td><p>Callout</p></td><td><p><code>/callout</code>, or the block menu</p></td></tr>
+<tr><td><p>Interactive</p></td><td><p><code>/interactive</code>; see the next guide</p></td></tr>
+</tbody></table>
+<h1>Write for both languages</h1>
+<p>Keep sentences short and avoid idioms that only work in one language. A <code>.mdxb</code> chapter can store an English body in <code>content_en</code> next to the primary Chinese body; the reader switches without reloading the page.</p>
+<h2>中文</h2>
+<p>Markdown 适合快速写作和迁移，DocxXML 是桌面书库的原生格式，能保留表格、标注、Canvas 和 HTML 交互块。导入 Markdown 用 <code>⌘ ⇧ I</code>；导出书用「下载为 → MarkdownX 书 (.mdxb)」。只读分享可以导出 Markdown，想保留交互就用 <code>.mdxb</code>。</p>
