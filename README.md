@@ -46,7 +46,7 @@ On Windows, run the build from a Visual Studio developer prompt, or call `vcvars
 
 The desktop app creates its library at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`). Use **下载为 → MarkdownX 书 (.mdxb)** / **Download as → MarkdownX book (.mdxb)** to export the current page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
 
-To read a book in the browser:
+To read a book in the browser, use the hosted reader at **https://neko233-com.github.io/MarkdownX/web/**, or run it locally:
 
 ```sh
 python -m http.server 8765 --bind 127.0.0.1

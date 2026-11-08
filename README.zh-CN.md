@@ -46,7 +46,7 @@ Windows 请在 Visual Studio 开发者命令行里构建，或先调用 `vcvars6
 
 桌面端默认把文档库放在 `~/Documents/MarkdownX`，可用 `MARKDOWNX_HOME` 改。用「下载为 → MarkdownX 书 (.mdxb)」导出当前页及其子页。
 
-浏览器阅读：
+浏览器阅读：直接用托管版 **https://neko233-com.github.io/MarkdownX/web/**，或在本地运行：
 
 ```sh
 python -m http.server 8765 --bind 127.0.0.1
@@ -131,7 +131,7 @@ Web 阅读器没有构建步骤。改完 `web/js/` 后对每个文件跑 `node -
 
 ## 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、Markdown/DocxXML 互转、`.mdxb` 导入导出、响应式 Web 阅读器、Canvas/HTML 交互块。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。系统文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
+这是早期公开快照。现在可用：桌面编辑与文档库、Markdown/DocxXML 互转、`.mdxb` 导入导出、响应式 Web 阅读器、Canvas/HTML 交互块。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 安装器会注册 `.mdxb`；macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
 
 ## 许可
 
