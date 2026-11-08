@@ -11,6 +11,42 @@ use crate::model::{Block, BlockId};
 use crate::theme::Theme;
 use crate::ui::icon;
 
+/// Annotation bodies highlight `@name` spans. The names are local display
+/// handles (the same identity used by the sidecar author), not accounts.
+fn mention_text(body: &str) -> StyledText {
+    let ranges = fdl_core::annotations::mentions(body);
+    if ranges.is_empty() {
+        return StyledText::new(body.to_string());
+    }
+    let font = Font {
+        family: crate::theme::UI_FONT.into(),
+        features: FontFeatures::default(),
+        fallbacks: None,
+        weight: FontWeight(400.),
+        style: FontStyle::Normal,
+    };
+    let mut runs = vec![];
+    let mut at = 0;
+    for r in ranges {
+        if at < r.start {
+            runs.push(TextRun { len: r.start - at, font: font.clone(), color: Theme::text(), background_color: None, underline: None, strikethrough: None });
+        }
+        runs.push(TextRun {
+            len: r.end - r.start,
+            font: font.clone(),
+            color: Theme::primary_500(),
+            background_color: Some(Theme::primary_500().opacity(0.1)),
+            underline: None,
+            strikethrough: None,
+        });
+        at = r.end;
+    }
+    if at < body.len() {
+        runs.push(TextRun { len: body.len() - at, font, color: Theme::text(), background_color: None, underline: None, strikethrough: None });
+    }
+    StyledText::new(body.to_string()).with_runs(runs)
+}
+
 impl Workspace {
     pub(crate) fn reload_annotations(&mut self, cx: &mut Context<Self>) {
         let (key, path) = match (&self.file, &self.current) {
@@ -195,7 +231,7 @@ impl Workspace {
                 .when(!a.quote.trim().is_empty(), |d| {
                     d.child(div().mt(px(6.)).pl(px(3.)).border_l_2().border_color(Theme::primary_500()).pl(px(8.)).text_size(px(11.)).text_color(Theme::text_caption()).child(format!("“{}”", a.quote)))
                 })
-                .child(div().mt(px(6.)).text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(a.body.clone()))
+                .child(div().mt(px(6.)).text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(mention_text(&a.body)))
                 .child(
                     div()
                         .mt(px(6.))

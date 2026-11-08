@@ -222,6 +222,31 @@ fn slug(s: &str) -> String {
     if out.is_empty() { "reader".into() } else { out.into() }
 }
 
+/// Byte ranges of `@name` mentions in annotation text. A mention starts at a
+/// word boundary and runs over letters/digits/`_`/`-`/`.`; e-mail addresses do
+/// not count because the character before `@` is alphanumeric.
+pub fn mentions(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = vec![];
+    let mut prev: Option<char> = None;
+    for (i, ch) in text.char_indices() {
+        if ch == '@' && !prev.is_some_and(|p| p.is_alphanumeric() || p == '_' || p == '.') {
+            let mut end = i + 1;
+            for (j, c) in text[i + 1..].char_indices() {
+                if c.is_alphanumeric() || matches!(c, '_' | '-' | '.') {
+                    end = i + 1 + j + c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if end > i + 1 {
+                out.push(i..end);
+            }
+        }
+        prev = Some(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +300,14 @@ mod tests {
     fn sidecars_stay_next_to_the_source() {
         assert_eq!(sidecar(Path::new("a/b/lesson.md")), PathBuf::from("a/b/lesson.md.annotations.json"));
         assert_eq!(library_sidecar(Path::new("/lib"), "a b/c"), PathBuf::from("/lib/annotations/a-b-c.json"));
+    }
+
+    #[test]
+    fn mentions_skip_email_and_keep_cjk() {
+        let text = "cc @ada and @林老师, not a@b.com";
+        let m = mentions(text);
+        assert_eq!(m.len(), 2);
+        assert_eq!(&text[m[0].clone()], "@ada");
+        assert_eq!(&text[m[1].clone()], "@林老师");
     }
 }

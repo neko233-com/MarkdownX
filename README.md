@@ -99,6 +99,10 @@ See [agent/README.md](agent/README.md) for the chapter dialect, annotation sidec
 
 Every chapter is either `docxxml` or `markdown`; `content_en` is optional and lets the reader switch languages without duplicating the book. Assets are embedded as base64, so a book is genuinely one file.
 
+### Markdown ↔ book
+
+`文件 → 打包成电子书…` turns a folder of Markdown chapters into one `.mdxb`. `下载为 → Markdown 文件夹 (.md)` goes the other way: it writes `NN-title.md` chapters, `book.json` and copied assets beside a small index file. Tables, headings, chapter order and interactive `mdxb-canvas` / `mdxb-html` sources survive; callout tints, grids and other editor-only presentation may degrade to plain Markdown. The data is still there, so packing the folder again recreates the book.
+
 ### Interactive blocks in DocxXML
 
 ```xml
@@ -150,7 +154,7 @@ The web reader has no build step. Run `node --check` on each file under `web/js/
 
 ## Status
 
-This is an early public snapshot. Working today: the desktop editor and library, a folder workspace with a Typora-style tree and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, the responsive web reader, Canvas/HTML blocks, and annotation sidecars with batch resolve/delete. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. The desktop UI was not visually verified on this build machine because GPUI could not create a DirectX device; unit tests and CI cover the code paths. macOS/Linux file association and mobile shells are the next milestones. See [issues](https://github.com/neko233-com/MarkdownX/issues).
+This is an early public snapshot. Working today: the desktop editor and library, a folder workspace with a Typora-style tree and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, and annotation sidecars with batch resolve/delete. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. The desktop UI was not visually verified on this build machine because GPUI could not create a DirectX device; unit tests and CI cover the code paths. The Windows installer, macOS Info.plist and the Linux MIME package register `.mdxb`; double-click behavior on macOS/Linux still needs a real desktop check, and mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
 
 ## License
 
@@ -192,11 +196,13 @@ python -m http.server 8765 --bind 127.0.0.1
 # 打开 http://127.0.0.1:8765/web/
 ```
 
-首页自带三个示例，也可以把任意 `.mdxb` 拖进页面。
+首页自带五个示例，也可以把任意 `.mdxb` 拖进页面。
 
 ### 格式与交互块
 
 `.mdxb` 是 UTF-8 JSON，扩展名 MarkdownX Book，媒体类型 `application/vnd.markdownx.book+json`。每章是 `docxxml` 或 `markdown`，资源以 base64 内嵌，所以一本书真的只有一个文件。完整字段见 [docs/FORMAT.md](docs/FORMAT.md)。
+
+`文件 → 打包成电子书…` 把 Markdown 章节目录打成一本 `.mdxb`；`下载为 → Markdown 文件夹 (.md)` 反向写出 `NN-title.md`、`book.json` 和资源。表格、标题、章节顺序、交互块的 `mdxb-canvas` / `mdxb-html` 源码会保留；高亮块颜色、分栏等纯展示细节可能退化成普通 Markdown，但数据结构还在，重新打包即可回到书中。
 
 DocxXML 里的交互块：
 
@@ -228,7 +234,7 @@ cargo test -p fdl_core
 
 ### 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、Markdown/DocxXML 互转、`.mdxb` 导入导出、响应式 Web 阅读器、Canvas/HTML 交互块。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。macOS/Linux 文件关联和移动端壳是下一步。Windows 安装器会注册 `.mdxb`。
+这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 安装器、macOS Info.plist 和 Linux MIME 包都会注册 `.mdxb`；macOS/Linux 的双击行为仍待真机验证，移动端壳是下一步。
 
 ### 许可
 

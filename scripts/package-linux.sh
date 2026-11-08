@@ -12,9 +12,10 @@ name="markdownx-$version-linux-$(uname -m)"
 mkdir -p dist/linux
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/$name/bin" "$stage/$name/share/applications" "$stage/$name/share/icons/hicolor/512x512/apps"
+mkdir -p "$stage/$name/bin" "$stage/$name/share/applications" "$stage/$name/share/mime/packages" "$stage/$name/share/icons/hicolor/512x512/apps"
 install -m755 "${CARGO_TARGET_DIR:-target}/release/markdownx" "$stage/$name/bin/markdownx"
 install -m644 packaging/linux/com.neko233.markdownx.desktop "$stage/$name/share/applications/"
+install -m644 packaging/linux/com.neko233.markdownx.xml "$stage/$name/share/mime/packages/"
 "$resize" assets/branding/app-icon.png -resize 512x512 "$stage/$name/share/icons/hicolor/512x512/apps/com.neko233.markdownx.png"
 install -m644 LICENSE "$stage/$name/"
 ldd "$stage/$name/bin/markdownx" > "$stage/$name/runtime-libraries.txt"

@@ -91,7 +91,9 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `paste.rs` | HTML / Markdown → block（粘贴和导入共用） |
 | `markdown.rs` | 导出 Markdown |
 | `book.rs` | `.mdxb` 单文件书：`Book`/`Chapter`/`Localized`、打包、解包、资源校验 |
-| `annotations.rs` | 批注 sidecar：作者、回复、锚点、CRUD/批量、合并 |
+| `annotations.rs` | 批注 sidecar：作者、回复、锚点、CRUD/批量、合并、`@name` 扫描 |
+| `wiki.rs` | 文件夹 `[[双链]]` 解析、文件索引与反向引用（不依赖 GPUI） |
+| `collab.rs` | 预留实时协作协议：session/presence/op log/apply；无网络和 UI |
 | `lang.rs` | 代码语言表 |
 | `palette.rs` | 文字色、背景色、高亮块色板（RGBA，不依赖 GPUI；`theme.rs` 转成 GPUI 颜色） |
 | `time.rs` | 日期换算、本地时区、当前时间 |
@@ -108,7 +110,7 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `app.rs` | `Workspace`：两栏窗口、打开 / 新建 / 保存 / 删除、保存状态、提醒调度、文件夹工作区 |
 | `workspace_fs.rs` | 文件夹扫描、目录树、模糊/内容搜索（不依赖文档库） |
 | `annotations_panel.rs` | 右侧批注面板：作者、输入、列表、解决/编辑/删除、批量操作 |
-| `html.rs` / `printing.rs` / `transfer.rs` | 导出 HTML / PDF、打印、导入导出（含 `.mdxb` 的树打包、文件夹打包与导入） |
+| `html.rs` / `printing.rs` / `transfer.rs` | 导出 HTML / PDF、打印、导入导出（含 `.mdxb` 的树打包、Markdown 文件夹导出、文件夹打包与导入） |
 | `clipboard.rs` | 系统剪贴板的 HTML 读取，以及脚本模式的模拟剪贴板 |
 | `sidebar.rs` / `tree.rs` | 左栏与文档树（子文档、移动到） |
 | `home.rs` / `trash.rs` | 主页、回收站 |
@@ -151,7 +153,13 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 批注不写进正文：core 的 `annotations.rs` 管理 JSON sidecar，`annotations_panel.rs` 渲染右侧面板。锚点是从根开始的 block 索引路径，不是 `BlockId`（DocxXML 不保存 BlockId）。多用户离线修改通过 `tools/agent/mdxb.py merge-annotations` 按 `updated` 合并。
 
-`agent/` 与 `tools/agent/` 是给编码 agent 的入口：章节保持 `NN-topic.md`，`mdxb.py` 负责 check / pack / unpack / search；它和桌面端读写同一份 `.mdxb` 契约。
+双链与协作：
+
+- `wiki.rs` 只认 `[[Target]]` / `[[Target|Label]]`，跳过代码围栏；`Index::build` 接收 `(path, text)`，桌面在打开文件夹、保存文件后重建。侧栏显示当前文件的出链和反链，解析按文件名 stem、相对路径或 H1 标题。
+- `collab.rs` 是预留层：`Session` 维护 `revision`、`epoch`、peer presence 和 op log；`Operation` 带 `protocol`/`seq`/`base`，`apply` 返回 `Applied` / `Duplicate` / `Stale` / `Future` / `WrongProtocol`。目前没有传输层、持久化或 UI，后续接 WebSocket/CRDT 时不改文档模型。
+- `annotations.rs` 的 `mentions` 扫描 `@name`（跳过邮箱），批注面板只负责高亮；正文块本身还没有 @ 自动补全。
+
+`agent/` 与 `tools/agent/` 是给编码 agent 的入口：章节保持 `NN-topic.md`，`mdxb.py` 负责 check / pack / unpack / search / merge-annotations；它和桌面端读写同一份 `.mdxb` 契约。
 
 ## 界面语言
 

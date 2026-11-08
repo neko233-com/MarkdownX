@@ -254,14 +254,16 @@ impl Workspace {
                 {
                     let mdxb = id.clone();
                     let pdf = id.clone();
+                    let md_folder = id.clone();
                     popover()
                         .id("dm-download-menu")
                         .occlude()
-                        .w(px(180.))
+                        .w(px(210.))
                         .px(px(5.))
                         .py(px(PAD))
                         .child(recorder())
                         .child(sub_item("dm-mdxb", crate::settings::tr("MarkdownX 书 (.mdxb)", "MarkdownX book (.mdxb)")).on_click(cx.listener(move |w, _, window, cx| w.export_book(&mdxb, window, cx))))
+                        .child(sub_item("dm-md-folder", crate::settings::tr("Markdown 文件夹 (.md)", "Markdown folder (.md)")).on_click(cx.listener(move |w, _, window, cx| w.export_markdown_folder(&md_folder, window, cx))))
                         .when(crate::printing::SUPPORTED, |d| d.child(sub_item("dm-pdf", "PDF").on_click(cx.listener(move |w, _, window, cx| w.export_pdf(&pdf, window, cx)))))
                         .child(sub_item("dm-md", "Markdown").on_click(cx.listener(move |w, _, _, cx| w.open_export_md(&id, cx))))
                         .into_any_element()

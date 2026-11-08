@@ -164,6 +164,9 @@ impl Workspace {
         let mut list = div().flex().flex_col().px(px(SB_X)).pb(px(8.));
         if let Some(folder) = self.folder.clone() {
             list = list.child(self.folder_head(&folder, cx)).child(self.folder_search_row(cx));
+            if let Some(file) = self.file.clone() {
+                list = list.child(self.folder_links_section(&file, cx));
+            }
             if self.folder_query.read(cx).text.trim().is_empty() {
                 let rows = self.folder_nodes(&folder.children, 0, cx);
                 list = list.children(rows);
@@ -327,6 +330,91 @@ impl Workspace {
                         w.refresh_folder_hits(cx);
                     })),
             )
+    }
+
+    /// Outgoing `[[wiki]]` links and files that link back to this one. The
+    /// index is folder-local; unresolved targets stay visible but dimmed.
+    fn folder_links_section(&self, file: &std::path::Path, cx: &mut Context<Self>) -> Div {
+        let outgoing = self.folder_links.get(file).map(|f| f.links.clone()).unwrap_or_default();
+        let backlinks: Vec<(std::path::PathBuf, String)> = self
+            .folder_links
+            .backlinks(file)
+            .into_iter()
+            .map(|(f, _)| (f.path.clone(), f.title.clone()))
+            .collect();
+        let mut out = div().flex_none().mx(px(2.)).mb(px(8.)).flex().flex_col();
+        if outgoing.is_empty() && backlinks.is_empty() {
+            return out;
+        }
+        out = out.child(
+            div()
+                .px(px(8.))
+                .py(px(4.))
+                .text_size(px(10.5))
+                .font_weight(FontWeight(600.))
+                .text_color(Theme::text_caption())
+                .child(crate::settings::tr("双链", "Links")),
+        );
+        for (i, l) in outgoing.iter().enumerate() {
+            let resolved = self.folder_links.resolve(file, &l.target).map(|p| p.to_path_buf());
+            let selected = resolved.as_ref().is_some_and(|p| self.file.as_ref() == Some(p));
+            let label = l.display().to_string();
+            let id = SharedString::from(format!("wl-out-{i}-{}", l.target));
+            let mut row = div()
+                .id(id)
+                .h(px(26.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .rounded(px(5.))
+                .text_size(px(12.))
+                .cursor_pointer()
+                .when(selected, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
+                .when(!selected, |d| {
+                    d.text_color(if resolved.is_some() { Theme::sidebar_text() } else { Theme::text_caption() })
+                        .hover(|s| s.bg(Theme::sidebar_hover()))
+                })
+                .child(icon(if resolved.is_some() { "file-text" } else { "circle-filled" }, 13., Theme::icon()))
+                .child(div().flex_1().overflow_hidden().text_ellipsis().child(label));
+            if let Some(path) = resolved {
+                row = row.on_click(cx.listener(move |w, _, window, cx| w.load_file(path.clone(), window, cx)));
+            }
+            out = out.child(row);
+        }
+        if !backlinks.is_empty() {
+            out = out.child(
+                div()
+                    .px(px(8.))
+                    .pt(px(6.))
+                    .pb(px(2.))
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight(600.))
+                    .text_color(Theme::text_caption())
+                    .child(crate::settings::tr("反向引用", "Backlinks")),
+            );
+            for (i, (path, title)) in backlinks.into_iter().enumerate() {
+                let id = SharedString::from(format!("wl-in-{i}-{}", path.to_string_lossy()));
+                out = out.child(
+                    div()
+                        .id(id)
+                        .h(px(26.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(7.))
+                        .rounded(px(5.))
+                        .text_size(px(12.))
+                        .text_color(Theme::sidebar_text())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(Theme::sidebar_hover()))
+                        .child(icon("arrow-left", 13., Theme::icon()))
+                        .child(div().flex_1().overflow_hidden().text_ellipsis().child(title))
+                        .on_click(cx.listener(move |w, _, window, cx| w.load_file(path.clone(), window, cx))),
+                );
+            }
+        }
+        out
     }
 
     fn folder_nodes(&mut self, nodes: &[crate::workspace_fs::FileNode], depth: usize, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {

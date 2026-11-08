@@ -58,6 +58,23 @@ fn file_name(doc: &Document) -> String {
     display_title(&doc.title.text).replace(['/', ':', '\\'], "_")
 }
 
+/// A chapter file name that survives every common filesystem.
+fn chapter_slug(title: &str) -> String {
+    let mut out = String::new();
+    for c in title.chars() {
+        if c.is_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else if c.is_whitespace() || c == '/' || c == '\\' || c == ':' {
+            out.push('-');
+        }
+        if out.chars().count() >= 32 {
+            break;
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() { "chapter".to_string() } else { out }
+}
+
 /// The modal mask (the window dimmed) and its dialog.
 fn mask(id: &'static str, dialog: impl IntoElement, close: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static, cx: &mut Context<Workspace>) -> AnyElement {
     deferred(
@@ -288,7 +305,15 @@ impl Workspace {
             return;
         }
         let source = if let Some(folder) = self.folder.clone() {
-            let files = folder.files().into_iter().filter(|f| crate::workspace_fs::DocKind::of(&f.path) == Some(crate::workspace_fs::DocKind::Markdown)).map(|f| f.path.clone()).collect::<Vec<_>>();
+            let files = folder
+                .files()
+                .into_iter()
+                .filter(|f| {
+                    crate::workspace_fs::DocKind::of(&f.path) == Some(crate::workspace_fs::DocKind::Markdown)
+                        && !f.path.to_string_lossy().ends_with(".en.md")
+                })
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>();
             Some((folder.root.clone(), folder.name.clone(), files))
         } else if let Some(file) = self.file.clone() {
             let title = file.file_stem().and_then(|s| s.to_str()).unwrap_or("book").to_string();
@@ -449,6 +474,102 @@ impl Workspace {
         install_book(&mut self.store, &crate::store::Store::root_dir(), book, rel)
     }
 
+    /// 下载为 → Markdown 文件夹: every page of a book becomes one `.md`
+    /// chapter, next to `book.json`. Interactive fences keep their source.
+    pub fn export_markdown_folder(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menus();
+        if !self.flush(cx) {
+            return;
+        }
+        let Some(root_doc) = self.doc_of(id, cx) else { return };
+        let title = self
+            .entries
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.title.clone())
+            .unwrap_or_else(|| root_doc.title.text.clone());
+        let ids = crate::tree::Tree::new(&self.entries).subtree(id);
+        let mut chapters = Vec::with_capacity(ids.len());
+        for child in ids {
+            let Some(doc) = self.doc_of(&child, cx) else { continue };
+            let title = self
+                .entries
+                .iter()
+                .find(|e| e.id == child)
+                .map(|e| e.title.clone())
+                .unwrap_or_else(|| doc.title.text.clone());
+            chapters.push((child, title, doc));
+        }
+        let path = save_path(&format!("{}.md", file_name(&root_doc)), cx);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(index_path) = path.await else { return };
+            let stem = index_path.file_stem().and_then(|s| s.to_str()).unwrap_or("book").to_string();
+            let parent = index_path.parent().map(Path::to_path_buf).unwrap_or_default();
+            let mut folder = parent.join(&stem);
+            let mut n = 2;
+            while folder.exists() {
+                folder = parent.join(format!("{stem}-{n}"));
+                n += 1;
+            }
+            let library = crate::store::Store::root_dir();
+            let result = (|| -> anyhow::Result<()> {
+                std::fs::create_dir_all(&folder)?;
+                let mut toc = format!("# {}\n\n", title.replace('\n', " "));
+                let mut metas = Vec::new();
+                for (i, (chapter_id, chapter, doc)) in chapters.into_iter().enumerate() {
+                    let out = crate::markdown::export(
+                        &doc,
+                        &crate::markdown::Options {
+                            library_root: Some(&library),
+                            assets: Some("assets"),
+                            ..Default::default()
+                        },
+                    );
+                    let name = format!("{:02}-{}.md", i + 1, chapter_slug(&chapter));
+                    let text = format!("# {}\n\n{}", chapter.replace('\n', " "), out.text);
+                    crate::workspace_fs::write_atomic(&folder.join(&name), text.as_bytes())?;
+                    for (src, rel) in &out.files {
+                        let to = folder.join(rel);
+                        if let Some(p) = to.parent() {
+                            std::fs::create_dir_all(p)?;
+                        }
+                        let path = crate::store::export_path(&src.to_string_lossy())
+                            .ok_or_else(|| anyhow::anyhow!("Asset outside library"))?;
+                        std::fs::write(&to, crate::store::read_bounded(&path, crate::store::EXPORT_FILE_LIMIT)?)?;
+                    }
+                    toc.push_str(&format!("{}. [{}]({})\n", i + 1, chapter, name));
+                    metas.push(serde_json::json!({
+                        "id": chapter_id,
+                        "title": { "zh": chapter, "en": chapter },
+                        "file": name,
+                    }));
+                }
+                let meta = serde_json::json!({
+                    "format": "markdownx.book",
+                    "version": 1,
+                    "title": { "zh": title, "en": title },
+                    "chapters": metas,
+                    "assets": "assets",
+                });
+                crate::workspace_fs::write_atomic(
+                    &folder.join("book.json"),
+                    serde_json::to_string_pretty(&meta)?.as_bytes(),
+                )?;
+                crate::workspace_fs::write_atomic(&index_path, toc.as_bytes())?;
+                Ok(())
+            })();
+            let _ = this.update(cx, |w, cx| match result {
+                Ok(()) => {
+                    w.toast = None;
+                    cx.notify();
+                }
+                Err(_) => w.show_toast_kind(ToastKind::Error, crate::settings::text("导出失败，请重试"), cx),
+            });
+        })
+        .detach();
+    }
+
     /// A book opened by the OS (argv) enters the same path as 导入.
     pub(crate) fn open_book_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.import_files(&[path], window, cx);
@@ -604,6 +725,13 @@ mod tests {
     use crate::model::{Block, Document, RichText};
     use crate::shared_store::SharedStore;
     use std::path::PathBuf;
+
+    #[test]
+    fn chapter_slugs_are_filesystem_safe() {
+        assert_eq!(super::chapter_slug("机械 运动/1"), "机械-运动-1");
+        assert_eq!(super::chapter_slug("///"), "chapter");
+        assert!(super::chapter_slug(&"长".repeat(80)).chars().count() <= 32);
+    }
 
     #[test]
     fn installs_book_as_page_tree() {

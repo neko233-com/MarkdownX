@@ -234,6 +234,8 @@ pub struct Workspace {
     pub folder_content: bool,
     pub folder_hits: Vec<crate::workspace_fs::Hit>,
     pub folder_expanded: HashSet<std::path::PathBuf>,
+    /// `[[wiki links]]` across the open folder, used for the backlink panel.
+    pub folder_links: fdl_core::wiki::Index,
     /// Temporary annotations for the open page, stored beside its source.
     pub annotations: fdl_core::annotations::AnnotationStore,
     pub annotations_path: Option<std::path::PathBuf>,
@@ -447,6 +449,7 @@ impl Workspace {
             folder_content: false,
             folder_hits: vec![],
             folder_expanded: HashSet::new(),
+            folder_links: fdl_core::wiki::Index::default(),
             annotations: fdl_core::annotations::AnnotationStore::new(""),
             annotations_path: None,
             annotations_open: false,
@@ -561,6 +564,7 @@ impl Workspace {
         };
         let first = dir.files().first().map(|f| f.path.clone());
         self.folder = Some(dir);
+        self.refresh_folder_links();
         self.folder_expanded = self
             .folder
             .as_ref()
@@ -595,6 +599,7 @@ impl Workspace {
         if !self.save_before(cx, |w, _, cx| {
             w.folder = None;
             w.folder_hits.clear();
+            w.folder_links = fdl_core::wiki::Index::default();
             w.folder_query.update(cx, |q, cx| q.set_text("", cx));
             w.file = None;
             w.current = None;
@@ -610,6 +615,25 @@ impl Workspace {
         let query = self.folder_query.read(cx).text.clone();
         self.folder_hits = self.folder.as_ref().map(|f| f.search(&query, self.folder_content)).unwrap_or_default();
         cx.notify();
+    }
+
+    /// Rebuild the folder-level `[[wiki]]` index. It reads Markdown only; a
+    /// `.mdxb` book is a build artifact and keeps its links inside its chapters.
+    pub fn refresh_folder_links(&mut self) {
+        let Some(folder) = self.folder.as_ref() else {
+            self.folder_links = fdl_core::wiki::Index::default();
+            return;
+        };
+        let mut files = vec![];
+        for node in folder.files() {
+            if crate::workspace_fs::DocKind::of(&node.path) != Some(crate::workspace_fs::DocKind::Markdown) {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&node.path) {
+                files.push((node.path.clone(), text));
+            }
+        }
+        self.folder_links = fdl_core::wiki::Index::build(files);
     }
 
     pub(crate) fn load_file(&mut self, path: std::path::PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1086,7 +1110,7 @@ impl Workspace {
                 let export = crate::markdown::export(doc, &opts);
                 let title = doc.title.text.trim().replace('\n', " ");
                 let text = if title.is_empty() { export.text.clone() } else { format!("# {title}\n\n{}", export.text) };
-                let ok = std::fs::write(&path, text.as_bytes()).is_ok();
+                let ok = crate::workspace_fs::write_atomic(&path, text.as_bytes()).is_ok();
                 if ok {
                     if let Some(parent) = path.parent() {
                         for (from, rel) in &export.files {
@@ -1103,6 +1127,7 @@ impl Workspace {
                     });
                     self.status = SaveStatus::Saved;
                     self.unsaved = false;
+                    self.refresh_folder_links();
                 } else {
                     self.status = SaveStatus::Failed(crate::localized_format!("保存失败：{}", "Could not save: {}", crate::settings::diagnostic(&path.display().to_string())));
                 }

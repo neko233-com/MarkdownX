@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.markdownx.book+json">
+    <comment>MarkdownX Book</comment>
+    <comment xml:lang="zh_CN">MarkdownX 书</comment>
+    <glob pattern="*.mdxb"/>
+    <sub-class-of type="application/json"/>
+  </mime-type>
+</mime-info>

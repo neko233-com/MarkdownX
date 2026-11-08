@@ -5,6 +5,7 @@
 //! `app.rs`.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +85,24 @@ fn scan_dir(dir: &Path, depth: usize) -> anyhow::Result<Vec<FileNode>> {
     files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.name.cmp(&b.name)));
     dirs.extend(files);
     Ok(dirs)
+}
+
+/// Write a file without truncating the old one until the new bytes are on disk.
+/// A crash leaves either the previous file or the new one, never a half file.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("document.md");
+    let tmp = parent.join(format!(".{}.markdownx-{}.tmp", name, std::process::id()));
+    let result = (|| {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 fn collect_files<'a>(nodes: &'a [FileNode], out: &mut Vec<&'a FileNode>) {
@@ -219,5 +238,17 @@ mod tests {
         let a = fuzzy_score("for", "physics/forces.md").unwrap();
         let b = fuzzy_score("for", "a/effort.md").unwrap();
         assert!(a > b);
+    }
+
+    #[test]
+    fn atomic_write_replaces_and_leaves_no_temp() {
+        let dir = temp("atomic");
+        let path = dir.join("note.md");
+        fs::write(&path, "old").unwrap();
+        write_atomic(&path, "new".as_bytes()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains(".tmp")).collect();
+        assert!(leftovers.is_empty());
+        fs::remove_dir_all(dir).unwrap();
     }
 }
