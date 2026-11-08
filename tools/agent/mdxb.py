@@ -159,6 +159,18 @@ def embed_assets(content: str, root: Path, assets: dict[str, dict]) -> str:
     return content
 
 
+def collect_assets(root: Path, assets: dict[str, dict]) -> None:
+    folder = root / "assets"
+    if not folder.is_dir():
+        return
+    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+        raw = path.read_bytes()
+        if len(raw) > MAX_ASSET:
+            continue
+        key = f"assets/{path.relative_to(folder).as_posix()}"
+        assets[key] = {"mime": mime_of(path), "data": base64.b64encode(raw).decode("ascii")}
+
+
 def mime_of(path: Path) -> str:
     return {
         ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -186,23 +198,69 @@ def chapter_from_markdown(path: Path, root: Path, assets: dict[str, dict]) -> di
     }
 
 
+def chapter_from_xml(path: Path, root: Path, assets: dict[str, dict]) -> dict:
+    text = path.read_text(encoding="utf-8")
+    title = path.stem
+    try:
+        node = ET.fromstring(f"<root>{text}</root>")
+        for child in node:
+            if child.tag == "title":
+                title = "".join(child.itertext()).strip() or title
+                break
+    except ET.ParseError:
+        pass
+    return {
+        "id": slug(path.stem),
+        "title": {"zh": title, "en": title},
+        "format": "docxxml",
+        "content": embed_assets(text, root, assets),
+    }
+
+
+def chapter_sources(root: Path) -> list[Path]:
+    """Markdown and DocxXML chapters, with a same-stem XML winning when fresh.
+
+    The desktop export writes both `01-topic.md` and `01-topic.xml`; editing the
+    Markdown makes it newer, so the XML only restores structure while untouched.
+    """
+    files = [p for p in root.rglob("*") if p.is_file() and ".git" not in p.parts
+             and "node_modules" not in p.parts and not p.name.endswith(".en.md")
+             and p.suffix.lower() in (".md", ".xml")]
+    by_stem: dict[Path, Path] = {}
+    for path in files:
+        stem = path.with_suffix("")
+        current = by_stem.get(stem)
+        if current is None:
+            by_stem[stem] = path
+            continue
+        # Prefer XML only if it is at least as new as its Markdown sibling.
+        if path.suffix.lower() == ".xml" and path.stat().st_mtime >= current.stat().st_mtime:
+            by_stem[stem] = path
+    return sorted(by_stem.values())
+
+
 def cmd_pack(args: argparse.Namespace) -> int:
     root = Path(args.folder).resolve()
     if not root.is_dir():
         die(f"not a folder: {root}")
-    files = sorted(p for p in root.rglob("*.md") if ".git" not in p.parts and "node_modules" not in p.parts and not p.name.endswith(".en.md"))
+    files = chapter_sources(root)
     if args.glob:
         files = sorted(root.glob(args.glob))
     if not files:
-        die(f"no Markdown chapters under {root}")
+        die(f"no Markdown or DocxXML chapters under {root}")
     assets: dict[str, dict] = {}
+    collect_assets(root, assets)
     chapters = []
     meta_path = root / "book.json"
     meta_chapters = read_json(meta_path).get("chapters", []) if meta_path.is_file() else []
     for path in files:
         if args.skip_readme and path.name.lower() == "readme.md":
             continue
-        chapter = chapter_from_markdown(path, root, assets)
+        chapter = chapter_from_xml(path, root, assets) if path.suffix.lower() == ".xml" \
+            else chapter_from_markdown(path, root, assets)
+        english = path.with_name(path.stem + ".en.md")
+        if english.is_file():
+            chapter["content_en"] = english.read_text(encoding="utf-8")
         if len(chapters) < len(meta_chapters) and isinstance(meta_chapters[len(chapters)], dict):
             kept = meta_chapters[len(chapters)]
             if kept.get("id"):

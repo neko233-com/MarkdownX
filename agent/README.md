@@ -21,7 +21,9 @@ The desktop `下载为 → Markdown 文件夹 (.md)` writes the same kind of fol
 plus a same-stem `.xml` DocxXML source beside each chapter. That XML is the
 lossless fallback for callouts, grids and other editor-only structure. On
 repack, the XML is used only while it is at least as new as the `.md`; once you
-edit a chapter's Markdown, the Markdown wins.
+edit a chapter's Markdown, the Markdown wins. `pack` accepts `.md` and `.xml`
+chapter sources, reads `NN-topic.en.md` as `content_en`, and re-embeds files
+under `assets/`.
 
 ## Commands
 
