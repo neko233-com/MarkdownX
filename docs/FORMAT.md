@@ -175,7 +175,7 @@ Markdown 用围栏代码块，info 是 `mdxb-canvas` 或 `mdxb-html`，正文是
 
 「文件 → 打包成电子书…」是另一条入口：在文件夹工作区里把该目录下所有 `.md` 按文件名顺序装成章节，在单文件模式下只装当前 `.md`。它不依赖文档库，适合 agent 或脚本生成的书籍目录。
 
-「下载为 → Markdown 文件夹 (.md)」是反向入口：选定一个 `.md` 路径后，在它旁边建同名目录，写出 `01-title.md`…、`book.json`、`assets/`，再写一个带章节链接的索引 `.md`。章节正文来自 `markdown::export`；标题、表格、章节顺序和 `mdxb-canvas` / `mdxb-html` 源码都会保留，callout 颜色、分栏等纯展示可能退化为普通 Markdown。把该目录再交给「打包成电子书…」即可回到 `.mdxb`。`book.json` 记录章节 id/标题/文件名，供 agent 与后续工具使用；当前桌面打包仍以首行 H1 为准。
+「下载为 → Markdown 文件夹 (.md)」是反向入口：选定一个 `.md` 路径后，在它旁边建同名目录，写出 `01-title.md`…、`book.json`、`assets/`，再写一个带章节链接的索引 `.md`。章节正文来自 `markdown::export`；标题、表格、章节顺序和 `mdxb-canvas` / `mdxb-html` 源码都会保留，callout 颜色、分栏等纯展示可能退化为普通 Markdown。每章旁边还会写一份同名的 `.xml` DocxXML 源文件（`book.json` 的 `source` 字段），因此重新打包时只要 `.xml` 不比 `.md` 旧，就会优先用 XML 还原完整结构；编辑过 `.md` 后则以 Markdown 为准。把该目录再交给「打包成电子书…」即可回到 `.mdxb`。`book.json` 记录章节 id/标题/文件名/XML 源，供 agent 与后续工具使用。
 
 ## 文件夹工作区
 

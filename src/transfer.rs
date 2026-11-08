@@ -11,6 +11,7 @@ use crate::theme::Theme;
 use crate::trash::{close_button, dialog, primary_button, scrim, secondary_button};
 use crate::ui::ToastKind;
 use fdl_core::book;
+use fdl_core::docxml;
 use gpui::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
 
@@ -330,8 +331,26 @@ impl Workspace {
         let mut inputs = Vec::with_capacity(files.len());
         for path in files {
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let (doc, _) = crate::app::parse_markdown_file(&path, &text);
-            let chapter = doc.title.text.clone();
+            let source = path.with_extension("xml");
+            let source_is_newer = source.metadata().ok().and_then(|m| m.modified().ok())
+                >= path.metadata().ok().and_then(|m| m.modified().ok());
+            let (doc, chapter) = if source_is_newer {
+                match std::fs::read_to_string(&source).ok().and_then(|xml| docxml::parse(&xml).ok()) {
+                    Some(doc) => {
+                        let title = doc.title.text.clone();
+                        (doc, title)
+                    }
+                    None => {
+                        let (doc, _) = crate::app::parse_markdown_file(&path, &text);
+                        let chapter = doc.title.text.clone();
+                        (doc, chapter)
+                    }
+                }
+            } else {
+                let (doc, _) = crate::app::parse_markdown_file(&path, &text);
+                let chapter = doc.title.text.clone();
+                (doc, chapter)
+            };
             inputs.push(book::PackInput::titled(doc, book::Localized::same(chapter)));
         }
         if inputs.is_empty() {
@@ -526,9 +545,17 @@ impl Workspace {
                             ..Default::default()
                         },
                     );
-                    let name = format!("{:02}-{}.md", i + 1, chapter_slug(&chapter));
+                    let stem = format!("{:02}-{}", i + 1, chapter_slug(&chapter));
+                    let name = format!("{stem}.md");
                     let text = format!("# {}\n\n{}", chapter.replace('\n', " "), out.text);
                     crate::workspace_fs::write_atomic(&folder.join(&name), text.as_bytes())?;
+                    // Keep the lossless DocxXML next to the Markdown chapter. A later
+                    // pack prefers it only while it is at least as fresh as the .md.
+                    let source = format!("{stem}.xml");
+                    crate::workspace_fs::write_atomic(
+                        &folder.join(&source),
+                        docxml::serialize(&doc).as_bytes(),
+                    )?;
                     for (src, rel) in &out.files {
                         let to = folder.join(rel);
                         if let Some(p) = to.parent() {
@@ -545,6 +572,7 @@ impl Workspace {
                         "id": chapter_id,
                         "title": { "zh": chapter, "en": chapter },
                         "file": name,
+                        "source": source,
                     }));
                 }
                 let meta = serde_json::json!({
