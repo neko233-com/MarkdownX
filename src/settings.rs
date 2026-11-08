@@ -33,6 +33,7 @@ pub struct Preferences {
     pub english: bool,
     /// Interface language: "auto" follows the OS, "zh" and "en" pin it.
     /// Empty in files written before this field existed; those keep `english`.
+    #[serde(default = "legacy_language")]
     pub language: String,
     /// Fetch `http(s)` images referenced by documents.
     pub remote_images: bool,
@@ -70,6 +71,10 @@ fn apply(p: Preferences) {
     themes::select(&p.theme_id());
     *PREFS.write().unwrap() = Some(p);
 }
+
+/// Missing language fields are files from before the selector existed; keep
+/// their old `english` bit instead of treating them as a fresh `auto` choice.
+fn legacy_language() -> String { String::new() }
 
 /// Which UI language a preference asks for. `auto` reads the OS once per
 /// launch; an empty language is a file from before the selector existed and
@@ -1377,6 +1382,15 @@ mod language_tests {
         p.english = false;
         assert_eq!(language_index(&p), 1);
         assert!(!english_for(&p.language, p.english));
+    }
+
+    #[test]
+    fn a_missing_language_field_keeps_english() {
+        let p: Preferences = serde_json::from_str(r#"{"english":false}"#).unwrap();
+        assert_eq!(p.language, "");
+        assert!(!english_for(&p.language, p.english));
+        let fresh = Preferences::default();
+        assert_eq!(fresh.language, "auto");
     }
 }
 
