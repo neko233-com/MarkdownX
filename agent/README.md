@@ -17,6 +17,12 @@ books/physics/
 `book.json` is written by `unpack`; it keeps titles, ids and `content_en`.
 When present, `pack` reuses those chapter titles instead of filenames.
 
+The desktop `下载为 → Markdown 文件夹 (.md)` writes the same kind of folder,
+plus a same-stem `.xml` DocxXML source beside each chapter. That XML is the
+lossless fallback for callouts, grids and other editor-only structure. On
+repack, the XML is used only while it is at least as new as the `.md`; once you
+edit a chapter's Markdown, the Markdown wins.
+
 ## Commands
 
 No dependencies beyond Python 3.10+.
