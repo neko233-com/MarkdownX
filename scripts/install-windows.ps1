@@ -65,6 +65,14 @@ if ((Test-Path -LiteralPath $log) -and ((Get-Item -LiteralPath $log).Length -gt 
     Out-File -LiteralPath $log -Append -Encoding utf8
 '@ | Set-Content -LiteralPath $startScript -Encoding UTF8
 
+$openScript = Join-Path $dest 'server\open-web.ps1'
+@'
+$data = Join-Path $env:LOCALAPPDATA 'MarkdownX\server'
+$token = (Get-Content -LiteralPath (Join-Path $data 'token.txt') -Raw).Trim()
+$url = 'http://127.0.0.1:8787/web/?token=' + [Uri]::EscapeDataString($token)
+Start-Process $url
+'@ | Set-Content -LiteralPath $openScript -Encoding UTF8
+
 $uninstallScript = Join-Path $dest 'uninstall.ps1'
 @'
 $ErrorActionPreference = 'SilentlyContinue'
@@ -96,7 +104,10 @@ $programs = [Environment]::GetFolderPath('Programs')
 $desktop = [Environment]::GetFolderPath('Desktop')
 New-Shortcut (Join-Path $programs 'MarkdownX.lnk') (Join-Path $dest 'markdownx.exe') '' 'MarkdownX interactive books'
 New-Shortcut (Join-Path $desktop 'MarkdownX.lnk') (Join-Path $dest 'markdownx.exe') '' 'MarkdownX interactive books'
-New-Shortcut (Join-Path $programs 'MarkdownX Server.lnk') 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -File `"$startScript`"" 'MarkdownX collaboration server'
+New-Shortcut (Join-Path $programs 'MarkdownX Collaboration.lnk') 'powershell.exe' ('-NoProfile -ExecutionPolicy Bypass -File "' + $openScript + '"') 'MarkdownX collaboration workspace'
+# Remove the older "start the server" shortcut: the server now starts at sign-in,
+# so the Start Menu entry opens the workspace instead.
+Remove-Item -LiteralPath (Join-Path $programs 'MarkdownX Server.lnk') -Force -ErrorAction SilentlyContinue
 
 # File association and Add/Remove Programs entry (per user).
 New-Item -Path 'HKCU:\Software\Classes\.mdxb' -Force | Out-Null
