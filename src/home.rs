@@ -1,7 +1,8 @@
 //! 主页: the local library's home — the 新建 / 上传
-//! cards (a new document, or 导入为文档 at once: no menus), the 最近访问 and 收藏 lists (list or grid view), 显示设置 for the
-//! list columns and the sort dropdown. Dressed as 所有文档: a
-//! hairline list with quiet hover fills, white cards and pills, native menus.
+//! cards (a new document, or 导入为文档 at once: no menus), the 书架 / 所有页面 / 收藏
+//! lists (list or grid view), 显示设置 for the list columns and the sort dropdown.
+//! Dressed as 所有文档: a hairline list with quiet hover fills, white cards and pills,
+//! native menus.
 
 use crate::app::{RowMenu, Workspace};
 #[path = "home_preview_style.rs"]
