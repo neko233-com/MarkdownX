@@ -82,6 +82,7 @@ Unregister-ScheduledTask -TaskName 'MarkdownX Collaboration Server' -Confirm:$fa
 Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Startup')) 'MarkdownX Server.lnk') -Force
 Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'MarkdownX.lnk') -Force
 Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'MarkdownX Server.lnk') -Force
+Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'MarkdownX Collaboration.lnk') -Force
 Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Desktop')) 'MarkdownX.lnk') -Force
 Remove-Item -Path 'HKCU:\Software\Classes\.mdxb' -Recurse -Force
 Remove-Item -Path 'HKCU:\Software\Classes\MarkdownX.Book' -Recurse -Force
