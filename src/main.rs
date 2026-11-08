@@ -51,6 +51,7 @@ mod transfer;
 mod trash;
 mod tree;
 mod ui;
+mod workspace_fs;
 mod update;
 
 use fdl_core::{docxml, lang, markdown, model, palette, paste, store, time};
@@ -175,3 +176,4 @@ fn main() {
         }
     });
 }
+mod annotations_panel;

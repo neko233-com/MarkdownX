@@ -80,6 +80,60 @@
           "DocxXML"
         ]
       }
+    },
+    {
+      "file": "junior-physics.mdxb",
+      "kicker": "Physics · 初中物理",
+      "cover": {
+        "bg": "#1f4e6b",
+        "ink": "#eef7fb",
+        "glyph": "F"
+      },
+      "zh": {
+        "title": "力与运动",
+        "blurb": "参照物、速度、二力平衡，以及一张会动的路程图。",
+        "tags": [
+          "物理",
+          "表格",
+          "Canvas"
+        ]
+      },
+      "en": {
+        "title": "Force and Motion",
+        "blurb": "Reference frames, speed, balanced forces, and a distance graph you can drag.",
+        "tags": [
+          "Physics",
+          "Tables",
+          "Canvas"
+        ]
+      }
+    },
+    {
+      "file": "junior-chemistry.mdxb",
+      "kicker": "Chemistry · 初中化学",
+      "cover": {
+        "bg": "#52345f",
+        "ink": "#fbf3ff",
+        "glyph": "C"
+      },
+      "zh": {
+        "title": "物质与变化",
+        "blurb": "从实验台到粒子，再到配平的化学方程式。",
+        "tags": [
+          "化学",
+          "表格",
+          "HTML 沙箱"
+        ]
+      },
+      "en": {
+        "title": "Matter and Change",
+        "blurb": "From the lab bench to particles, then to balanced equations.",
+        "tags": [
+          "Chemistry",
+          "Tables",
+          "HTML sandbox"
+        ]
+      }
     }
   ]
 }

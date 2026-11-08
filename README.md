@@ -23,12 +23,14 @@ MarkdownX is a writing and reading environment for **dynamic books**: documents 
 - **Bilingual by design.** Interface, book metadata and chapter text can carry Chinese and English side by side.
 - **A reader that fits the screen.** The web reader is a build-free, responsive page: a single column on a phone, a table of contents and a comfortable measure on a desktop.
 - **Local first.** No account, no cloud, no telemetry. The desktop library is a folder you own.
+- **A folder is a workspace.** Open any directory and edit its `.md` files in place; the same tree can hold `.mdxb` books. The sidebar is a directory tree, with fuzzy path search and optional full-text search.
+- **Notes live beside the text.** Temporary comments are stored in `.annotations.json` sidecars, so reviewers can hide, resolve, batch-edit and merge them without touching the prose.
 
 ## Two ways to use it
 
 | Author | Read |
 |---|---|
-| The GPUI desktop app: write chapters, insert Canvas/HTML blocks, export a `.mdxb`. | The Chrome reader in `web/`: open a `.mdxb`, browse chapters, resize the window, switch language and theme. |
+| The GPUI desktop app: open a folder, edit `.md`, insert Canvas/HTML blocks, annotate, then package a `.mdxb`. | The Chrome reader in `web/`: open a `.mdxb`, browse chapters, resize the window, switch language and theme. |
 
 | Landing | Canvas chapter |
 |---|---|
@@ -44,7 +46,7 @@ cargo run --release
 
 On Windows, run the build from a Visual Studio developer prompt, or call `vcvars64.bat` first.
 
-The desktop app creates its library at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`). Use **下载为 → MarkdownX 书 (.mdxb)** / **Download as → MarkdownX book (.mdxb)** to export the current page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
+The desktop app creates its library at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`). Use **文件 → 打开文件夹…** / **File → Open Folder…** for a Typora-style directory workspace, and **文件 → 打包成电子书…** / **File → Package as E-book…** (`⌘⇧E`) to turn the current folder, or the open Markdown file, into one `.mdxb`. **下载为 → MarkdownX 书 (.mdxb)** exports a library page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
 
 To read a book in the browser, use the hosted reader at **https://neko233-com.github.io/MarkdownX/web/**, or run it locally:
 
@@ -53,7 +55,20 @@ python -m http.server 8765 --bind 127.0.0.1
 # open http://127.0.0.1:8765/web/
 ```
 
-The landing page ships with three examples. You can also drag any `.mdxb` onto the page.
+The landing page ships with five examples, including two Chinese middle-school books: **力与运动** (physics) and **物质与变化** (chemistry). You can also drag any `.mdxb` onto the page.
+
+## For agents
+
+A book can be maintained as a folder of `NN-topic.md` chapters. Coding agents can validate and package it without opening the GUI:
+
+```sh
+python tools/agent/mdxb.py check examples
+python tools/agent/mdxb.py pack books/physics --title "力与运动" -o physics.mdxb
+python tools/agent/mdxb.py unpack physics.mdxb books/physics
+python tools/agent/mdxb.py search books/physics 速度 --content
+```
+
+See [agent/README.md](agent/README.md) for the chapter dialect, annotation sidecar contract and review loop, and [agent/AGENTS.md](agent/AGENTS.md) for rules to give an agent.
 
 ## The `.mdxb` format
 
@@ -114,7 +129,9 @@ The full schema and the round-trip rules are in [docs/FORMAT.md](docs/FORMAT.md)
 crates/core/        fdl_core: model, DocxXML, Markdown, editor core, .mdxb, library
 src/                GPUI desktop app: editor, reader UI, import/export, settings
 web/                build-free browser reader (HTML/CSS/ES modules)
-examples/           three .mdxb books and the Python generator
+examples/           five .mdxb books and the Python generators
+agent/              book-authoring rules for coding agents
+tools/agent/        check, pack, unpack, search, merge-annotations CLI
 shared-mock/        built-in guide library and its sources
 docs/               architecture, format, themes, performance
 ```
@@ -133,7 +150,7 @@ The web reader has no build step. Run `node --check` on each file under `web/js/
 
 ## Status
 
-This is an early public snapshot. Working today: the desktop editor and library, Markdown/DocxXML interchange, `.mdxb` import/export, the responsive web reader, and Canvas/HTML blocks. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. macOS/Linux file association and mobile shells are the next milestones. See [issues](https://github.com/neko233-com/MarkdownX/issues).
+This is an early public snapshot. Working today: the desktop editor and library, a folder workspace with a Typora-style tree and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, the responsive web reader, Canvas/HTML blocks, and annotation sidecars with batch resolve/delete. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. The desktop UI was not visually verified on this build machine because GPUI could not create a DirectX device; unit tests and CI cover the code paths. macOS/Linux file association and mobile shells are the next milestones. See [issues](https://github.com/neko233-com/MarkdownX/issues).
 
 ## License
 

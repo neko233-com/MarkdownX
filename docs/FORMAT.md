@@ -140,7 +140,7 @@ DocxXML 里没有、本应用自己加的写法。别的工具不认识这些写
 - key 必须以 `assets/` 开头，只能是相对路径；拒绝 `..`、`\`、`:` 和绝对路径。
 - 打包时只读文档库根目录内的文件，跳过 `http:`、`https:` 和 `data:`，单文件上限 16 MiB、总资源上限 64 MiB。
 - 导入时资源写到 `<文档库>/assets/books/<uuid>/assets/...`，并把正文里的 `src` 改写成这个相对库根的路径。这样文档库整体移动后图片仍然有效，多次导入也不会互相覆盖。
-- 封面同样按资源 key 处理；不是资源 key 又不是 https 的封面会被 `validate` 拒绝。
+- 封面同样按资源 key 处理；不是资源 key 又不是 https 的封面会被 `validate` 拒绝。空字符串表示没有封面，合法。
 
 ### 交互块
 
@@ -172,3 +172,41 @@ Markdown 用围栏代码块，info 是 `mdxb-canvas` 或 `mdxb-html`，正文是
 ### 导入导出
 
 桌面端「下载为 → MarkdownX 书 (.mdxb)」把当前页和它的子页按文档树顺序打包：当前页是第一章，子页依次成章。导入时第一章建为根文档，其余章用 `Meta.parent` 挂到根文档下；资源写到独立目录，正文 `src` 改写为库内相对路径。
+
+「文件 → 打包成电子书…」是另一条入口：在文件夹工作区里把该目录下所有 `.md` 按文件名顺序装成章节，在单文件模式下只装当前 `.md`。它不依赖文档库，适合 agent 或脚本生成的书籍目录。
+
+## 文件夹工作区
+
+`文件 → 打开文件夹…` 不经过文档库：目录树直接来自文件系统，`.md` 直接在原位置编辑和回写（保存时正文前补 `# 标题`），`.mdxb` 仍按书导入并打开。侧栏的模糊搜索匹配相对路径；打开“内容”后也会搜索文件正文。
+
+文件保存沿用 Markdown 导出选项：图片相对 `assets/` 复制，正文写回源文件。当前不是原子写；保存失败会重新读源文件并保留未保存状态。
+
+## 批注（annotations）
+
+批注是独立 sidecar，正文不被改写：
+
+- 文件夹模式：`lesson.md.annotations.json`，与源文件同目录。
+- 文档库模式：`<文档库>/annotations/<page-id>.json`。
+
+```json
+{
+  "format": "markdownx.annotations",
+  "version": 1,
+  "doc": "lesson.md",
+  "annotations": [
+    {
+      "id": "a1",
+      "author": { "id": "alice", "name": "Alice", "color": "#b05226" },
+      "body": "先说明参照物。",
+      "quote": "一辆小车从站台出发。",
+      "anchor": [2, 0],
+      "created": 1760000000000,
+      "updated": 1760000000000,
+      "resolved": false,
+      "replies": []
+    }
+  ]
+}
+```
+
+`anchor` 是从文档根开始的 block 路径；`quote` 是给未变化的正文留的人类可读快照。多用户离线批注用 `python tools/agent/mdxb.py merge-annotations out.json a.json b.json` 合并，同一个 id 取 `updated` 较新的版本，回复按 id 取并集。

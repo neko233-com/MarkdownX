@@ -162,22 +162,39 @@ impl Workspace {
         );
 
         let mut list = div().flex().flex_col().px(px(SB_X)).pb(px(8.));
-        // Pinned docs are shortcuts: they stay in 我的文档 too.
-        let pinned: Vec<&Entry> = entries.iter().filter(|e| e.meta.pinned).collect();
-        if !pinned.is_empty() {
-            list = list.child(self.section(0, crate::settings::text("置顶"), cx));
-            if !self.folded[0] {
-                for e in pinned {
-                    list = list.child(self.doc_row(e, "pinned", 0, false, cx));
+        if let Some(folder) = self.folder.clone() {
+            list = list.child(self.folder_head(&folder, cx)).child(self.folder_search_row(cx));
+            if self.folder_query.read(cx).text.trim().is_empty() {
+                let rows = self.folder_nodes(&folder.children, 0, cx);
+                list = list.children(rows);
+                if folder.children.is_empty() {
+                    list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::text("这个目录里没有 Markdown 或 .mdxb 文件")));
+                }
+            } else if self.folder_hits.is_empty() {
+                list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::text("没有匹配的文件")));
+            } else {
+                for hit in self.folder_hits.clone() {
+                    list = list.child(self.folder_hit_row(&hit, cx));
                 }
             }
-            list = list.child(div().h(px(GROUP_GAP - SECTION_TOP)));
-        }
-        list = list.child(self.section(1, crate::settings::text("我的文档"), cx));
-        if !self.folded[1] {
-            let tree = crate::tree::Tree::new(&entries);
-            for (e, depth) in tree.rows(|id| self.expanded.contains(id)) {
-                list = list.child(self.doc_row(e, "doc", depth, tree.has_children(&e.id), cx));
+        } else {
+            // Pinned docs are shortcuts: they stay in 我的文档 too.
+            let pinned: Vec<&Entry> = entries.iter().filter(|e| e.meta.pinned).collect();
+            if !pinned.is_empty() {
+                list = list.child(self.section(0, crate::settings::text("置顶"), cx));
+                if !self.folded[0] {
+                    for e in pinned {
+                        list = list.child(self.doc_row(e, "pinned", 0, false, cx));
+                    }
+                }
+                list = list.child(div().h(px(GROUP_GAP - SECTION_TOP)));
+            }
+            list = list.child(self.section(1, crate::settings::text("我的文档"), cx));
+            if !self.folded[1] {
+                let tree = crate::tree::Tree::new(&entries);
+                for (e, depth) in tree.rows(|id| self.expanded.contains(id)) {
+                    list = list.child(self.doc_row(e, "doc", depth, tree.has_children(&e.id), cx));
+                }
             }
         }
 
@@ -243,6 +260,149 @@ impl Workspace {
             .children(crate::changelog::card(cx.listener(|_, _, _, cx| cx.notify())))
             .child(footer)
             .into_any_element()
+    }
+
+    fn folder_head(&self, folder: &crate::workspace_fs::WorkspaceDir, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex_none()
+            .pt(px(6.))
+            .pb(px(6.))
+            .child(
+                div()
+                    .h(px(30.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .rounded(px(ROW_R))
+                    .hover(|s| s.bg(Theme::sidebar_hover()))
+                    .child(icon("folder-open", ROW_ICON, Theme::icon()))
+                    .child(div().flex_1().min_w_0().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text()).truncate().child(folder.name.clone()))
+                    .child(
+                        div()
+                            .id("folder-close")
+                            .flex_none()
+                            .size(px(22.))
+                            .flex().items_center().justify_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(Theme::sidebar_selected()))
+                            .child(icon("x", 14., Theme::text_caption()))
+                            .on_click(cx.listener(|w, _, window, cx| w.close_folder(window, cx))),
+                    ),
+            )
+            .child(div().px(px(8.)).pb(px(6.)).text_size(px(10.)).line_height(px(14.)).text_color(Theme::text_placeholder()).truncate().child(folder.root.to_string_lossy().to_string()))
+    }
+
+    fn folder_search_row(&self, cx: &mut Context<Self>) -> Div {
+        let on = self.folder_content;
+        div()
+            .flex_none()
+            .mx(px(2.))
+            .mb(px(6.))
+            .h(px(30.))
+            .px(px(7.))
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .rounded(px(7.))
+            .bg(Theme::fill_hover())
+            .child(icon("search", 14., Theme::icon()))
+            .child(div().flex_1().min_w_0().child(self.folder_query.clone()))
+            .child(
+                div()
+                    .id("folder-content")
+                    .flex_none()
+                    .h(px(20.))
+                    .px(px(5.))
+                    .rounded(px(4.))
+                    .flex().items_center()
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(Theme::primary()).text_color(Theme::bg_body()))
+                    .when(!on, |d| d.text_color(Theme::text_caption()).hover(|s| s.bg(Theme::fill_hover())))
+                    .text_size(px(10.))
+                    .child(crate::settings::tr("内容", "Text"))
+                    .on_click(cx.listener(|w, _, _, cx| {
+                        w.folder_content = !w.folder_content;
+                        w.refresh_folder_hits(cx);
+                    })),
+            )
+    }
+
+    fn folder_nodes(&mut self, nodes: &[crate::workspace_fs::FileNode], depth: usize, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+        let mut out = vec![];
+        for n in nodes {
+            let id = SharedString::from(format!("fd-{}", n.path.to_string_lossy()));
+            if n.dir {
+                let open = self.folder_expanded.contains(&n.path);
+                let path = n.path.clone();
+                out.push(
+                    div()
+                        .id(id)
+                        .h(px(28.))
+                        .pl(px(8. + depth as f32 * 12.))
+                        .pr(px(6.))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .rounded(px(ROW_R))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(Theme::sidebar_hover()))
+                        .child(icon(if open { "chevron-down" } else { "chevron-right" }, 12., Theme::text_caption()))
+                        .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().child(n.name.clone()))
+                        .on_click(cx.listener(move |w, _, _, cx| {
+                            if !w.folder_expanded.remove(&path) {
+                                w.folder_expanded.insert(path.clone());
+                            }
+                            cx.notify();
+                        })),
+                );
+                if open {
+                    out.extend(self.folder_nodes(&n.children, depth + 1, cx));
+                }
+            } else {
+                let selected = self.file.as_ref() == Some(&n.path);
+                let book = crate::workspace_fs::DocKind::of(&n.path) == Some(crate::workspace_fs::DocKind::Book);
+                let path = n.path.clone();
+                out.push(
+                    div()
+                        .id(id)
+                        .h(px(28.))
+                        .pl(px(12. + depth as f32 * 12.))
+                        .pr(px(6.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .rounded(px(ROW_R))
+                        .cursor_pointer()
+                        .when(selected, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
+                        .when(!selected, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
+                        .child(icon(if book { "book-open" } else { "file-text" }, 15., Theme::icon()))
+                        .child(div().flex_1().min_w_0().text_size(px(12.)).truncate().child(n.name.clone()))
+                        .on_click(cx.listener(move |w, _, window, cx| w.load_file(path.clone(), window, cx))),
+                );
+            }
+        }
+        out
+    }
+
+    fn folder_hit_row(&self, hit: &crate::workspace_fs::Hit, cx: &mut Context<Self>) -> Stateful<Div> {
+        let path = hit.path.clone();
+        let name = hit.rel.clone();
+        let snippet = hit.snippet.clone();
+        div()
+            .id(SharedString::from(format!("fh-{}", hit.path.to_string_lossy())))
+            .flex_none()
+            .px(px(8.))
+            .py(px(5.))
+            .flex()
+            .flex_col()
+            .rounded(px(ROW_R))
+            .cursor_pointer()
+            .hover(|s| s.bg(Theme::sidebar_hover()))
+            .child(div().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().child(name))
+            .when_some(snippet, |d, s| d.child(div().mt(px(1.)).text_size(px(10.)).line_height(px(14.)).text_color(Theme::text_caption()).truncate().child(s)))
+            .on_click(cx.listener(move |w, _, window, cx| w.load_file(path.clone(), window, cx)))
     }
 
     /// Width handle: a 15px hit strip straddling the sidebar edge (6px inside,

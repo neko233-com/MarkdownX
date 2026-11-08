@@ -91,6 +91,7 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `paste.rs` | HTML / Markdown → block（粘贴和导入共用） |
 | `markdown.rs` | 导出 Markdown |
 | `book.rs` | `.mdxb` 单文件书：`Book`/`Chapter`/`Localized`、打包、解包、资源校验 |
+| `annotations.rs` | 批注 sidecar：作者、回复、锚点、CRUD/批量、合并 |
 | `lang.rs` | 代码语言表 |
 | `palette.rs` | 文字色、背景色、高亮块色板（RGBA，不依赖 GPUI；`theme.rs` 转成 GPUI 颜色） |
 | `time.rs` | 日期换算、本地时区、当前时间 |
@@ -104,8 +105,10 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 |---|---|
 | `main.rs` | 入口；`FDL_SCRIPT` 脚本模式（仅 `devtools` 特性）；重新导出 `fdl_core` 的模块 |
 | `guides.rs` | 文档库是空的时放入内置的「开始指南」（只放一次） |
-| `app.rs` | `Workspace`：两栏窗口、打开 / 新建 / 保存 / 删除、保存状态、提醒调度 |
-| `html.rs` / `printing.rs` / `transfer.rs` | 导出 HTML / PDF、打印、导入导出（含 `.mdxb` 的树打包与导入） |
+| `app.rs` | `Workspace`：两栏窗口、打开 / 新建 / 保存 / 删除、保存状态、提醒调度、文件夹工作区 |
+| `workspace_fs.rs` | 文件夹扫描、目录树、模糊/内容搜索（不依赖文档库） |
+| `annotations_panel.rs` | 右侧批注面板：作者、输入、列表、解决/编辑/删除、批量操作 |
+| `html.rs` / `printing.rs` / `transfer.rs` | 导出 HTML / PDF、打印、导入导出（含 `.mdxb` 的树打包、文件夹打包与导入） |
 | `clipboard.rs` | 系统剪贴板的 HTML 读取，以及脚本模式的模拟剪贴板 |
 | `sidebar.rs` / `tree.rs` | 左栏与文档树（子文档、移动到） |
 | `home.rs` / `trash.rs` | 主页、回收站 |
@@ -141,6 +144,14 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 `.mdxb` 是 JSON 单文件（格式见 [FORMAT.md](FORMAT.md)）。桌面端 `transfer.rs` 的 `export_book` 把当前文档和 `Tree::subtree` 收集到的子页按顺序交给 `book::pack`，`import_book` 把 `Book::load` 的章节写成文档树，并把资源落到 `assets/books/<uuid>/`、改写正文里的 `src`。Windows 安装器注册 `.mdxb`；启动时 `main.rs` 从 argv 取第一本书，交给 `open_book_path` 走同一条导入并打开路径。
 
 `web/` 是独立的无构建阅读器：`mdxb.js` 校验并归一化书，`docxml.js` / `markdown.js` 把章节转成同一套块对象，`app.js` 负责目录、章节、语言、主题和进度，`widgets.js` 挂载 Canvas / HTML 交互块。它不依赖 Rust 构建产物，也不嵌入桌面应用；两边共享的契约是 `.mdxb` 和 DocxXML，而不是代码。
+
+## 文件夹工作区与批注
+
+`workspace_fs.rs` 只读文件系统，输出 `WorkspaceDir` / `FileNode` / `Hit`。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示目录模式；`flush` 在文件模式下把文档重新导出为 Markdown 并写回源文件，在文档库模式下仍走 `store.save`。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
+
+批注不写进正文：core 的 `annotations.rs` 管理 JSON sidecar，`annotations_panel.rs` 渲染右侧面板。锚点是从根开始的 block 索引路径，不是 `BlockId`（DocxXML 不保存 BlockId）。多用户离线修改通过 `tools/agent/mdxb.py merge-annotations` 按 `updated` 合并。
+
+`agent/` 与 `tools/agent/` 是给编码 agent 的入口：章节保持 `NN-topic.md`，`mdxb.py` 负责 check / pack / unpack / search；它和桌面端读写同一份 `.mdxb` 契约。
 
 ## 界面语言
 

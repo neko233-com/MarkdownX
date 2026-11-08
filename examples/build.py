@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the three sample .mdxb books.
+"""Build the five sample .mdxb books.
 
 The output is checked in so the reader works from a plain clone. Run:
 
@@ -13,6 +13,9 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+
+from cn_books import books as cn_books
+from cn_books import manifest_entries as cn_manifest
 
 ROOT = Path(__file__).resolve().parent
 NOW = int(time.time() * 1000)
@@ -278,7 +281,9 @@ def main() -> None:
         ],
         ["MarkdownX 设计组"],
     )
-    for data, name in ((quadratics, "quadratics.mdxb"), (physics, "projectile-lab.mdxb"), (specimen, "type-specimen.mdxb")):
+    books = [(quadratics, "quadratics.mdxb"), (physics, "projectile-lab.mdxb"), (specimen, "type-specimen.mdxb")]
+    books += cn_books()
+    for data, name in books:
         (ROOT / name).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     manifest = {
@@ -306,6 +311,7 @@ def main() -> None:
             },
         ]
     }
+    manifest["books"] += cn_manifest()
     (ROOT / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("built", ", ".join(p.name for p in sorted(ROOT.glob("*.mdxb"))))
 

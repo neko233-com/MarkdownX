@@ -23,12 +23,14 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 - **原生中英双语。** 界面、书名和章节正文都可以同时带中文和英文。
 - **为屏幕而生的阅读器。** 手机单列，桌面目录 + 正文；无构建步骤，Chrome 直接打开。
 - **本地优先。** 不登录、不上传、不统计；桌面文档库就是你自己的文件夹。
+- **文件夹就是工作区。** 打开任意目录，直接编辑里面的 `.md`；同一个目录树也能放 `.mdxb`。侧栏是目录树，支持模糊路径搜索和可开关的内容搜索。
+- **批注在正文旁边。** 临时批注保存为 `.annotations.json` sidecar，可以隐藏、解决、批量操作和合并，不必改动正文。
 
 ## 两种用法
 
 | 创作 | 阅读 |
 |---|---|
-| GPUI 桌面端：写章节、插入 Canvas/HTML、导出 `.mdxb`。 | `web/` 里的 Chrome 阅读器：打开书、翻章、缩放窗口、切换语言和主题。 |
+| GPUI 桌面端：打开文件夹、编辑 `.md`、插入 Canvas/HTML、写批注，再打包 `.mdxb`。 | `web/` 里的 Chrome 阅读器：打开书、翻章、缩放窗口、切换语言和主题。 |
 
 | 首页 | 可交互章节 |
 |---|---|
@@ -44,7 +46,7 @@ cargo run --release
 
 Windows 请在 Visual Studio 开发者命令行里构建，或先调用 `vcvars64.bat`。
 
-桌面端默认把文档库放在 `~/Documents/MarkdownX`，可用 `MARKDOWNX_HOME` 改。用「下载为 → MarkdownX 书 (.mdxb)」导出当前页及其子页。
+桌面端默认把文档库放在 `~/Documents/MarkdownX`，可用 `MARKDOWNX_HOME` 改。用 **文件 → 打开文件夹…** 进入 Typora 式目录工作区；用 **文件 → 打包成电子书…**（`⌘⇧E`）把当前目录或当前 Markdown 文件打成一本 `.mdxb`。导出文档库页面及其子页仍用「下载为 → MarkdownX 书 (.mdxb)」。
 
 浏览器阅读：直接用托管版 **https://neko233-com.github.io/MarkdownX/web/**，或在本地运行：
 
@@ -53,7 +55,20 @@ python -m http.server 8765 --bind 127.0.0.1
 # 打开 http://127.0.0.1:8765/web/
 ```
 
-首页自带三个示例，也可以把任意 `.mdxb` 拖进页面。
+首页自带五个示例，其中包括两本中国初中教材：**力与运动**（物理）和 **物质与变化**（化学）。也可以把任意 `.mdxb` 拖进页面。
+
+## 给 agent
+
+一本书可以维护成 `NN-topic.md` 章节文件夹。编码 agent 不用打开 GUI 就能校验和打包：
+
+```sh
+python tools/agent/mdxb.py check examples
+python tools/agent/mdxb.py pack books/physics --title "力与运动" -o physics.mdxb
+python tools/agent/mdxb.py unpack physics.mdxb books/physics
+python tools/agent/mdxb.py search books/physics 速度 --content
+```
+
+章节语法、批注 sidecar 契约和审阅循环见 [agent/README.md](agent/README.md)；给 agent 的规则见 [agent/AGENTS.md](agent/AGENTS.md)。
 
 ## `.mdxb` 格式
 
@@ -112,7 +127,9 @@ Markdown 里则是 `mdxb-canvas` / `mdxb-html` 围栏代码块，正文是一层
 crates/core/        引擎：模型、DocxXML、Markdown、编辑内核、.mdxb、文档库
 src/                GPUI 桌面端：编辑、阅读、导入导出、设置
 web/                无构建的浏览器阅读器（HTML/CSS/ES modules）
-examples/           三本示例书与生成脚本
+examples/           五本示例书与生成脚本
+agent/              给编码 agent 的写书规则
+tools/agent/        check、pack、unpack、search、merge-annotations CLI
 shared-mock/        内置指南与源文件
 docs/               架构、格式、主题、性能
 ```
@@ -131,7 +148,7 @@ Web 阅读器没有构建步骤。改完 `web/js/` 后对每个文件跑 `node -
 
 ## 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、Markdown/DocxXML 互转、`.mdxb` 导入导出、响应式 Web 阅读器、Canvas/HTML 交互块。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 安装器会注册 `.mdxb`；macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
+这是早期公开快照。现在可用：桌面编辑与文档库、Typora 式文件夹工作区与目录树、模糊/内容搜索、直接编辑 `.md`、Markdown/DocxXML 互转、`.mdxb` 导入导出与打包、响应式 Web 阅读器、Canvas/HTML 交互块，以及支持批量解决/删除的批注 sidecar。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。当前构建机无法创建 DirectX 设备，桌面 UI 未做真机截图；单元测试与 CI 覆盖代码路径。Windows 安装器会注册 `.mdxb`；macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
 
 ## 许可
 

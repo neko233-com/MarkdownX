@@ -520,6 +520,10 @@ impl Workspace {
             crate::ui::header_icon("home-new", "plus")
                 .tip(crate::settings::tr("新建文档", "New document"), Some(crate::shortcuts::hint("workspace::NewDoc", "⌘ + N")))
                 .on_click(cx.listener(|w, _, window, cx| w.new_doc(window, cx))).into_any_element()
+        ).child(
+            crate::ui::header_icon("home-folder", "folder-open")
+                .tip(crate::settings::tr("打开文件夹", "Open folder"), Some(crate::shortcuts::hint("workspace::OpenFolder", "⌘ + ⇧ + O")))
+                .on_click(cx.listener(|w, _, window, cx| w.open_folder(window, cx))).into_any_element()
         );
         // Tabs as segmented items: the current one on a quiet fill, no accent.
         let tab = |id: &'static str, label: &'static str, t: HomeTab| {

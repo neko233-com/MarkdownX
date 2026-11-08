@@ -354,6 +354,7 @@ impl Book {
             bail!("book assets are larger than {} MB", MAX_TOTAL_ASSET_BYTES / 1024 / 1024);
         }
         if let Some(cover) = &self.cover
+            && !cover.is_empty()
             && !cover.starts_with("http://")
             && !cover.starts_with("https://")
             && !self.assets.contains_key(cover)
@@ -657,6 +658,9 @@ mod tests {
         bad.format = FORMAT.into();
         bad.version = 99;
         assert!(bad.validate().is_err());
+        bad.version = VERSION;
+        bad.cover = Some(String::new());
+        assert!(bad.validate().is_ok(), "an empty cover means no cover");
     }
 
     #[test]

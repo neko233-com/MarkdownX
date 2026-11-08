@@ -223,7 +223,7 @@ fn install_book(store: &mut crate::shared_store::SharedStore, root: &Path, book:
 }
 
 impl Workspace {
-    fn close_menus(&mut self) {
+    pub(crate) fn close_menus(&mut self) {
         self.doc_menu = false;
         self.doc_sub = None;
         self.row_menu = None;
@@ -276,6 +276,61 @@ impl Workspace {
             } else if missing > 0 {
                 let _ = this.update(cx, |w, cx| w.show_toast_kind(ToastKind::Error, &crate::localized_format!("已导出，但有 {missing} 个图片或附件未能复制", "Exported, but {missing} images or attachments could not be copied"), cx));
             }
+        })
+        .detach();
+    }
+
+    /// 打包成电子书: the current folder or Markdown file, as one `.mdxb`.
+    /// Library pages keep their existing 下载为 → MarkdownX 书 path.
+    pub fn package_book(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menus();
+        if !self.flush(cx) {
+            return;
+        }
+        let source = if let Some(folder) = self.folder.clone() {
+            let files = folder.files().into_iter().filter(|f| crate::workspace_fs::DocKind::of(&f.path) == Some(crate::workspace_fs::DocKind::Markdown)).map(|f| f.path.clone()).collect::<Vec<_>>();
+            Some((folder.root.clone(), folder.name.clone(), files))
+        } else if let Some(file) = self.file.clone() {
+            let title = file.file_stem().and_then(|s| s.to_str()).unwrap_or("book").to_string();
+            Some((file.parent().map(Path::to_path_buf).unwrap_or_default(), title, vec![file]))
+        } else {
+            None
+        };
+        let Some((root, title, files)) = source else {
+            if let Some(id) = self.current.clone() {
+                self.export_book(&id, window, cx);
+            }
+            return;
+        };
+        let mut inputs = Vec::with_capacity(files.len());
+        for path in files {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let (doc, _) = crate::app::parse_markdown_file(&path, &text);
+            let chapter = doc.title.text.clone();
+            inputs.push(book::PackInput::titled(doc, book::Localized::same(chapter)));
+        }
+        if inputs.is_empty() {
+            self.show_toast_kind(ToastKind::Error, crate::settings::text("没有可打包的 Markdown"), cx);
+            return;
+        }
+        let path = save_path(&format!("{title}.mdxb"), cx);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = path.await else { return };
+            let opts = book::PackOptions {
+                assets_root: Some(root),
+                id: None,
+                title: Some(book::Localized::same(title)),
+                ..Default::default()
+            };
+            let saved = book::pack(inputs, &opts).and_then(|b| b.save(&path));
+            let _ = this.update(cx, |w, cx| match saved {
+                Ok(()) => {
+                    w.toast = None;
+                    cx.notify();
+                }
+                Err(_) => w.show_toast_kind(ToastKind::Error, crate::settings::text("打包失败，请重试"), cx),
+            });
         })
         .detach();
     }
@@ -388,7 +443,7 @@ impl Workspace {
     }
 
     /// A `.mdxb`: unpack its chapters into the library as one page tree.
-    fn import_book(&mut self, path: &Path) -> anyhow::Result<String> {
+    pub(crate) fn import_book(&mut self, path: &Path) -> anyhow::Result<String> {
         let book = book::Book::load(path)?;
         let rel = PathBuf::from("assets").join("books").join(uuid::Uuid::new_v4().to_string());
         install_book(&mut self.store, &crate::store::Store::root_dir(), book, rel)

@@ -11,4 +11,6 @@
 .wrangler/
 
 .dsh-*
+__pycache__/
+*.pyc
 

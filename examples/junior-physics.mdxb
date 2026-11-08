@@ -1,0 +1,69 @@
+{
+  "format": "markdownx.book",
+  "version": 1,
+  "id": "junior-physics",
+  "title": {
+    "zh": "初中物理：力与运动",
+    "en": "Middle School Physics: Force and Motion"
+  },
+  "subtitle": {
+    "zh": "从一辆小车开始，学会读图、测量和记录。",
+    "en": "Start with a cart and learn to read graphs, measure and record."
+  },
+  "authors": [
+    "MarkdownX 初中物理组"
+  ],
+  "languages": [
+    "zh",
+    "en"
+  ],
+  "default_language": "zh",
+  "cover": "",
+  "theme": {
+    "accent": "#1f5f8b",
+    "background": "",
+    "text": "",
+    "font": "serif"
+  },
+  "reading": {
+    "layout": "scroll",
+    "max_width": 760,
+    "show_toc": true
+  },
+  "chapters": [
+    {
+      "id": "motion",
+      "title": {
+        "zh": "机械运动",
+        "en": "Motion"
+      },
+      "format": "markdown",
+      "content": "\n一辆小车从站台出发。说“它在动”，总要先说“相对于谁”——这就是参照物。\n\n| 参照物 | 小车的运动 |\n| --- | --- |\n| 站台 | 向前运动 |\n| 小车上的乘客 | 静止 |\n| 迎面驶来的车 | 更快地靠近 |\n\n速度等于路程除以时间：\n\n$v = \\frac{s}{t}$\n\n```mdxb-canvas\n{\"title\": \"拖动 a、b，改变路程图像\", \"height\": 380, \"source\": \"{\\\"kind\\\": \\\"quadratic\\\", \\\"a\\\": 0.0, \\\"b\\\": 2.0, \\\"c\\\": 0.0, \\\"xMin\\\": 0, \\\"xMax\\\": 8, \\\"yMin\\\": 0, \\\"yMax\\\": 12}\"}\n```\n\n把 **a** 留在 0，图像是一条直线：路程随时间均匀增加，这就是匀速直线运动。把 **a** 调大，图像向上弯，小车在加速。\n",
+      "content_en": "\nA cart leaves the platform. To say it is moving, you must first say “relative to what” — that is the reference object.\n\n| Reference | The cart |\n| --- | --- |\n| The platform | Moving forward |\n| A passenger | At rest |\n| An oncoming cart | Approaching faster |\n\nSpeed is distance divided by time:\n\n$v = \\frac{{s}}{{t}}$\n\nDrag **a** and **b** to change the distance–time graph. With **a** at 0 the graph is a straight line: constant speed. Increase **a** and it curves upward: the cart is accelerating.\n"
+    },
+    {
+      "id": "forces",
+      "title": {
+        "zh": "力与平衡",
+        "en": "Forces in Balance"
+      },
+      "format": "markdown",
+      "content": "\n### 力不是“推一下”就没了\n\n力有三要素：大小、方向、作用点。它们共同决定力的效果。\n\n| 力 | 方向 | 常见例子 |\n| --- | --- | --- |\n| 重力 | 竖直向下 | 苹果落地 |\n| 支持力 | 垂直于接触面 | 桌面对书 |\n| 摩擦力 | 与相对运动方向相反 | 刹车 |\n\n当物体在两个力作用下保持静止或匀速直线运动，这两个力**平衡**：大小相等、方向相反、作用在同一直线上。\n\n> 实验：用弹簧测力计水平拉木块，读出拉力；换不同粗糙程度的桌面，比较滑动摩擦力。\n",
+      "content_en": "\nA force has size, direction and point of application. Together they decide its effect.\n\n| Force | Direction | Example |\n| --- | --- | --- |\n| Gravity | Straight down | An apple falls |\n| Normal force | Perpendicular to the surface | A table holds a book |\n| Friction | Opposite to relative motion | Braking |\n\nWhen two forces leave an object at rest or moving at constant speed, they are **balanced**: equal size, opposite direction, same line of action.\n\n> Lab: pull a block with a spring scale, then repeat on rougher surfaces and compare friction.\n"
+    },
+    {
+      "id": "record",
+      "title": {
+        "zh": "实验记录",
+        "en": "Lab Notes"
+      },
+      "format": "markdown",
+      "content": "\n### 记录，而不是“感觉”\n\n| 次数 | 路程 s / m | 时间 t / s | 速度 v / (m·s⁻¹) |\n| --- | --- | --- | --- |\n| 1 | 1.00 | 2.0 | 0.50 |\n| 2 | 2.00 | 4.0 | 0.50 |\n| 3 | 3.00 | 6.0 | 0.50 |\n\n- [x] 检查单位\n- [x] 保留两位有效数字\n- [ ] 换一辆小车，重做一次\n\n结论：在误差允许的范围内，速度不随路程改变。\n",
+      "content_en": "\nMeasure, do not guess.\n\n| Run | Distance s / m | Time t / s | Speed v / (m·s⁻¹) |\n| --- | --- | --- | --- |\n| 1 | 1.00 | 2.0 | 0.50 |\n| 2 | 2.00 | 4.0 | 0.50 |\n| 3 | 3.00 | 6.0 | 0.50 |\n\n- [x] Check the units\n- [x] Keep two significant figures\n- [ ] Repeat with another cart\n\nConclusion: within experimental error, speed does not change with distance.\n"
+    }
+  ],
+  "assets": {},
+  "created": 1794139643224,
+  "modified": 1794139643224,
+  "generator": "MarkdownX examples/cn_books.py"
+}

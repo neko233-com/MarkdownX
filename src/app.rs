@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const SAVE_MAX_DELAY: Duration = Duration::from_secs(2);
 
-actions!(workspace, [NewDoc, ImportDoc, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
+actions!(workspace, [NewDoc, ImportDoc, OpenFolder, PackageBook, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
     HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
 /// The menu bar, in the interface language.
@@ -52,6 +52,8 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action(tr("新建文档", "New Document"), NewDoc),
                 MenuItem::action(tr("新建笔记窗口", "New Note Window"), crate::quick_note::QuickNew),
                 MenuItem::action(tr("导入为文档…", "Import as Document…"), ImportDoc),
+                MenuItem::action(tr("打开文件夹…", "Open Folder…"), OpenFolder),
+                MenuItem::action(tr("打包成电子书…", "Package as E-book…"), PackageBook),
                 MenuItem::separator(),
                 MenuItem::action(tr("关闭窗口", "Close Window"), CloseWindow),
             ],
@@ -91,6 +93,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-n", crate::quick_note::QuickNew, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-shift-i", ImportDoc, None),
+        KeyBinding::new("cmd-shift-o", OpenFolder, None),
+        KeyBinding::new("cmd-shift-e", PackageBook, None),
         KeyBinding::new("cmd-alt-home", GoHome, None),
         KeyBinding::new("cmd-w", CloseWindow, None),
         KeyBinding::new("cmd-]", ToggleSidebar, None),
@@ -223,6 +227,21 @@ pub struct Workspace {
     pub store: SharedStore,
     pub entries: Vec<Entry>,
     pub current: Option<String>,
+    /// A file opened from a folder workspace; `current` stays None then.
+    pub file: Option<std::path::PathBuf>,
+    pub folder: Option<crate::workspace_fs::WorkspaceDir>,
+    pub folder_query: Entity<TextField>,
+    pub folder_content: bool,
+    pub folder_hits: Vec<crate::workspace_fs::Hit>,
+    pub folder_expanded: HashSet<std::path::PathBuf>,
+    /// Temporary annotations for the open page, stored beside its source.
+    pub annotations: fdl_core::annotations::AnnotationStore,
+    pub annotations_path: Option<std::path::PathBuf>,
+    pub annotations_open: bool,
+    pub annotation_draft: Entity<TextField>,
+    pub annotation_author: fdl_core::annotations::Author,
+    pub annotation_selected: HashSet<String>,
+    pub annotation_editing: Option<String>,
     pub editor: Option<Entity<Editor>>,
     pub search: Entity<TextField>,
     /// Keyboard highlight inside search results.
@@ -330,8 +349,18 @@ impl Workspace {
             f.placeholder_color = Theme::text_disabled();
             f
         });
+        let folder_query = cx.new(|cx| {
+            let mut f = TextField::new(crate::settings::tr("搜索文件…", "Search files…"), cx);
+            f.placeholder_color = Theme::text_disabled();
+            f
+        });
         let subs = vec![
             cx.subscribe(&settings_filter, |_, _, ev: &TextFieldEvent, cx| if matches!(ev, TextFieldEvent::Changed) { cx.notify(); }),
+            cx.subscribe_in(&folder_query, window, |this, _, ev: &TextFieldEvent, _, cx| {
+                if matches!(ev, TextFieldEvent::Changed) {
+                    this.refresh_folder_hits(cx);
+                }
+            }),
             cx.observe_window_bounds(window, |this, window, cx| crate::quick_note::remember(window, this.quick_note, cx)),
             // The system switched between light and dark (or the app's own look changed).
             cx.observe_window_appearance(window, |this, _, cx| if crate::settings::sync_dark(cx) { crate::settings::refresh_all(this, cx); }),
@@ -389,6 +418,17 @@ impl Workspace {
         })
         .detach();
         let sidebar_width = store.settings().sidebar_width.unwrap_or(theme::SIDEBAR_WIDTH);
+        let annotation_draft = cx.new(|cx| {
+            let mut f = TextField::new("写一条批注…", cx);
+            f.multiline = true;
+            f.wrap = true;
+            f.size = 13.;
+            f.line_height = 20.;
+            f
+        });
+        let annotation_name = std::env::var("MARKDOWNX_AUTHOR").or_else(|_| std::env::var("USERNAME")).or_else(|_| std::env::var("USER")).unwrap_or_else(|_| {
+            if crate::settings::english() { "Reader".into() } else { "读者".into() }
+        });
         let mut ws = Workspace {
             quick_note: quick,
             shortcut_recording: None,
@@ -401,6 +441,19 @@ impl Workspace {
             store,
             entries,
             current: None,
+            file: None,
+            folder: None,
+            folder_query,
+            folder_content: false,
+            folder_hits: vec![],
+            folder_expanded: HashSet::new(),
+            annotations: fdl_core::annotations::AnnotationStore::new(""),
+            annotations_path: None,
+            annotations_open: false,
+            annotation_draft,
+            annotation_author: fdl_core::annotations::Author::new(annotation_name),
+            annotation_selected: HashSet::new(),
+            annotation_editing: None,
             editor: None,
             search,
             search_sel: None,
@@ -477,6 +530,176 @@ impl Workspace {
         self.try_open(id, window, cx);
     }
 
+    /// Pick a normal folder (Typora's 打开文件夹) and show its tree.
+    pub fn open_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menus();
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(crate::settings::text("打开文件夹").into()),
+            extensions: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = prompt.await.ok().and_then(Result::ok).flatten().and_then(|p| p.into_iter().next()) else { return };
+            let _ = this.update_in(cx, |w, window, cx| w.open_folder_path(path, window, cx));
+        })
+        .detach();
+    }
+
+    pub fn open_folder_path(&mut self, path: std::path::PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
+        self.save_before(cx, move |w, window, cx| w.open_folder_path_now(path, window, cx));
+    }
+
+    fn open_folder_path_now(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let dir = match crate::workspace_fs::WorkspaceDir::scan(path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法打开文件夹：{}", "Could not open folder: {}", crate::settings::diagnostic(&e.to_string())), cx);
+                return;
+            }
+        };
+        let first = dir.files().first().map(|f| f.path.clone());
+        self.folder = Some(dir);
+        self.folder_expanded = self
+            .folder
+            .as_ref()
+            .map(|f| {
+                let mut out = HashSet::new();
+                fn walk(nodes: &[crate::workspace_fs::FileNode], out: &mut HashSet<std::path::PathBuf>) {
+                    for n in nodes {
+                        if n.dir {
+                            out.insert(n.path.clone());
+                            walk(&n.children, out);
+                        }
+                    }
+                }
+                walk(&f.children, &mut out);
+                out
+            })
+            .unwrap_or_default();
+        self.folder_hits.clear();
+        self.folder_query.update(cx, |q, cx| q.set_text("", cx));
+        self.current = None;
+        self.file = None;
+        self.editor = None;
+        self.view = View::Home;
+        if let Some(path) = first {
+            self.load_file(path, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Close the folder tree and go back to the document library.
+    pub fn close_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.save_before(cx, |w, _, cx| {
+            w.folder = None;
+            w.folder_hits.clear();
+            w.folder_query.update(cx, |q, cx| q.set_text("", cx));
+            w.file = None;
+            w.current = None;
+            w.editor = None;
+            w.show_view(View::Home, cx);
+        }) {
+            return;
+        }
+        let _ = window;
+    }
+
+    pub fn refresh_folder_hits(&mut self, cx: &mut Context<Self>) {
+        let query = self.folder_query.read(cx).text.clone();
+        self.folder_hits = self.folder.as_ref().map(|f| f.search(&query, self.folder_content)).unwrap_or_default();
+        cx.notify();
+    }
+
+    pub(crate) fn load_file(&mut self, path: std::path::PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
+        self.save_before(cx, move |w, window, cx| w.open_file_path(path, window, cx));
+    }
+
+    /// Open one file from the folder tree. Markdown is edited in place;
+    /// `.mdxb` goes through the library so its chapters keep their page tree.
+    pub fn open_file_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        match crate::workspace_fs::DocKind::of(&path) {
+            Some(crate::workspace_fs::DocKind::Book) => {
+                if let Ok(id) = self.import_book(&path) {
+                    self.file = None;
+                    self.open(&id, window, cx);
+                } else {
+                    self.show_toast_kind(ToastKind::Error, crate::settings::text("无法打开这本书"), cx);
+                }
+            }
+            Some(crate::workspace_fs::DocKind::Markdown) => {
+                let text = match std::fs::read_to_string(&path) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法读取文件：{}", "Could not read file: {}", crate::settings::diagnostic(&e.to_string())), cx);
+                        return;
+                    }
+                };
+                let (doc, modified) = parse_markdown_file(&path, &text);
+                let editor = cx.new(|cx| {
+                    let mut e = Editor::new(doc, modified, crate::store::PageWidth::default(), window, cx);
+                    e.cat_pinned = true;
+                    e
+                });
+                self.bind_editor(editor.clone(), window, cx);
+                self.editor = Some(editor);
+                self.current = None;
+                self.file = Some(path);
+                self.view = View::Doc;
+                self.status = SaveStatus::Idle;
+                self.doc_menu = false;
+                self.close_menus();
+                self.reload_annotations(cx);
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    fn bind_editor(&mut self, editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_sub = Some(cx.subscribe_in(&editor, window, |this, _, ev: &EditorEvent, window, cx| match ev {
+            EditorEvent::Changed => {
+                // 阅读模式 put the document back: nothing to save.
+                let rejected = this.editor.clone().is_some_and(|ed| ed.update(cx, |e, cx| e.reject_read_only_edit(cx)));
+                if !rejected {
+                    this.sync_document(window, cx);
+                    this.schedule_save(window, cx);
+                }
+            }
+            EditorEvent::Mode(reading) => this.set_mode(*reading, window, cx),
+            EditorEvent::Info(info) => this.set_info_row(*info),
+            EditorEvent::Toast => {
+                this.toast = None;
+                cx.notify();
+            }
+            EditorEvent::Save => {
+                this.flush(cx);
+            }
+            EditorEvent::Search(q) => {
+                this.open_search(window, cx);
+                this.search.update(cx, |s, cx| s.set_text(q, cx));
+                this.search_sel = this.default_search_sel(cx);
+            }
+            EditorEvent::OpenDoc(id) => this.open(id, window, cx),
+            EditorEvent::OpenDocAt(id, ordinal) => this.open_at(id, *ordinal, window, cx),
+            EditorEvent::HideRefs => this.ask_refs(false, cx),
+            EditorEvent::Duplicate => {
+                if let Some(id) = this.current.clone() {
+                    this.duplicate_doc(&id, window, cx);
+                }
+            }
+            EditorEvent::Catalogue(pinned) => {
+                if let Some(id) = this.current.clone() {
+                    if let Some(e) = this.entries.iter_mut().find(|e| e.id == id) {
+                        e.meta.catalogue_closed = !pinned;
+                    }
+                    let _ = this.store.set_catalogue(&id, *pinned);
+                }
+            }
+        }));
+    }
+
     /// Show `id`; false when it could not be opened (or the open document
     /// could not be saved first, see [`Self::save_before`]).
     pub fn try_open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -521,46 +744,7 @@ impl Workspace {
             let core = peer.read(cx).core.clone();
             editor.update(cx, |e, cx| e.receive_document(&core, cx));
         }
-        self.editor_sub = Some(cx.subscribe_in(&editor, window, |this, _, ev: &EditorEvent, window, cx| match ev {
-            EditorEvent::Changed => {
-                // 阅读模式 put the document back: nothing to save.
-                let rejected = this.editor.clone().is_some_and(|ed| ed.update(cx, |e, cx| e.reject_read_only_edit(cx)));
-                if !rejected {
-                    this.sync_document(window, cx);
-                    this.schedule_save(window, cx);
-                }
-            }
-            EditorEvent::Mode(reading) => this.set_mode(*reading, window, cx),
-            EditorEvent::Info(info) => this.set_info_row(*info),
-            EditorEvent::Toast => {
-                this.toast = None;
-                cx.notify();
-            }
-            EditorEvent::Save => {
-                this.flush(cx);
-            }
-            EditorEvent::Search(q) => {
-                this.open_search(window, cx);
-                this.search.update(cx, |s, cx| s.set_text(q, cx));
-                this.search_sel = this.default_search_sel(cx);
-            }
-            EditorEvent::OpenDoc(id) => this.open(id, window, cx),
-            EditorEvent::OpenDocAt(id, ordinal) => this.open_at(id, *ordinal, window, cx),
-            EditorEvent::HideRefs => this.ask_refs(false, cx),
-            EditorEvent::Duplicate => {
-                if let Some(id) = this.current.clone() {
-                    this.duplicate_doc(&id, window, cx);
-                }
-            }
-            EditorEvent::Catalogue(pinned) => {
-                if let Some(id) = this.current.clone() {
-                    if let Some(e) = this.entries.iter_mut().find(|e| e.id == id) {
-                        e.meta.catalogue_closed = !pinned;
-                    }
-                    let _ = this.store.set_catalogue(&id, *pinned);
-                }
-            }
-        }));
+        self.bind_editor(editor.clone(), window, cx);
         // Opening a document puts the caret in it, unless the user is typing a search.
         if !self.search_open {
             editor.read(cx).focus(window);
@@ -571,6 +755,7 @@ impl Workspace {
             }
         self.editor = Some(editor);
         self.current = Some(id.to_string());
+        self.file = None;
         crate::quick_note::used(id, cx);
         self.reveal_in_tree(id);
         self.sync_sub_pages(cx);
@@ -579,6 +764,7 @@ impl Workspace {
         self.doc_menu = false;
         self.doc_sub = None;
         self.mode_menu = false;
+        self.reload_annotations(cx);
         cx.notify();
         true
     }
@@ -894,6 +1080,36 @@ impl Workspace {
             return true;
         }
         let (Some(id), Some(ed)) = (self.current.clone(), self.editor.clone()) else {
+            if let (Some(path), Some(ed)) = (self.file.clone(), self.editor.clone()) {
+                let doc = &ed.read(cx).core.doc;
+                let opts = crate::markdown::Options { library_root: path.parent(), assets: Some("assets"), ..Default::default() };
+                let export = crate::markdown::export(doc, &opts);
+                let title = doc.title.text.trim().replace('\n', " ");
+                let text = if title.is_empty() { export.text.clone() } else { format!("# {title}\n\n{}", export.text) };
+                let ok = std::fs::write(&path, text.as_bytes()).is_ok();
+                if ok {
+                    if let Some(parent) = path.parent() {
+                        for (from, rel) in &export.files {
+                            let to = parent.join(rel);
+                            if let Some(dir) = to.parent() {
+                                let _ = std::fs::create_dir_all(dir);
+                            }
+                            let _ = std::fs::copy(from, to);
+                        }
+                    }
+                    ed.update(cx, |e, cx| {
+                        e.modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or_else(crate::time::now);
+                        cx.notify();
+                    });
+                    self.status = SaveStatus::Saved;
+                    self.unsaved = false;
+                } else {
+                    self.status = SaveStatus::Failed(crate::localized_format!("保存失败：{}", "Could not save: {}", crate::settings::diagnostic(&path.display().to_string())));
+                }
+                self.dirty_since = self.unsaved.then(Instant::now);
+                cx.notify();
+                return !self.unsaved;
+            }
             self.unsaved = false;
             return true;
         };
@@ -949,6 +1165,22 @@ impl Workspace {
                 return;
             }
         } else {
+            if let Some(path) = self.file.clone() {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    let (doc, _) = parse_markdown_file(&path, &text);
+                    if let Some(ed) = &self.editor {
+                        ed.update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc), cx));
+                    }
+                    self.unsaved = false;
+                    self.status = SaveStatus::Idle;
+                    self.dirty_since = None;
+                }
+                if let Some(then) = self.after_save.take() {
+                    then(self, window, cx);
+                }
+                cx.notify();
+                return;
+            }
             let Some(id) = self.current.clone() else { return };
             match self.store.load_for_edit(&id, false) {
                 Ok(doc) => {
@@ -1087,7 +1319,7 @@ impl Workspace {
             .rounded(px(9.)).bg(Theme::fill_hover())
             .cursor_pointer().hover(|s| s.bg(Theme::fill_hover_strong()))
             .child(icon("search", 15., Theme::text_caption()))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(Theme::text_caption()).child(crate::settings::tr("搜索文档…", "Search documents…")))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(Theme::text_caption()).child(if self.folder.is_some() { crate::settings::tr("搜索文件夹…", "Search folder…") } else { crate::settings::tr("搜索文档…", "Search documents…") }))
             .when(width >= 200., |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_placeholder()).child(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J").replace(" + ", " "))))
             .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
             .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx))))
@@ -1266,11 +1498,35 @@ impl Workspace {
                             .on_click(cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(FocusSearch), cx))),
                     )
                     .child(
+                        seg("doc-annotations", "message-square")
+                            .when(self.annotations_open, |d| d.bg(Theme::fill_hover()))
+                            .tip(crate::settings::tr("批注", "Notes"), None)
+                            .on_click(cx.listener(|w, _, _, cx| w.toggle_annotations(cx))),
+                    )
+                    .child(
                         // Straight to a new document: no 新建 menu, as 导入 is rare.
                         seg("doc-new", "plus").tip(crate::settings::tr("新建文档", "New document"), None).on_click(cx.listener(|w, _, window, cx| w.new_doc(window, cx))),
                     ).into_any_element()
             )
     }
+}
+
+/// Read a Markdown file as the document model; a leading `# title` becomes
+/// the page title, everything else stays as blocks.
+pub(crate) fn parse_markdown_file(path: &std::path::Path, text: &str) -> (crate::model::Document, u64) {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(crate::model::UNTITLED).to_string();
+    let mut blocks = crate::paste::markdown_to_blocks(text, crate::paste::Off { file: true, ..Default::default() });
+    let title = match blocks.first() {
+        Some(b) if matches!(&b.kind, crate::model::BlockKind::Heading { level: 1, .. }) => {
+            let title = b.text.text.clone();
+            blocks.remove(0);
+            if title.trim().is_empty() { stem } else { title }
+        }
+        _ => stem,
+    };
+    let doc = crate::model::Document { title: crate::model::RichText::plain(title), icon: None, cover: None, blocks };
+    let modified = std::fs::metadata(path).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or_else(crate::time::now);
+    (doc, modified)
 }
 
 /// Header and action group share an 8px top/right inset.
@@ -1296,6 +1552,7 @@ impl Render for Workspace {
         let theme_menu = self.render_theme_menu(cx);
         let toast = self.render_toast(window);
         let mode_menu = self.render_mode_menu(cx);
+        let annotations = self.render_annotations(window, cx);
         let main = match self.view {
             View::Doc => div()
                 .flex_1()
@@ -1365,6 +1622,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|w, _: &GoHome, _, cx| w.show_view(View::Home, cx)))
             .on_action(cx.listener(|w, _: &NewDoc, window, cx| w.new_doc(window, cx)))
             .on_action(cx.listener(|w, _: &ImportDoc, window, cx| w.open_import(window, cx)))
+            .on_action(cx.listener(|w, _: &OpenFolder, window, cx| w.open_folder(window, cx)))
+            .on_action(cx.listener(|w, _: &PackageBook, window, cx| w.package_book(window, cx)))
             .on_action(cx.listener(|w, _: &ToggleSidebar, _, cx| {
                 w.sidebar_open = !w.sidebar_open;
                 cx.notify();
@@ -1425,11 +1684,21 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|w, _: &FocusSearch, window, cx| {
-                if w.search_open { w.close_search(window, cx); } else { w.open_search(window, cx); }
+                if w.folder.is_some() {
+                    w.sidebar_open = true;
+                    let fh = w.folder_query.read(cx).focus_handle(cx);
+                    window.focus(&fh);
+                    cx.notify();
+                } else if w.search_open {
+                    w.close_search(window, cx);
+                } else {
+                    w.open_search(window, cx);
+                }
                 cx.stop_propagation();
             }))
             .children(sidebar)
             .child(note)
+            .children(annotations)
             .children(resize)
             .children(crate::ui::window_controls(window))
             .children(row_menu)
@@ -1510,5 +1779,33 @@ pub(crate) fn check_save_safety(phase: &str, cx: &mut App) {
         }).unwrap();
         eprintln!("save-safety: PASS; remaining conflict blocked quit; copy preserved; edit after reload saved cleanly");
         for (handle, _) in windows { handle.update(cx, |_, window, _| window.remove_window()).unwrap(); }
+    }
+}
+
+#[cfg(test)]
+mod markdown_file_tests {
+    use super::parse_markdown_file;
+
+    #[test]
+    fn parses_title_and_keeps_tables() {
+        let dir = std::env::temp_dir().join(format!("markdownx-file-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lesson.md");
+        let text = "# 力与运动\n\n| 量 | 单位 |\n|---|---|\n| 速度 | m/s |\n";
+        std::fs::write(&path, text).unwrap();
+        let (doc, _) = parse_markdown_file(&path, text);
+        assert_eq!(doc.title.text, "力与运动");
+        assert!(matches!(doc.blocks.first().map(|b| &b.kind), Some(crate::model::BlockKind::Table(_))));
+        let opts = crate::markdown::Options { library_root: Some(dir.as_path()), ..Default::default() };
+        let back = crate::markdown::export(&doc, &opts);
+        assert!(back.text.contains("| 量 | 单位 |"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recognizes_books_by_suffix() {
+        assert_eq!(crate::workspace_fs::DocKind::of(std::path::Path::new("a.md")), Some(crate::workspace_fs::DocKind::Markdown));
+        assert_eq!(crate::workspace_fs::DocKind::of(std::path::Path::new("a.mdxb")), Some(crate::workspace_fs::DocKind::Book));
+        assert_eq!(crate::workspace_fs::DocKind::of(std::path::Path::new("a.png")), None);
     }
 }
