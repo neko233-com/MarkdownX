@@ -534,9 +534,11 @@ impl Workspace {
                         if let Some(p) = to.parent() {
                             std::fs::create_dir_all(p)?;
                         }
-                        let path = crate::store::export_path(&src.to_string_lossy())
-                            .ok_or_else(|| anyhow::anyhow!("Asset outside library"))?;
-                        std::fs::write(&to, crate::store::read_bounded(&path, crate::store::EXPORT_FILE_LIMIT)?)?;
+                        let Some(path) = crate::store::export_path(&src.to_string_lossy()) else { continue };
+                        let Ok(bytes) = crate::store::read_bounded(&path, crate::store::EXPORT_FILE_LIMIT) else {
+                            continue;
+                        };
+                        std::fs::write(&to, bytes)?;
                     }
                     toc.push_str(&format!("{}. [{}]({})\n", i + 1, chapter, name));
                     metas.push(serde_json::json!({
