@@ -535,6 +535,11 @@ impl Workspace {
             let result = (|| -> anyhow::Result<()> {
                 std::fs::create_dir_all(&folder)?;
                 let mut toc = format!("# {}\n\n", title.replace('\n', " "));
+                let index_dir = folder
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("book")
+                    .to_string();
                 let mut metas = Vec::new();
                 for (i, (chapter_id, chapter, doc)) in chapters.into_iter().enumerate() {
                     let out = crate::markdown::export(
@@ -567,7 +572,7 @@ impl Workspace {
                         };
                         std::fs::write(&to, bytes)?;
                     }
-                    toc.push_str(&format!("{}. [{}]({})\n", i + 1, chapter, name));
+                    toc.push_str(&format!("{}. [{}]({}/{})\n", i + 1, chapter, index_dir, name));
                     metas.push(serde_json::json!({
                         "id": chapter_id,
                         "title": { "zh": chapter, "en": chapter },
