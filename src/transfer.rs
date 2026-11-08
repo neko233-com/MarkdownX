@@ -489,8 +489,12 @@ impl Workspace {
     /// A `.mdxb`: unpack its chapters into the library as one page tree.
     pub(crate) fn import_book(&mut self, path: &Path) -> anyhow::Result<String> {
         let book = book::Book::load(path)?;
+        let english = book.chapters.iter().map(|c| c.content_en.clone()).collect();
         let rel = PathBuf::from("assets").join("books").join(uuid::Uuid::new_v4().to_string());
-        install_book(&mut self.store, &crate::store::Store::root_dir(), book, rel)
+        let id = install_book(&mut self.store, &crate::store::Store::root_dir(), book, rel)?;
+        self.book_english = english;
+        self.book_english_id = Some(id.clone());
+        Ok(id)
     }
 
     /// 下载为 → Markdown 文件夹: every page of a book becomes one `.md`
@@ -508,6 +512,11 @@ impl Workspace {
             .map(|e| e.title.clone())
             .unwrap_or_else(|| root_doc.title.text.clone());
         let ids = crate::tree::Tree::new(&self.entries).subtree(id);
+        let english = if self.book_english_id.as_deref() == Some(id) {
+            self.book_english.clone()
+        } else {
+            Vec::new()
+        };
         let mut chapters = Vec::with_capacity(ids.len());
         for child in ids {
             let Some(doc) = self.doc_of(&child, cx) else { continue };
@@ -542,6 +551,8 @@ impl Workspace {
                     .to_string();
                 let mut metas = Vec::new();
                 for (i, (chapter_id, chapter, doc)) in chapters.into_iter().enumerate() {
+                    let stem = format!("{:02}-{}", i + 1, chapter_slug(&chapter));
+                    let name = format!("{stem}.md");
                     let out = crate::markdown::export(
                         &doc,
                         &crate::markdown::Options {
@@ -550,8 +561,6 @@ impl Workspace {
                             ..Default::default()
                         },
                     );
-                    let stem = format!("{:02}-{}", i + 1, chapter_slug(&chapter));
-                    let name = format!("{stem}.md");
                     let text = format!("# {}\n\n{}", chapter.replace('\n', " "), out.text);
                     crate::workspace_fs::write_atomic(&folder.join(&name), text.as_bytes())?;
                     // Keep the lossless DocxXML next to the Markdown chapter. A later
@@ -561,6 +570,16 @@ impl Workspace {
                         &folder.join(&source),
                         docxml::serialize(&doc).as_bytes(),
                     )?;
+                    let english_name = format!("{stem}.en.md");
+                    let has_english = if let Some(Some(body)) = english.get(i) {
+                        crate::workspace_fs::write_atomic(
+                            &folder.join(&english_name),
+                            body.as_bytes(),
+                        )?;
+                        true
+                    } else {
+                        false
+                    };
                     for (src, rel) in &out.files {
                         let to = folder.join(rel);
                         if let Some(p) = to.parent() {
@@ -573,12 +592,16 @@ impl Workspace {
                         std::fs::write(&to, bytes)?;
                     }
                     toc.push_str(&format!("{}. [{}]({}/{})\n", i + 1, chapter, index_dir, name));
-                    metas.push(serde_json::json!({
+                    let mut meta = serde_json::json!({
                         "id": chapter_id,
                         "title": { "zh": chapter, "en": chapter },
                         "file": name,
                         "source": source,
-                    }));
+                    });
+                    if has_english {
+                        meta["content_en_file"] = serde_json::json!(english_name);
+                    }
+                    metas.push(meta);
                 }
                 let meta = serde_json::json!({
                     "format": "markdownx.book",

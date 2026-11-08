@@ -236,6 +236,10 @@ pub struct Workspace {
     pub folder_expanded: HashSet<std::path::PathBuf>,
     /// `[[wiki links]]` across the open folder, used for the backlink panel.
     pub folder_links: fdl_core::wiki::Index,
+    /// English chapter bodies from the last imported `.mdxb`, if any.
+    pub book_english: Vec<Option<String>>,
+    /// Root page id those bodies belong to; prevents leaking into other books.
+    pub book_english_id: Option<String>,
     /// Temporary annotations for the open page, stored beside its source.
     pub annotations: fdl_core::annotations::AnnotationStore,
     pub annotations_path: Option<std::path::PathBuf>,
@@ -450,6 +454,8 @@ impl Workspace {
             folder_hits: vec![],
             folder_expanded: HashSet::new(),
             folder_links: fdl_core::wiki::Index::default(),
+            book_english: Vec::new(),
+            book_english_id: None,
             annotations: fdl_core::annotations::AnnotationStore::new(""),
             annotations_path: None,
             annotations_open: false,
