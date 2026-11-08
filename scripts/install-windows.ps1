@@ -104,7 +104,7 @@ $programs = [Environment]::GetFolderPath('Programs')
 $desktop = [Environment]::GetFolderPath('Desktop')
 New-Shortcut (Join-Path $programs 'MarkdownX.lnk') (Join-Path $dest 'markdownx.exe') '' 'MarkdownX interactive books'
 New-Shortcut (Join-Path $desktop 'MarkdownX.lnk') (Join-Path $dest 'markdownx.exe') '' 'MarkdownX interactive books'
-New-Shortcut (Join-Path $programs 'MarkdownX Collaboration.lnk') 'powershell.exe' ('-NoProfile -ExecutionPolicy Bypass -File "' + $openScript + '"') 'MarkdownX collaboration workspace'
+New-Shortcut (Join-Path $programs 'MarkdownX Collaboration.lnk') 'powershell.exe' ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $openScript + '"') 'MarkdownX collaboration workspace'
 # Remove the older "start the server" shortcut: the server now starts at sign-in,
 # so the Start Menu entry opens the workspace instead.
 Remove-Item -LiteralPath (Join-Path $programs 'MarkdownX Server.lnk') -Force -ErrorAction SilentlyContinue
