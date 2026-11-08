@@ -108,6 +108,12 @@ impl Index {
     }
 }
 
+/// The link token covering `offset`, if any. Click targets include the
+/// closing brackets so a click on either edge still follows the link.
+pub fn target_at(text: &str, offset: usize) -> Option<String> {
+    links(text).into_iter().find(|l| l.start <= offset && offset <= l.end).map(|l| l.target)
+}
+
 /// Parse `[[Target]]` / `[[Target|Label]]`, skipping fenced code blocks.
 pub fn links(text: &str) -> Vec<WikiLink> {
     let mut out = vec![];
@@ -266,6 +272,15 @@ mod tests {
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].0.path, p("one.md"));
         assert_eq!(b[0].1.target, "Two");
+    }
+
+    #[test]
+    fn finds_a_link_by_byte_offset() {
+        let text = "a [[Two|second]] tail";
+        let start = text.find("[[").unwrap();
+        assert_eq!(target_at(text, start).as_deref(), Some("Two"));
+        assert_eq!(target_at(text, start + 1).as_deref(), Some("Two"));
+        assert_eq!(target_at(text, text.find("tail").unwrap()), None);
     }
 
     #[test]

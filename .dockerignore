@@ -1,0 +1,16 @@
+target
+.git
+.github
+.dsh-*
+.codegraph233
+examples
+site
+docs
+assets
+shared-mock
+tools
+packaging
+scripts
+*.png
+*.md
+!server/web/*.md

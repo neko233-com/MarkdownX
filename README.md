@@ -72,11 +72,11 @@ See [agent/README.md](agent/README.md) for the chapter dialect, annotation sidec
 
 ## Collaboration server
 
-`server/` is an optional Go server for teams that want one shared workspace instead of passing `.mdxb` files around. It keeps documents as plain `.md` files, commits every accepted save to Git, and serves a browser editor with live presence.
+`server/` is an optional Rust server for teams that want one shared workspace instead of passing `.mdxb` files around. It keeps documents as plain `.md` files, commits every accepted save to Git, and serves a browser editor with live presence.
 
 ```sh
-cd server
-MARKDOWNX_SERVER_TOKEN=change-me go run ./cmd/markdownx-server -root ./data -web ./web
+MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
+  -root ./data -web server/web
 # open http://127.0.0.1:8787/
 ```
 
@@ -147,7 +147,7 @@ The full schema and the round-trip rules are in [docs/FORMAT.md](docs/FORMAT.md)
 crates/core/        fdl_core: model, DocxXML, Markdown, editor core, .mdxb, library
 src/                GPUI desktop app: editor, reader UI, import/export, settings
 web/                build-free browser reader (HTML/CSS/ES modules)
-server/             Go collaborative server + browser editor (Git history, diff)
+server/             Rust collaboration server + browser editor (Git history, diff)
 examples/           five .mdxb books and the Python generators
 agent/              book-authoring rules for coding agents
 tools/agent/        check, pack, unpack, search, merge-annotations CLI
@@ -167,17 +167,16 @@ FDL_FUZZ_SEEDS=2000 cargo test --release random_edits
 
 The web reader has no build step. Run `node --check` on each file under `web/js/` after editing, then open the page through a local server.
 
-The collaboration server is a separate Go module:
+The collaboration server is a workspace member:
 
 ```sh
-cd server
-go test ./...
-go vet ./...
+cargo test -p markdownx-server
+cargo clippy -p markdownx-server --all-targets -- -D warnings
 ```
 
 ## Status
 
-This is an early public snapshot. Working today: the desktop editor and library, a folder workspace with a Typora-style tree and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Go collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. The desktop UI was not visually verified on this build machine because GPUI could not create a DirectX device; unit tests and CI cover the code paths. The Windows installer, macOS Info.plist and the Linux MIME package register `.mdxb`; double-click behavior on macOS/Linux still needs a real desktop check, and mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
+This is an early public snapshot. Working today: the desktop editor and library, a folder workspace with a Typora-style tree and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. The desktop UI was not visually verified on this build machine because GPUI could not create a DirectX device; unit tests and CI cover the code paths. The Windows installer, macOS Info.plist and the Linux MIME package register `.mdxb`; double-click behavior on macOS/Linux still needs a real desktop check, and mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
 
 ## License
 
@@ -239,11 +238,11 @@ Markdown 里则是 `mdxb-canvas` / `mdxb-html` 围栏代码块，正文是一层
 
 ### 协作服务器
 
-`server/` 是给团队共用一个工作区的可选 Go 服务器：文档仍是普通 `.md` 文件，每次接受的保存都会成为一次 Git 提交，浏览器编辑器里能看见谁在线。
+`server/` 是给团队共用一个工作区的可选 Rust 服务器：文档仍是普通 `.md` 文件，每次接受的保存都会成为一次 Git 提交，浏览器编辑器里能看见谁在线。
 
 ```sh
-cd server
-MARKDOWNX_SERVER_TOKEN=change-me go run ./cmd/markdownx-server -root ./data -web ./web
+MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
+  -root ./data -web server/web
 # 打开 http://127.0.0.1:8787/
 ```
 
@@ -255,7 +254,7 @@ MARKDOWNX_SERVER_TOKEN=change-me go run ./cmd/markdownx-server -root ./data -web
 crates/core/        引擎：模型、DocxXML、Markdown、编辑内核、.mdxb、文档库
 src/                GPUI 桌面端：编辑、阅读、导入导出、设置
 web/                无构建的浏览器阅读器
-server/             Go 协作服务器与浏览器编辑器（Git 历史、diff）
+server/             Rust 协作服务器与浏览器编辑器（Git 历史、diff）
 examples/           五本示例书与生成脚本
 agent/              给编码 agent 的写书规则
 tools/agent/        check、pack、unpack、search、merge-annotations CLI
@@ -270,17 +269,16 @@ scripts/check.sh
 cargo test -p fdl_core
 ```
 
-协作服务器是独立的 Go module：
+协作服务器是 workspace 成员：
 
 ```sh
-cd server
-go test ./...
-go vet ./...
+cargo test -p markdownx-server
+cargo clippy -p markdownx-server --all-targets -- -D warnings
 ```
 
 ### 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块，以及带 Git 历史和 diff 的 Go 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 安装器、macOS Info.plist 和 Linux MIME 包都会注册 `.mdxb`；macOS/Linux 的双击行为仍待真机验证，移动端壳是下一步。
+这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块，以及带 Git 历史和 diff 的 Rust 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 安装器、macOS Info.plist 和 Linux MIME 包都会注册 `.mdxb`；macOS/Linux 的双击行为仍待真机验证，移动端壳是下一步。
 
 ### 许可
 

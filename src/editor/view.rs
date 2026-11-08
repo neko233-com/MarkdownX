@@ -26,6 +26,8 @@ pub enum EditorEvent {
     Search(String),
     /// 展开目录 / 收起目录, remembered per document.
     Catalogue(bool),
+    /// A cross-file `[[wiki]]` link was clicked.
+    OpenWiki(String),
     /// A 子页面列表 item or an @文档 link was clicked.
     OpenDoc(String),
     /// A 反向引用 line: that document, scrolled to its nth block.
@@ -2154,7 +2156,7 @@ impl Editor {
 
     // ---- mouse
 
-    fn pos_at(&self, p: Point<Pixels>) -> Option<Pos> {
+    pub(crate) fn pos_at(&self, p: Point<Pixels>) -> Option<Pos> {
         let us = self.core.units();
         let atomic = {
             let bb = self.block_bounds.borrow();

@@ -11,6 +11,7 @@
 .wrangler/
 
 .dsh-*
+server/data/
 .codegraph233/
 __pycache__/
 *.pyc

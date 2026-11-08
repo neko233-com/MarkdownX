@@ -11,6 +11,7 @@ pub mod markdown;
 pub mod model;
 pub mod palette;
 pub mod paste;
+pub mod protocol;
 pub mod store;
 pub mod time;
 pub mod annotations;

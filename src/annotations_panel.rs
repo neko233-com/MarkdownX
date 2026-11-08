@@ -179,6 +179,31 @@ impl Workspace {
         (quote, path)
     }
 
+    pub(crate) fn merge_annotations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(crate::settings::text("合并批注").into()),
+            extensions: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = prompt.await.ok().and_then(Result::ok).flatten().and_then(|p| p.into_iter().next()) else { return };
+            let _ = this.update_in(cx, |w, _, cx| {
+                match AnnotationStore::load(&path) {
+                    Ok(other) => {
+                        w.annotations.merge(other);
+                        w.save_annotations(cx);
+                        w.show_toast_kind(crate::ui::ToastKind::Success, crate::settings::text("已合并批注"), cx);
+                        cx.notify();
+                    }
+                    Err(e) => w.show_toast_kind(crate::ui::ToastKind::Error, &crate::settings::diagnostic(&e.to_string()), cx),
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn render_annotations(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.annotations_open || (self.current.is_none() && self.file.is_none()) { return None; }
         let count = self.annotations.unresolved();
@@ -316,6 +341,16 @@ impl Workspace {
                         .child(div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).child(crate::settings::text("批注")))
                         .child(div().px(px(6.)).py(px(1.)).rounded(px(8.)).bg(Theme::fill_hover()).text_size(px(10.)).text_color(Theme::text_caption()).child(count.to_string()))
                         .child(div().flex_1())
+                        .child(
+                            div()
+                                .id("ann-merge")
+                                .p(px(5.))
+                                .rounded(px(4.))
+                                .cursor_pointer()
+                                .hover(|d| d.bg(Theme::fill_hover()))
+                                .on_click(cx.listener(|w, _, window, cx| w.merge_annotations(window, cx)))
+                                .child(icon("batch", 14., Theme::icon())),
+                        )
                         .child(
                             div()
                                 .id("ann-close")

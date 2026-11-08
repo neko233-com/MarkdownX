@@ -642,6 +642,19 @@ impl Workspace {
         self.folder_links = fdl_core::wiki::Index::build(files);
     }
 
+    /// Follow a `[[wiki]]` link from the current folder note.
+    fn open_wiki(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let path = match (self.folder.as_ref(), self.file.as_ref()) {
+            (Some(_), Some(from)) => self.folder_links.resolve(from, target).map(|p| p.to_path_buf()),
+            _ => None,
+        };
+        if let Some(path) = path {
+            self.load_file(path, window, cx);
+        } else {
+            self.show_toast_kind(ToastKind::Error, crate::settings::text("找不到双链目标"), cx);
+        }
+    }
+
     pub(crate) fn load_file(&mut self, path: std::path::PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
         self.save_before(cx, move |w, window, cx| w.open_file_path(path, window, cx));
     }
@@ -711,6 +724,7 @@ impl Workspace {
                 this.search.update(cx, |s, cx| s.set_text(q, cx));
                 this.search_sel = this.default_search_sel(cx);
             }
+            EditorEvent::OpenWiki(target) => this.open_wiki(target, window, cx),
             EditorEvent::OpenDoc(id) => this.open(id, window, cx),
             EditorEvent::OpenDocAt(id, ordinal) => this.open_at(id, *ordinal, window, cx),
             EditorEvent::HideRefs => this.ask_refs(false, cx),

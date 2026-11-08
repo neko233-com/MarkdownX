@@ -6,33 +6,30 @@ A small self-hosted server for MarkdownX books and Markdown documents:
 - every accepted save is a Git commit;
 - browser editor with live presence and conflict handling;
 - history, unified diff and restore over HTTP;
-- one static binary, no database.
+- one Rust binary, no database.
 
 It is intentionally small. It is not a CRDT service and it is not a multi-tenant
 SaaS; read [Security](#security) before exposing it.
 
 ## Quick start
 
-Requires Go 1.23+ and `git` on `PATH`.
+Requires Rust 1.99+ and `git` on `PATH`.
 
 ```sh
-cd server
-go mod download
-MARKDOWNX_SERVER_TOKEN=change-me go run ./cmd/markdownx-server \
-  -root ./data -web ./web
+cargo run -p markdownx-server -- \
+  -root ./data -web server/web
 ```
 
-Open <http://127.0.0.1:8787/> and enter the same token in the token dialog.
+Open <http://127.0.0.1:8787/>. If no token is configured and `-dev` is not set,
+the server generates a token and prints it to the log; paste it into the token
+dialog.
 
 For local development, `-dev` disables the token requirement and allows any
 browser origin:
 
 ```sh
-go run ./cmd/markdownx-server -root ./.data -web ./web -dev
+cargo run -p markdownx-server -- -root ./.data -web server/web -dev
 ```
-
-If the token is empty and `-dev` is not set, the server generates one at
-startup and prints it to the log. Set `MARKDOWNX_SERVER_TOKEN` in production.
 
 ## Configuration
 
@@ -109,80 +106,68 @@ Connect to `/ws/docs/{id}?name=<display-name>&token=<token>`.
 Server to client messages:
 
 ```json
-{"type":"snapshot","clientId":"...","id":"lesson","title":"Lesson","rev":3,"content":"# Lesson\n","peers":[]}
-{"type":"update","id":"lesson","rev":4,"title":"Lesson","by":"Reader-a1","at":"...","content":"# Lesson\n..."}
-{"type":"saved","id":"lesson","rev":4,"changed":true,"title":"Lesson","commit":"<sha>"}
-{"type":"conflict","id":"lesson","rev":4,"content":"...","merged":"...","by":"Reader-b2"}
+{"type":"snapshot","client_id":"...","id":"lesson","title":"Lesson","rev":3,"content":"# Lesson\n","peers":[]}
+{"type":"update","rev":4,"title":"Lesson","by":"Reader-a1","origin":"...","at":1760000000000,"content":"# Lesson\n..."}
+{"type":"saved","rev":4,"by":"Reader-a1","at":1760000000000,"commit":"<sha>","warning":""}
+{"type":"conflict","rev":4,"content":"...","merged":"...","by":"Reader-b2"}
 {"type":"presence","peers":[{"id":"...","name":"Reader-a1","color":"#..."}]}
 {"type":"error","message":"..."}
+{"type":"pong"}
 ```
 
 Client to server messages:
 
 ```json
-{"type":"save","base":3,"content":"# Lesson\n..."}
-{"type":"cursor","cursor":{"block":0,"offset":12}}
+{"type":"save","base":3,"content":"# Lesson\n"}
+{"type":"cursor","cursor":42}
 {"type":"ping"}
 ```
 
-`saved.changed` is `false` when the content did not change. The room keeps the
-last 256 revision snapshots in memory for stale-save merges. Revisions are
-in-memory; after a restart the room starts from the file on disk at `rev: 1`.
-Use Git hashes for durable history.
+An `update` is broadcast to every socket, including the sender; `saved` and
+`conflict` are sent only to the socket that attempted the save. The browser
+uses `origin` to decide whether an update is its own acknowledgement or a
+remote edit.
 
-## Conflict model
-
-The server is optimistic, not CRDT:
-
-1. A client saves against a `base` revision.
-2. If `base` is current, the server writes and commits.
-3. If `base` is older, it loads that snapshot, runs a three-way merge against
-   the current content, and either commits the clean merge or returns
-   `conflict` without touching the file.
-4. The browser offers "load latest", "use merged draft", or "overwrite remote".
-   Overwrite rebases to the current revision before sending.
-
-This keeps simultaneous edits in different regions and refuses to silently
-drop text when edits overlap.
+The server stores a complete snapshot of the last 256 room revisions. A save
+with a stale base is merged three ways: base, the server's current text, and
+the incoming text. If Git cannot merge cleanly, the server returns the current
+text plus the conflicted merge and writes nothing.
 
 ## Docker
 
+Build from the repository root, because the server shares `crates/core` with
+the desktop app:
+
 ```sh
-docker build -t markdownx-server ./server
+docker build -f server/Dockerfile -t markdownx-server .
 docker run --rm -p 8787:8787 \
   -e MARKDOWNX_SERVER_TOKEN=change-me \
-  -v markdownx-data:/data \
+  -v "$PWD/data:/data" \
   markdownx-server
 ```
 
-The image runs as UID 10001 and stores data in `/data`. When using a bind mount,
-make sure the host directory is writable by that UID.
-
-The container includes `git`; the Git author can be set with
-`MARKDOWNX_GIT_NAME` / `MARKDOWNX_GIT_EMAIL`.
+The image runs as UID 10001, stores the workspace in `/data`, and has a
+healthcheck on `/api/health`.
 
 ## Security
 
-- One shared token protects every document. There are no users, roles or
-  per-document ACLs. Anyone with the token can read, edit, restore revisions
-  and create new commits.
-- Put the server behind TLS (a reverse proxy is fine). The server speaks plain
-  HTTP unless you add TLS termination.
-- Do not expose `-dev` to a network. It disables the token and loosens origin
-  checks.
-- The editor writes Markdown as plain text; it does not render embedded HTML.
-  Still treat the token as a write credential.
-- `-max-bytes` bounds a single document, not total disk use. Git history grows
-  with edits; back up `<root>` and prune the repository deliberately.
-- The server binds to the address you give it. `:8787` listens on all
-  interfaces; use `127.0.0.1:8787` for a local-only instance.
+- One shared bearer token. There are no user accounts, per-document ACLs or
+  audit identities beyond the display name sent by the client.
+- Put the server behind TLS and a reverse proxy; do not expose plain HTTP to
+  the internet.
+- The token can appear in WebSocket query strings and browser history; use
+  the `mx_token` cookie or a reverse proxy that strips query logs if that
+  matters.
+- Document IDs are restricted; paths are resolved under `<root>/docs` and Git
+  arguments are passed without a shell.
+- HTML widgets are not rendered by this server; it stores Markdown only.
+- Back up `<root>` including `.git`; it is the entire workspace.
 
-## Tests
+## Development
 
 ```sh
-go test ./...
-go vet ./...
+cargo test -p markdownx-server
+cargo clippy -p markdownx-server --all-targets -- -D warnings
 ```
 
-The tests cover storage and Git commits, stale-save merges, conflict handling,
-HTTP auth/validation, and a real WebSocket save/broadcast round trip.
+The browser editor is plain HTML/CSS/JS in `server/web`; it has no build step.

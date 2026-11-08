@@ -1,6 +1,6 @@
 # 架构
 
-MarkdownX 的桌面端是一个单进程 GPUI 应用（Rust，约 4 万行）；`server/` 是另外的 Go module，负责可选的多人协作。一篇文档在内存里是一棵 block 树（`model.rs`），在磁盘上是一份 DocxXML 文件（`docxml.rs`）。编辑器把这棵树画成一个虚拟化列表。
+MarkdownX 的桌面端是一个单进程 GPUI 应用（Rust，约 4 万行）；`server/` 是同一个 workspace 里的 Rust 协作服务器，负责可选的多人协作。一篇文档在内存里是一棵 block 树（`model.rs`），在磁盘上是一份 DocxXML 文件（`docxml.rs`）。编辑器把这棵树画成一个虚拟化列表。
 
 仓库是一个 Cargo workspace，分两个 crate：
 
@@ -149,18 +149,18 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 协作服务器
 
-`server/` 是独立的 Go module，不属于 Cargo workspace，也不嵌入桌面进程。它面向“一个团队共用一个文件夹”的场景，文档仍是 `<root>/docs/*.md`，每个被接受的保存都在 `<root>` 的 Git 仓库里形成一次提交。
+`server/` 是 Cargo workspace 里的 Rust 二进制（`markdownx-server`），不嵌入桌面进程。它面向“一个团队共用一个文件夹”的场景，文档仍是 `<root>/docs/*.md`，每个被接受的保存都在 `<root>` 的 Git 仓库里形成一次提交。HTTP/WebSocket 消息定义在 `crates/core/src/protocol.rs`，浏览器编辑器和未来的桌面协作客户端共用同一套 wire 类型。
 
-| 包 | 职责 |
+| 模块 | 职责 |
 |---|---|
-| `internal/store` | 文档 ID、读写、标题提取、临时文件 + `fsync` + `rename` 的原子保存 |
-| `internal/gitstore` | 初始化仓库、提交单个文件、`log` / `show` / `diff` / `merge-file`；不把提交写进父仓库 |
-| `internal/live` | 内存房间：当前内容 + revision、最近 256 个快照、presence、WebSocket 广播、三方合并与冲突 |
-| `internal/api` | HTTP JSON API、Bearer token、`/ws/docs/{id}` 升级 |
-| `cmd/markdownx-server` | 配置、静态编辑器、优雅退出 |
-| `web` | 浏览器编辑器（纯文本编辑、版本面板、diff、冲突提示） |
+| `server/src/store.rs` | 文档 ID、读写、标题提取、临时文件 + `fsync` + `rename` 的原子保存 |
+| `server/src/git.rs` | 初始化仓库、提交单个文件、`log` / `show` / `diff` / `merge-file`；不把提交写进父仓库 |
+| `server/src/live.rs` | 内存房间：当前内容 + revision、最近 256 个快照、presence、WebSocket 广播、三方合并与冲突 |
+| `server/src/api.rs` | HTTP JSON API、Bearer token、`/ws/docs/{id}` 升级 |
+| `server/src/main.rs` | 配置、静态编辑器、优雅退出 |
+| `server/web` | 浏览器编辑器（纯文本编辑、版本面板、diff、冲突提示） |
 
-一致性模型是乐观并发，不是 CRDT：客户端带 `base` revision 保存；`base` 落后时，服务器用 Git 的 `merge-file` 对 base/current/incoming 做三方合并，干净就提交，重叠就返回冲突且不写文件。revision 只在房间内存中有效，服务重启后从磁盘重新开始；持久历史以 Git 提交为准。这个边界让服务器可以独立部署，也避免把实时协议塞进 `fdl_core` 的文档模型。
+一致性模型是乐观并发，不是 CRDT：客户端带 `base` revision 保存；`base` 落后时，服务器用 Git 的 `merge-file` 对 base/current/incoming 做三方合并，干净就提交，重叠就返回冲突且不写文件。revision 只在房间内存中有效，服务重启后从磁盘重新开始；持久历史以 Git 提交为准。协议类型放在 core，文档模型本身不依赖网络。
 
 `server/README.md` 记录启动参数、HTTP/WebSocket 消息、安全边界和 Docker 用法。
 

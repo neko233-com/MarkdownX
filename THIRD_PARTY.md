@@ -2,19 +2,15 @@
 
 MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随它一起分发的第三方代码和素材。
 
-## Go 依赖
+## 协作服务器依赖
 
-协作服务器 `server/` 使用 Go 标准库（Go 自身的 BSD-3-Clause 许可）和：
+协作服务器 `server/` 是同一个 Cargo workspace 的 Rust 二进制，直接依赖 `fdl_core`、`anyhow`、`axum` 0.8.9（WebSocket）、`tokio` 1.53.3、`tower-http` 0.6.11（静态文件/CORS/trace）、`tracing`/`tracing-subscriber`、`serde`/`serde_json`、`subtle` 2.6.1、`uuid` 1.28.0、`futures-util` 0.3.34；测试另用 `tower` 0.5.3。完整许可记录见下方 Rust 依赖表。
 
-| 组件 | 版本 | 许可 |
-|---|---|---|
-| `github.com/gorilla/websocket` | v1.5.3 | BSD-3-Clause |
-
-`server/Dockerfile` 以 `golang:1.23-alpine` 构建、`alpine:3.20` 运行；镜像内的 Alpine 软件包（git、ca-certificates、tzdata）按各自发行版许可分发，不随源码仓库再分发。
+`server/Dockerfile` 以 `rust:1.99.1-bookworm` 构建、`debian:bookworm-slim` 运行；镜像内的 Debian 软件包（git、ca-certificates、curl、tzdata）按各自发行版许可分发，不随源码仓库再分发。
 
 ## Rust 依赖
 
-由 `cargo metadata` 生成，共 741 个包。许可逐项列于下表，其中也包含 MPL-2.0；本表记录依赖声明，不替代各组件的许可文本。
+由 `cargo metadata` 生成，共 764 个包。许可逐项列于下表，其中也包含 MPL-2.0；本表记录依赖声明，不替代各组件的许可文本。
 
 要重新生成这张表：`scripts/licences.sh`（从 `cargo metadata` 取全部依赖）。
 
@@ -61,6 +57,8 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | av-scenechange | 0.14.1 | MIT |
 | av1-grain | 0.2.5 | BSD-2-Clause |
 | avif-serialize | 0.8.9 | BSD-3-Clause |
+| axum | 0.8.9 | MIT |
+| axum-core | 0.5.6 | MIT |
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
 | bindgen | 0.71.1 | BSD-3-Clause |
 | bit-set | 0.8.0 | Apache-2.0 OR MIT |
@@ -143,6 +141,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | darling | 0.24.1 | MIT |
 | darling_core | 0.24.1 | MIT |
 | darling_macro | 0.24.1 | MIT |
+| data-encoding | 2.11.1 | MIT |
 | data-url | 0.3.2 | MIT OR Apache-2.0 |
 | deflate64 | 0.1.12 | MIT |
 | derive_more | 0.99.20 | MIT |
@@ -261,7 +260,9 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | http | 1.5.0 | MIT OR Apache-2.0 |
 | http-body | 1.1.0 | MIT |
 | http-body-util | 0.1.5 | MIT |
+| http-range-header | 0.4.2 | MIT |
 | httparse | 1.10.1 | MIT OR Apache-2.0 |
+| httpdate | 1.0.3 | MIT OR Apache-2.0 |
 | hybrid-array | 0.4.15 | MIT OR Apache-2.0 |
 | hyper | 1.12.0 | MIT |
 | hyper-rustls | 0.27.10 | Apache-2.0 OR ISC OR MIT |
@@ -323,6 +324,8 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | malloc_buf | 0.0.6 | MIT |
 | markup5ever | 0.12.1 | MIT OR Apache-2.0 |
 | markup5ever_rcdom | 0.3.0 | MIT OR Apache-2.0 |
+| matchers | 0.2.0 | MIT |
+| matchit | 0.8.4 | MIT AND BSD-3-Clause |
 | maybe-rayon | 0.1.1 | MIT |
 | md-5 | 0.10.6 | MIT OR Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT |
@@ -332,6 +335,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | mime | 0.3.17 | MIT OR Apache-2.0 |
 | mime_guess | 2.0.5 | MIT |
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 |
+| minisign-verify | 0.3.0 | MIT |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | mint | 0.5.9 | MIT |
@@ -348,6 +352,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | nom | 8.0.0 | MIT |
 | noop_proc_macro | 0.3.0 | MIT |
 | ntapi | 0.4.3 | Apache-2.0 OR MIT |
+| nu-ansi-term | 0.50.3 | MIT |
 | num | 0.4.3 | MIT OR Apache-2.0 |
 | num-bigint | 0.4.8 | MIT OR Apache-2.0 |
 | num-bigint-dig | 0.8.6 | MIT/Apache-2.0 |
@@ -502,13 +507,16 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | serde_fmt | 1.1.0 | Apache-2.0 OR MIT |
 | serde_json | 1.0.154 | MIT OR Apache-2.0 |
 | serde_json_lenient | 0.2.4 | MIT/Apache-2.0 |
+| serde_path_to_error | 0.1.20 | MIT OR Apache-2.0 |
 | serde_repr | 0.1.21 | MIT OR Apache-2.0 |
 | serde_spanned | 0.6.9 | MIT OR Apache-2.0 |
 | serde_spanned | 1.1.2 | MIT OR Apache-2.0 |
 | serde_urlencoded | 0.7.1 | MIT/Apache-2.0 |
+| sha1 | 0.10.7 | MIT OR Apache-2.0 |
 | sha1_smol | 1.0.1 | BSD-3-Clause |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 |
 | sha2 | 0.11.1 | MIT OR Apache-2.0 |
+| sharded-slab | 0.1.7 | MIT |
 | shlex | 1.3.0 | MIT OR Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
@@ -572,6 +580,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | thiserror | 2.0.21 | MIT OR Apache-2.0 |
 | thiserror-impl | 1.0.69 | MIT OR Apache-2.0 |
 | thiserror-impl | 2.0.21 | MIT OR Apache-2.0 |
+| thread_local | 1.1.10 | MIT OR Apache-2.0 |
 | tiff | 0.11.3 | MIT |
 | tiny-keccak | 2.0.2 | CC0-1.0 |
 | tiny-skia | 0.11.4 | BSD-3-Clause |
@@ -579,8 +588,10 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | tinystr | 0.8.4 | Unicode-3.0 |
 | tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT |
 | tokio | 1.53.3 | MIT |
+| tokio-macros | 2.7.2 | MIT |
 | tokio-rustls | 0.26.6 | MIT OR Apache-2.0 |
 | tokio-socks | 0.5.3 | MIT |
+| tokio-tungstenite | 0.29.0 | MIT |
 | tokio-util | 0.7.20 | MIT |
 | toml | 0.8.23 | MIT OR Apache-2.0 |
 | toml | 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 |
@@ -592,15 +603,19 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | toml_write | 0.1.2 | MIT OR Apache-2.0 |
 | toml_writer | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | tower | 0.5.3 | MIT |
+| tower-http | 0.6.11 | MIT |
 | tower-layer | 0.3.3 | MIT |
 | tower-service | 0.3.3 | MIT |
 | tracing | 0.1.44 | MIT |
 | tracing-attributes | 0.1.31 | MIT |
 | tracing-core | 0.1.36 | MIT |
+| tracing-log | 0.2.0 | MIT |
+| tracing-subscriber | 0.3.23 | MIT |
 | try-lock | 0.2.5 | MIT |
 | ttf-parser | 0.20.0 | MIT OR Apache-2.0 |
 | ttf-parser | 0.21.1 | MIT OR Apache-2.0 |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 |
+| tungstenite | 0.29.0 | MIT OR Apache-2.0 |
 | typeid | 1.0.3 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | uds_windows | 1.2.1 | MIT |
@@ -625,6 +640,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT |
 | uuid | 1.28.0 | Apache-2.0 OR MIT |
 | v_frame | 0.3.9 | BSD-2-Clause |
+| valuable | 0.1.1 | MIT |
 | value-bag | 1.14.1 | Apache-2.0 OR MIT |
 | value-bag-serde1 | 1.14.1 | Apache-2.0 OR MIT |
 | value-bag-sval2 | 1.14.1 | Apache-2.0 OR MIT |
@@ -652,6 +668,9 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | wayland-sys | 0.31.11 | MIT |
 | web-sys | 0.3.106 | MIT OR Apache-2.0 |
 | web-time | 1.1.0 | MIT OR Apache-2.0 |
+| webview2-com | 0.38.2 | MIT |
+| webview2-com-macros | 0.8.1 | MIT |
+| webview2-com-sys | 0.38.2 | MIT |
 | weezl | 0.1.12 | MIT OR Apache-2.0 |
 | which | 6.0.3 | MIT |
 | winapi | 0.3.9 | MIT/Apache-2.0 |
@@ -761,10 +780,6 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | zvariant | 5.15.1 | MIT |
 | zvariant_derive | 5.15.1 | MIT |
 | zvariant_utils | 4.2.0 | MIT |
-
-## Windows 运行库
-
-Windows 安装包随附未修改的 Microsoft Visual C++ Runtime `vcruntime140.dll`，从 Visual Studio 的 x64 Redistributable 目录复制。它受微软的分发许可约束，不属于本项目的 MIT 许可；参见 [Visual Studio 2022 Redistribution](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution)。源码仓库不包含该二进制文件。
 
 ## 字体
 

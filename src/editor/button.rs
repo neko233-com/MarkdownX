@@ -247,6 +247,14 @@ impl Editor {
         if self.core.reminder_at(at).is_some() {
             return self.open_reminder(at, cx);
         }
+        if self.core.sel.is_collapsed()
+            && let Some(pos) = self.pos_at(p)
+            && let Some(block) = self.core.block(pos.block)
+            && let Some(target) = fdl_core::wiki::target_at(&block.text.text, pos.offset)
+        {
+            cx.emit(EditorEvent::OpenWiki(target));
+            return;
+        }
         let Some(b) = self.core.button_at(at) else { return };
         match b.action {
             ButtonAction::OpenLink => {
