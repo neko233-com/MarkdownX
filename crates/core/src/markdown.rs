@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn inline_attachments_export_links_and_copies_including_tables() {
-        let root = std::env::temp_dir().join(format!("quiet-export-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("markdownx-export-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("assets/report (1).pdf"), b"pdf").unwrap();
         let file = FileBlock { src_kind: "path".into(), src: "assets/report (1).pdf".into(), name: "Report [1]".into(), view: FileView::Card };

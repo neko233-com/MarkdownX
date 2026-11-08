@@ -6,7 +6,7 @@
 # usage: shared-mock/guides/shots/shots.sh   (after cargo build --release --features devtools)
 set -e
 cd "$(dirname "$0")/../../.."
-work=$(mktemp -d /tmp/quiet-shots.XXXXXX)
+work=$(mktemp -d /tmp/markdownx-shots.XXXXXX)
 python3 shared-mock/guides/build.py "$work/lib" >/dev/null
 # seen_version: no 已更新到 card over the sidebar.
 ver=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
