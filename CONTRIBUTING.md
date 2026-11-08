@@ -14,7 +14,7 @@ MARKDOWNX_HOME=/tmp/lib ./target/release/markdownx   # uses another library
 
 While developing, point `MARKDOWNX_HOME` at a scratch directory; don't test against your real library.
 
-The repository is a Cargo workspace: `crates/core` is the document engine (`fdl_core`), which does not depend on GPUI, and the root crate is the app. GPUI, taffy and xattr are locally patched copies in `vendor/`; the changes are listed in [vendor/PATCHES.md](vendor/PATCHES.md). `target/debug` can grow past 10 GB; if you only build release, `cargo clean --profile dev` clears it.
+The desktop project is a Cargo workspace: `crates/core` is the document engine (`fdl_core`), which does not depend on GPUI, and the root crate is the app. `server/` is a separate Go module, not part of the Cargo build. GPUI, taffy and xattr are locally patched copies in `vendor/`; the changes are listed in [vendor/PATCHES.md](vendor/PATCHES.md). `target/debug` can grow past 10 GB; if you only build release, `cargo clean --profile dev` clears it.
 
 ## Testing
 
@@ -22,6 +22,7 @@ The repository is a Cargo workspace: `crates/core` is the document engine (`fdl_
 scripts/check.sh                                        # tests + clippy with zero warnings; run before committing
 cargo test --release -p fdl_core                        # the document engine only, without building GPUI
 FDL_FUZZ_SEEDS=2000 cargo test --release random_edits   # more random edits, for the editing core
+(cd server && go test ./... && go vet ./...)             # Go collaboration server, outside the Cargo workspace
 ```
 
 - The editing core has a random test: starting from a document with every block type, it makes random selections, typing, structural, style, table and undo edits, checks the model's invariants after each step, and saves and reloads every 25 steps.

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "profile": "code",
+  "roots": [
+    { "key": "markdownx", "path": ".", "role": "full" }
+  ],
+  "languages": ["rust", "go", "typescript", "javascript", "python", "powershell"],
+  "exclude": ["target", "node_modules", ".dsh-server", ".dsh-ui", ".codegraph233", ".git"]
+}

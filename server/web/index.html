@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f2e7">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <title>MarkdownX Server</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="mark">M</span><span>MarkdownX</span><span class="server-tag">server</span></div>
+    <div class="doc-head">
+      <strong id="doc-title">未打开文档</strong>
+      <span id="doc-id" class="muted"></span>
+    </div>
+    <div class="top-actions">
+      <span id="save-state" class="pill">未连接</span>
+      <button id="history-toggle" class="ghost" type="button">版本</button>
+      <button id="token-open" class="ghost" type="button">令牌</button>
+      <button id="new-doc" class="primary" type="button">新建</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="side-head">
+        <span>文档</span>
+        <button id="doc-refresh" class="icon" type="button" title="刷新">↻</button>
+      </div>
+      <input id="doc-filter" class="filter" type="search" placeholder="筛选文档…" autocomplete="off">
+      <div id="doc-list" class="doc-list"></div>
+      <div class="side-foot">
+        <label class="field"><span>你的名字</span><input id="user-name" maxlength="32" placeholder="Reader"></label>
+        <div id="peers" class="peers"></div>
+      </div>
+    </aside>
+
+    <main class="editor-wrap">
+      <div id="banner" class="banner" hidden></div>
+      <textarea id="editor" spellcheck="false" placeholder="# 开始写 Markdown…"></textarea>
+      <div class="editor-foot">
+        <span id="rev-label">rev 1</span>
+        <span id="commit-label" class="muted"></span>
+        <span class="spacer"></span>
+        <span id="word-count" class="muted"></span>
+      </div>
+    </main>
+
+    <aside id="history" class="history" hidden>
+      <div class="side-head">
+        <span>Git 版本</span>
+        <button id="history-close" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div id="commit-list" class="commit-list"></div>
+      <div class="history-diff">
+        <div class="diff-head"><span id="diff-title">选择一次提交</span><button id="restore" class="ghost small" type="button" disabled>恢复</button></div>
+        <pre id="diff-body">历史会显示在这里。</pre>
+      </div>
+    </aside>
+  </div>
+
+  <dialog id="token-dialog">
+    <form method="dialog">
+      <h2>服务器令牌</h2>
+      <p class="muted">令牌只保存在本机浏览器。开发模式可留空。</p>
+      <input id="token-input" type="password" autocomplete="off" placeholder="Bearer token">
+      <menu><button value="cancel" class="ghost">取消</button><button id="token-save" value="save" class="primary">保存</button></menu>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

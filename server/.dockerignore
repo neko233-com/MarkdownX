@@ -1,0 +1,8 @@
+.git
+.dsh-*
+.codegraph233
+data
+tmp
+bin
+*.exe
+*.test

@@ -2,6 +2,16 @@
 
 MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随它一起分发的第三方代码和素材。
 
+## Go 依赖
+
+协作服务器 `server/` 使用 Go 标准库（Go 自身的 BSD-3-Clause 许可）和：
+
+| 组件 | 版本 | 许可 |
+|---|---|---|
+| `github.com/gorilla/websocket` | v1.5.3 | BSD-3-Clause |
+
+`server/Dockerfile` 以 `golang:1.23-alpine` 构建、`alpine:3.20` 运行；镜像内的 Alpine 软件包（git、ca-certificates、tzdata）按各自发行版许可分发，不随源码仓库再分发。
+
 ## Rust 依赖
 
 由 `cargo metadata` 生成，共 741 个包。许可逐项列于下表，其中也包含 MPL-2.0；本表记录依赖声明，不替代各组件的许可文本。
