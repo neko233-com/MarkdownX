@@ -3,6 +3,7 @@ mod config;
 mod git;
 mod live;
 mod store;
+mod templates;
 
 use std::sync::Arc;
 

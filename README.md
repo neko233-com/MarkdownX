@@ -23,7 +23,8 @@ MarkdownX is a writing and reading environment for **dynamic books**: documents 
 - **Bilingual by design.** Interface, book metadata and chapter text can carry Chinese and English side by side.
 - **A reader that fits the screen.** The web reader is a build-free, responsive page: a single column on a phone, a table of contents and a comfortable measure on a desktop.
 - **Local first.** No account, no cloud, no telemetry. The desktop library is a folder you own.
-- **A folder is a workspace.** Open any directory and edit its `.md` files in place; the same tree can hold `.mdxb` books. The sidebar is a directory tree, with fuzzy path search and optional full-text search.
+- **A Git repository is a workspace.** Open any folder and MarkdownX widens it to the `.git` root, edits `.md` files in place, and commits each save for the touched file. The sidebar is a directory tree with fuzzy path search and optional full-text search.
+- **Built for team workflows.** Game design, product, film and editorial starter templates live in `templates/`; the collaboration server exposes them to the browser. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Notes live beside the text.** Temporary comments are stored in `.annotations.json` sidecars, so reviewers can hide, resolve, batch-edit and merge them without touching the prose.
 - **Follows your computer.** The first launch follows the system language (Chinese or English) and the setting can pin either one. The app checks the GitHub releases page after launch and every 12 hours, and announces a newer version with its download page.
 
@@ -81,7 +82,7 @@ See [agent/README.md](agent/README.md) for the chapter dialect, annotation sidec
 
 ## Collaboration server
 
-`server/` is an optional Rust server for teams that want one shared workspace instead of passing `.mdxb` files around. It keeps documents as plain `.md` files, commits every accepted save to Git, and serves a browser editor with live presence.
+`server/` is an optional Rust server for teams that want one shared workspace instead of passing `.mdxb` files around. The repository root is the workspace: nested `.md` paths, Chinese filenames and folders are supported, every accepted save is a Git commit, and the browser editor has live presence, history, diff and restore. Point it at a team repo and put it behind TLS on the intranet.
 
 ```sh
 MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
@@ -91,7 +92,7 @@ MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
 
 The editor shows who else is in the room, saves over WebSocket, and resolves stale writes with a three-way merge. Overlapping edits are reported as a conflict with **load latest**, **use merged draft** and **overwrite remote** choices instead of silently dropping text. The history panel reads Git commits, shows a unified diff, and can restore any revision as a new commit. A multi-stage `Dockerfile` is included.
 
-The server is single-tenant and protected by one shared token; put it behind TLS. See [server/README.md](server/README.md) for flags, the HTTP/WebSocket protocol, the conflict model and deployment notes.
+The server is single-tenant and protected by one shared token; put it behind TLS. See [server/README.md](server/README.md) for flags, the HTTP/WebSocket protocol, the conflict model, workspace paths, templates and intranet deployment notes. Workflow conventions are in [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
 ## The `.mdxb` format
 
@@ -157,6 +158,7 @@ crates/core/        fdl_core: model, DocxXML, Markdown, editor core, .mdxb, libr
 src/                GPUI desktop app: editor, reader UI, import/export, settings
 web/                build-free browser reader (HTML/CSS/ES modules)
 server/             Rust collaboration server + browser editor (Git history, diff)
+templates/          game, product, film and editorial workflow starters
 examples/           five .mdxb books and the Python generators
 agent/              book-authoring rules for coding agents
 tools/agent/        check, pack, unpack, search, merge-annotations CLI
@@ -209,7 +211,8 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 - **原生中英双语。** 界面、书名和章节正文都可以同时带中文和英文。
 - **为屏幕而生的阅读器。** 手机单列，桌面目录 + 正文；无构建步骤，Chrome 直接打开。
 - **本地优先。** 不登录、不上传、不统计；桌面文档库就是你自己的文件夹。
-- **文件夹就是工作区。** 打开任意目录，目录树直接编辑 `.md`；同一个树里也能放 `.mdxb`。支持模糊路径搜索、内容搜索、`[[双链]]` 和行内批注。
+- **Git 仓库就是工作区。** 打开任意目录，MarkdownX 会向上找到 `.git` 根，目录树直接编辑 `.md`，每次保存只为改动的文件生成一次提交；同一个树里也能放 `.mdxb`。支持模糊路径搜索、内容搜索、`[[双链]]` 和行内批注。
+- **团队工作流开箱即用。** `templates/` 里有游戏策划、产品 PRD、影视 treatment、内容选题等模板；浏览器协作端会直接列出这些模板。见 [docs/WORKFLOWS.md](docs/WORKFLOWS.md)。
 - **跟着你的电脑走。** 首次启动跟随系统语言（中文/English），也可以在设置里固定一种；应用启动后和每 12 小时检查 GitHub 发布页，发现新版本会提示下载地址。
 
 ### 快速开始
@@ -257,7 +260,7 @@ Markdown 里则是 `mdxb-canvas` / `mdxb-html` 围栏代码块，正文是一层
 
 ### 协作服务器
 
-`server/` 是给团队共用一个工作区的可选 Rust 服务器：文档仍是普通 `.md` 文件，每次接受的保存都会成为一次 Git 提交，浏览器编辑器里能看见谁在线。
+`server/` 是给团队共用一个仓库的可选 Rust 服务器：`-root` 指向 `.git` 所在目录，文档 ID 是仓库相对路径（支持中文文件名和嵌套目录），每次接受的保存都会成为一次 Git 提交，浏览器编辑器里能看见谁在线，并带历史/diff/恢复。
 
 ```sh
 MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
@@ -274,6 +277,7 @@ crates/core/        引擎：模型、DocxXML、Markdown、编辑内核、.mdxb�
 src/                GPUI 桌面端：编辑、阅读、导入导出、设置
 web/                无构建的浏览器阅读器
 server/             Rust 协作服务器与浏览器编辑器（Git 历史、diff）
+templates/          游戏、产品、影视与内容工作流模板
 examples/           五本示例书与生成脚本
 agent/              给编码 agent 的写书规则
 tools/agent/        check、pack、unpack、search、merge-annotations CLI

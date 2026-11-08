@@ -9,6 +9,7 @@ COPY build.rs ./
 COPY src ./src
 COPY crates/core ./crates/core
 COPY server ./server
+COPY templates ./templates
 COPY vendor ./vendor
 RUN cargo build --release -p markdownx-server
 

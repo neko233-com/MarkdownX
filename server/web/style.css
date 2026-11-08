@@ -50,6 +50,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .filter { margin: 0 12px 8px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; background: transparent; outline: none; }
 .filter:focus { border-color: var(--accent); }
 .doc-list { flex: 1; overflow: auto; padding: 0 8px 12px; min-width: 0; }
+.doc-folder { padding: 12px 8px 4px; color: var(--muted); font: 10px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.doc-folder:first-child { padding-top: 2px; }
 .doc-item { width: 100%; text-align: left; border: 0; background: transparent; padding: 9px 8px; border-radius: 6px; display: block; }
 .doc-item:hover { background: var(--accent-soft); }
 .doc-item.active { background: var(--accent-soft); }
@@ -106,6 +108,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 0; pad
   .side-head { padding: 8px 12px 4px; }
   .filter { margin-bottom: 4px; }
   .doc-list { display: flex; gap: 4px; overflow-x: auto; padding: 0 8px 6px; }
+  .doc-folder { display: none; }
   .doc-item { min-width: 160px; }
   .side-foot { display: none; }
   #editor { padding: 22px 18px; font-size: 14px; }

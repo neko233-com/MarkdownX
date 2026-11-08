@@ -1,10 +1,12 @@
 # MarkdownX server
 
-A small self-hosted server for MarkdownX books and Markdown documents:
+A small self-hosted server for a team's Markdown workspace:
 
-- plain `.md` files under `<root>/docs`, written atomically;
+- the Git repository root **is** the workspace; every `.md` file is a document;
+- nested folders, Chinese filenames and spaces are supported;
 - every accepted save is a Git commit;
 - browser editor with live presence and conflict handling;
+- workflow templates for game design, product, film and content teams;
 - history, unified diff and restore over HTTP;
 - one Rust binary, no database.
 
@@ -54,17 +56,19 @@ editor is served separately.
 ## Data layout
 
 ```text
-<root>/
-├── .git/                 # one commit per accepted save
-├── .gitignore
-└── docs/
-    ├── lesson.md
-    └── notes.md
+<root>/                     # the .git directory of the team repository
+├── .git/                   # one commit per accepted save
+├── design/game/combat.md
+├── product/prd.md
+├── film/treatment.md
+└── docs/                   # default folder for new documents
 ```
 
-Document IDs match `^[A-Za-z0-9][A-Za-z0-9._-]{0,96}$` and cannot contain
-`..`. The title is the first `# ` heading, falling back to the ID. Saves use a
-temporary file, `fsync`, then `rename`.
+Document IDs are repository-relative paths (`design/game/combat.md`), encoded
+with `encodeURIComponent` in URLs. Segments cannot be `.`/`..`, start with a
+dot, or contain control characters and Windows-reserved characters. The title
+is the first `# ` heading, falling back to the file stem. Saves use a temporary
+file, `fsync`, then `rename`.
 
 The Git repository is initialized inside `<root>` only when `<root>/.git` does
 not already exist. If `<root>` is inside a larger repository, the server does
@@ -84,15 +88,20 @@ uses it for both HTTP and WebSocket requests.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Liveness; no auth. |
-| `GET` | `/api/docs` | List documents. |
-| `POST` | `/api/docs` | Create `{id?, title?, content?}`. |
-| `GET` | `/api/docs/{id}` | Read `{id, title, content, doc}`. |
-| `PUT` | `/api/docs/{id}` | Save `{base, content}`; `409` on conflict. |
-| `GET` | `/api/docs/{id}/history?limit=50` | Git commits for the file. |
-| `GET` | `/api/docs/{id}/diff?from=&to=` | Unified diff for a commit range. |
-| `GET` | `/api/docs/{id}/revision/{rev}` | File content at a Git revision. |
-| `POST` | `/api/docs/{id}/restore` | Restore `{rev: "<git-hash>"}` as a new commit. |
-| `GET` | `/ws/docs/{id}` | WebSocket session. |
+| `GET` | `/api/templates` | Workflow starter list. |
+| `GET` | `/api/docs` | List every Markdown file in the workspace. |
+| `POST` | `/api/docs` | Create `{title, content?, folder?, template?, id?}`. |
+| `GET` | `/api/doc?id=<path>` | Read `{id, title, content, doc}`. |
+| `PUT` | `/api/doc?id=<path>` | Save `{base, content}`; `409` on conflict. |
+| `GET` | `/api/history?id=<path>&limit=50` | Git commits for the file. |
+| `GET` | `/api/diff?id=<path>&from=&to=` | Unified diff for a commit range. |
+| `GET` | `/api/revision?id=<path>&rev=<hash>` | File content at a Git revision. |
+| `POST` | `/api/restore?id=<path>` | Restore `{rev: "<git-hash>"}` as a new commit. |
+| `GET` | `/ws/doc?id=<path>` | WebSocket session. |
+
+`folder` is a repository-relative folder; new documents default to `docs/`.
+`template` is one of `game-design`, `level-design`, `narrative`,
+`product-prd`, `film-treatment`, `content-article`, `meeting-notes`.
 
 `base` is the room revision returned by the last `snapshot` or `saved`
 message. On a stale base the server attempts a three-way merge with
@@ -101,7 +110,7 @@ message. On a stale base the server attempts a three-way merge with
 
 ## WebSocket protocol
 
-Connect to `/ws/docs/{id}?name=<display-name>&token=<token>`.
+Connect to `/ws/doc?id=<path>&name=<display-name>&token=<token>`.
 
 Server to client messages:
 
@@ -149,6 +158,41 @@ docker run --rm -p 8787:8787 \
 The image runs as UID 10001, stores the workspace in `/data`, and has a
 healthcheck on `/api/health`.
 
+## Company intranet
+
+Point the server at the repository the team already clones:
+
+```sh
+markdownx-server -addr 0.0.0.0:8787 \
+  -root /srv/team/design-repo \
+  -token "$(openssl rand -hex 32)" \
+  -origin https://docs.intra.example.com \
+  -git-name "MarkdownX" -git-email "docs@intra.example.com"
+```
+
+Open `https://docs.intra.example.com/web/?token=…` once; the token is stored in
+the browser and reused for HTTP and WebSocket. Put TLS in front (Caddy, nginx,
+or an internal load balancer); `-origin` must match that public origin, and
+WebSocket upgrade must be allowed. The process needs read/write access to the
+repository and write access to Git's `user.name`/`user.email` (the server sets
+local values when missing).
+
+Recommended team layout:
+
+```text
+design-repo/
+├── design/game/          # GDD, levels, systems
+├── design/art/           # art direction and reviews
+├── product/              # PRDs and roadmap
+├── film/                 # treatments and shot lists
+├── content/              # articles and campaigns
+└── docs/                 # handbook and meeting notes
+```
+
+Use branches for large rewrites (`git switch -c feature/boss-fight`), and let
+the server commit small changes on the current branch. The desktop app opens
+the same repository because it widens any selected folder to the `.git` root.
+
 ## Security
 
 - One shared bearer token. There are no user accounts, per-document ACLs or
@@ -158,7 +202,7 @@ healthcheck on `/api/health`.
 - The token can appear in WebSocket query strings and browser history; use
   the `mx_token` cookie or a reverse proxy that strips query logs if that
   matters.
-- Document IDs are restricted; paths are resolved under `<root>/docs` and Git
+- Document IDs are restricted; paths are resolved under `<root>` and Git
   arguments are passed without a shell.
 - HTML widgets are not rendered by this server; it stores Markdown only.
 - Back up `<root>` including `.git`; it is the entire workspace.

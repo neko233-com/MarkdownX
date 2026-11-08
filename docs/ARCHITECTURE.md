@@ -109,6 +109,7 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `guides.rs` | 文档库是空的时放入内置的「开始指南」（只放一次） |
 | `app.rs` | `Workspace`：两栏窗口、打开 / 新建 / 保存 / 删除、保存状态、提醒调度、文件夹工作区 |
 | `workspace_fs.rs` | 文件夹扫描、目录树、模糊/内容搜索（不依赖文档库） |
+| `git_workspace.rs` | 找 `.git` 根、按文件提交、补本地身份；桌面文件保存后的自动提交 |
 | `annotations_panel.rs` | 右侧批注面板：作者、输入、列表、解决/编辑/删除、批量操作 |
 | `html.rs` / `printing.rs` / `transfer.rs` | 导出 HTML / PDF、打印、导入导出（含 `.mdxb` 的树打包、Markdown 文件夹导出、文件夹打包与导入） |
 | `clipboard.rs` | 系统剪贴板的 HTML 读取，以及脚本模式的模拟剪贴板 |
@@ -149,14 +150,15 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 协作服务器
 
-`server/` 是 Cargo workspace 里的 Rust 二进制（`markdownx-server`），不嵌入桌面进程。它面向“一个团队共用一个文件夹”的场景，文档仍是 `<root>/docs/*.md`，每个被接受的保存都在 `<root>` 的 Git 仓库里形成一次提交。HTTP/WebSocket 消息定义在 `crates/core/src/protocol.rs`，浏览器编辑器和未来的桌面协作客户端共用同一套 wire 类型。
+`server/` 是 Cargo workspace 里的 Rust 二进制（`markdownx-server`），不嵌入桌面进程。它面向“一个团队共用一个仓库”的场景：`-root` 直接指向 `.git` 所在目录，文档 ID 是仓库相对路径（如 `design/game/combat.md`），每个被接受的保存都在该仓库里形成一次提交。HTTP/WebSocket 消息定义在 `crates/core/src/protocol.rs`，浏览器编辑器和未来的桌面协作客户端共用同一套 wire 类型。
 
 | 模块 | 职责 |
 |---|---|
-| `server/src/store.rs` | 文档 ID、读写、标题提取、临时文件 + `fsync` + `rename` 的原子保存 |
+| `server/src/store.rs` | 仓库相对 ID（含中文/嵌套路径）、递归列表、读写、标题提取、原子保存 |
+| `server/src/templates.rs` | 游戏/产品/影视/内容模板，用 `include_str!` 编进二进制 |
 | `server/src/git.rs` | 初始化仓库、提交单个文件、`log` / `show` / `diff` / `merge-file`；不把提交写进父仓库 |
 | `server/src/live.rs` | 内存房间：当前内容 + revision、最近 256 个快照、presence、WebSocket 广播、三方合并与冲突 |
-| `server/src/api.rs` | HTTP JSON API、Bearer token、`/ws/docs/{id}` 升级 |
+| `server/src/api.rs` | HTTP JSON API（query 风格 `id`）、Bearer token、`/ws/doc?id=` 升级、模板列表 |
 | `server/src/main.rs` | 配置、静态编辑器、优雅退出 |
 | `server/web` | 浏览器编辑器（纯文本编辑、版本面板、diff、冲突提示） |
 
@@ -166,7 +168,7 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 文件夹工作区与批注
 
-`workspace_fs.rs` 只读文件系统，输出 `WorkspaceDir` / `FileNode` / `Hit`。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示目录模式；`flush` 在文件模式下把文档重新导出为 Markdown 并写回源文件，在文档库模式下仍走 `store.save`。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
+`workspace_fs.rs` 只读文件系统，输出 `WorkspaceDir` / `FileNode` / `Hit`。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示目录模式；打开目录时先用 `git_workspace::repo_root` 找到 `.git` 根，所以选子目录也会得到整个仓库。`flush` 在文件模式下把文档重新导出为 Markdown 并写回源文件，再对该文件（及复制出的资源）提交一次 `edit: <relative>`；提交失败只记录日志，不回滚已完成的保存。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
 
 批注不写进正文：core 的 `annotations.rs` 管理 JSON sidecar，`annotations_panel.rs` 渲染右侧面板。锚点是从根开始的 block 索引路径，不是 `BlockId`（DocxXML 不保存 BlockId）。多用户离线修改通过 `tools/agent/mdxb.py merge-annotations` 按 `updated` 合并。
 

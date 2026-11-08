@@ -328,10 +328,10 @@ mod tests {
     async fn setup() -> (Arc<Room>, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!("markdownx-room-{}", uuid::Uuid::new_v4()));
         let store = Arc::new(Store::open(&root).unwrap());
-        store.write("note", "# Note\n\nbody\n", 1 << 20).unwrap();
+        store.write("docs/note.md", "# Note\n\nbody\n", 1 << 20).unwrap();
         let repo = Arc::new(Repo::open(&root, "Test", "test@example.com").await.unwrap());
         repo.commit("docs/note.md", "create", "Ada").await.unwrap();
-        (Arc::new(Room::open("note".into(), store, repo, 1 << 20).await.unwrap()), root)
+        (Arc::new(Room::open("docs/note.md".into(), store, repo, 1 << 20).await.unwrap()), root)
     }
 
     #[tokio::test]
@@ -353,7 +353,7 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
-        assert!(room.store.read("note").unwrap().contains("A"));
+        assert!(room.store.read("docs/note.md").unwrap().contains("A"));
         let _ = room.leave("c1").await;
         let _ = std::fs::remove_dir_all(root);
     }
@@ -366,7 +366,7 @@ mod tests {
         room.save(1, "# Note\n\nbody\n\nA\n".into(), "A", "a").await.unwrap();
         let out = room.save(1, "# Note\n\nbody\n\nB\n".into(), "B", "b").await.unwrap();
         assert!(out.changed || out.conflict.is_some());
-        assert!(room.store.read("note").unwrap().contains("A"));
+        assert!(room.store.read("docs/note.md").unwrap().contains("A"));
         let _ = std::fs::remove_dir_all(root);
     }
 

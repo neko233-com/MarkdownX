@@ -52,6 +52,7 @@ mod trash;
 mod tree;
 mod ui;
 mod workspace_fs;
+mod git_workspace;
 mod update;
 
 use fdl_core::{docxml, lang, markdown, model, palette, paste, store, time};

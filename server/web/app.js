@@ -78,13 +78,28 @@ function renderDocs() {
     list.innerHTML = '<p class="muted" style="padding:10px 8px;font-size:12px">没有文档。点“新建”开始。</p>';
     return;
   }
+  const groups = new Map();
   for (const doc of docs) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'doc-item' + (state.doc && state.doc.id === doc.id ? ' active' : '');
-    b.innerHTML = `<strong>${escapeHTML(doc.title || doc.id)}</strong><span>${escapeHTML(doc.id)}</span>`;
-    b.onclick = () => openDoc(doc.id);
-    list.appendChild(b);
+    const cut = doc.id.lastIndexOf('/');
+    const folder = cut < 0 ? '' : doc.id.slice(0, cut);
+    if (!groups.has(folder)) groups.set(folder, []);
+    groups.get(folder).push(doc);
+  }
+  for (const folder of [...groups.keys()].sort()) {
+    const head = document.createElement('div');
+    head.className = 'doc-folder';
+    head.textContent = folder || '根目录';
+    list.appendChild(head);
+    for (const doc of groups.get(folder)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'doc-item' + (state.doc && state.doc.id === doc.id ? ' active' : '');
+      const leaf = doc.id.slice(folder ? folder.length + 1 : 0);
+      b.innerHTML = `<strong>${escapeHTML(doc.title || leaf)}</strong><span>${escapeHTML(leaf)}</span>`;
+      b.title = doc.id;
+      b.onclick = () => openDoc(doc.id);
+      list.appendChild(b);
+    }
   }
 }
 
@@ -128,7 +143,7 @@ function connect(id) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const qs = new URLSearchParams({name: state.name});
   if (state.token) qs.set('token', state.token);
-  const ws = new WebSocket(`${proto}//${location.host}/ws/docs/${encodeURIComponent(id)}?${qs}`);
+  const ws = new WebSocket(`${proto}//${location.host}/ws/doc?id=${encodeURIComponent(id)}&${qs}`);
   state.ws = ws;
   state.closing = false;
   setStatus('连接中…');
@@ -458,8 +473,12 @@ $('token-save').onclick = (e) => {
 $('new-doc').onclick = async () => {
   const title = prompt('新文档标题');
   if (title === null) return;
+  const folder = prompt('文件夹（可留空，如 design/game）', state.doc ? state.doc.id.split('/').slice(0, -1).join('/') : '');
+  if (folder === null) return;
+  const template = prompt('模板：game-design / level-design / narrative / product-prd / film-treatment / content-article / meeting-notes（可留空）', '');
+  if (template === null) return;
   try {
-    const data = await api('/api/docs', {method: 'POST', body: JSON.stringify({title, id: ''})});
+    const data = await api('/api/docs', {method: 'POST', body: JSON.stringify({title, id: '', folder, template})});
     await loadDocs();
     await openDoc(data.id);
   } catch (err) {
@@ -470,7 +489,7 @@ $('new-doc').onclick = async () => {
 async function loadHistory() {
   if (!state.doc || !state.doc.id) return;
   try {
-    const data = await api(`/api/docs/${encodeURIComponent(state.doc.id)}/history?limit=60`);
+    const data = await api(`/api/history?id=${encodeURIComponent(state.doc.id)}&limit=60`);
     state.commits = data.commits || [];
     renderHistory();
   } catch (err) {
@@ -502,7 +521,7 @@ async function selectCommit(c) {
   $('diff-title').textContent = c.hash.slice(0, 8);
   $('restore').disabled = false;
   try {
-    const data = await api(`/api/docs/${encodeURIComponent(state.doc.id)}/diff?to=${encodeURIComponent(c.hash)}`);
+    const data = await api(`/api/diff?id=${encodeURIComponent(state.doc.id)}&to=${encodeURIComponent(c.hash)}`);
     $('diff-body').innerHTML = colorDiff(data.diff || '(empty diff)');
   } catch (err) {
     $('diff-body').textContent = err.message;
@@ -521,7 +540,7 @@ $('restore').onclick = async () => {
   if (!state.selected || !state.doc) return;
   if (!confirm('把当前文档恢复到这次提交？这会生成一个新的 Git 提交。')) return;
   try {
-    await api(`/api/docs/${encodeURIComponent(state.doc.id)}/restore`, {
+    await api(`/api/restore?id=${encodeURIComponent(state.doc.id)}`, {
       method: 'POST', body: JSON.stringify({rev: state.selected})
     });
     toast('已恢复；等待房间同步');

@@ -561,6 +561,9 @@ impl Workspace {
     }
 
     fn open_folder_path_now(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // A team's workspace is the Git repository, not whatever nested
+        // folder happened to be picked in the dialog.
+        let path = crate::git_workspace::repo_root(&path).unwrap_or(path);
         let dir = match crate::workspace_fs::WorkspaceDir::scan(path) {
             Ok(d) => d,
             Err(e) => {
@@ -1132,13 +1135,22 @@ impl Workspace {
                 let text = if title.is_empty() { export.text.clone() } else { format!("# {title}\n\n{}", export.text) };
                 let ok = crate::workspace_fs::write_atomic(&path, text.as_bytes()).is_ok();
                 if ok {
+                    let mut touched = vec![path.clone()];
                     if let Some(parent) = path.parent() {
                         for (from, rel) in &export.files {
                             let to = parent.join(rel);
                             if let Some(dir) = to.parent() {
                                 let _ = std::fs::create_dir_all(dir);
                             }
-                            let _ = std::fs::copy(from, to);
+                            if std::fs::copy(from, to.clone()).is_ok() {
+                                touched.push(to);
+                            }
+                        }
+                    }
+                    if let Some(root) = crate::git_workspace::repo_root(&path) {
+                        let message = format!("edit: {}", crate::git_workspace::relative(&root, &path));
+                        if let Err(e) = crate::git_workspace::commit_paths(&root, &touched, &message) {
+                            log::warn!("git autosave failed: {e:#}");
                         }
                     }
                     ed.update(cx, |e, cx| {

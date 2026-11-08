@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -31,13 +31,14 @@ pub struct AppState {
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
+        .route("/api/templates", get(list_templates))
         .route("/api/docs", get(list).post(create))
-        .route("/api/docs/{id}", get(read).put(write))
-        .route("/api/docs/{id}/history", get(history))
-        .route("/api/docs/{id}/diff", get(diff))
-        .route("/api/docs/{id}/revision/{rev}", get(revision))
-        .route("/api/docs/{id}/restore", post(restore))
-        .route("/ws/docs/{id}", get(websocket))
+        .route("/api/doc", get(read).put(write))
+        .route("/api/history", get(history))
+        .route("/api/diff", get(diff))
+        .route("/api/revision", get(revision))
+        .route("/api/restore", post(restore))
+        .route("/ws/doc", get(websocket))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/api/health", get(health))
@@ -117,6 +118,10 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+async fn list_templates() -> Response {
+    Json(json!({"templates": crate::templates::list()})).into_response()
+}
+
 async fn list(State(state): State<AppState>) -> Response {
     match state.store.list() {
         Ok(docs) => Json(json!({"docs": docs})).into_response(),
@@ -133,30 +138,46 @@ struct Create {
     title: String,
     #[serde(default)]
     content: String,
+    #[serde(default)]
+    folder: String,
+    #[serde(default)]
+    template: String,
 }
 
 async fn create(State(state): State<AppState>, Json(req): Json<Create>) -> Response {
     let mut content = req.content;
     if content.is_empty() {
         let title = if req.title.trim().is_empty() { "Untitled" } else { req.title.trim() };
-        content = format!("# {title}\n");
+        content = if req.template.trim().is_empty() {
+            format!("# {title}\n")
+        } else {
+            match crate::templates::render(req.template.trim(), title) {
+                Some(t) => t,
+                None => return error(StatusCode::BAD_REQUEST, "unknown template"),
+            }
+        };
     }
-    let mut id = req.id.trim().to_string();
-    if id.is_empty() {
-        id = store::slug(&req.title);
-    }
-    if !store::valid_id(&id) {
-        return error(StatusCode::BAD_REQUEST, "invalid document id");
-    }
-    match state.store.read(&id) {
-        Ok(_) => return error(StatusCode::CONFLICT, "document already exists"),
-        Err(StoreError::NotFound) => {}
-        Err(StoreError::BadId) => return error(StatusCode::BAD_REQUEST, "invalid document id"),
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
-    if let Err(e) = state.store.write(&id, &content, state.cfg.max_bytes) {
-        return store_error(e);
-    }
+    let id = req.id.trim().to_string();
+    let id = if id.is_empty() {
+        match state.store.create(&req.title, &req.folder, &content, state.cfg.max_bytes) {
+            Ok(id) => id,
+            Err(e) => return store_error(e),
+        }
+    } else {
+        if !store::valid_id(&id) {
+            return error(StatusCode::BAD_REQUEST, "invalid document id");
+        }
+        match state.store.read(&id) {
+            Ok(_) => return error(StatusCode::CONFLICT, "document already exists"),
+            Err(StoreError::NotFound) => {}
+            Err(StoreError::BadId) => return error(StatusCode::BAD_REQUEST, "invalid document id"),
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+        if let Err(e) = state.store.write(&id, &content, state.cfg.max_bytes) {
+            return store_error(e);
+        }
+        id
+    };
     let rel = match state.store.rel(&id) {
         Ok(r) => r,
         Err(e) => return store_error(e),
@@ -169,7 +190,16 @@ async fn create(State(state): State<AppState>, Json(req): Json<Create>) -> Respo
     (StatusCode::CREATED, Json(json!({"id": id, "commit": commit}))).into_response()
 }
 
-async fn read(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+fn doc_id(q: &HashMap<String, String>) -> Result<String, Box<Response>> {
+    let id = q.get("id").map(String::as_str).unwrap_or("").trim();
+    if !store::valid_id(id) {
+        return Err(Box::new(error(StatusCode::BAD_REQUEST, "invalid document id")));
+    }
+    Ok(id.to_string())
+}
+
+async fn read(State(state): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let id = match doc_id(&q) { Ok(id) => id, Err(e) => return *e };
     let content = match state.store.read(&id) {
         Ok(c) => c,
         Err(e) => return store_error(e),
@@ -185,7 +215,8 @@ struct Write {
     content: String,
 }
 
-async fn write(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<Write>) -> Response {
+async fn write(State(state): State<AppState>, Query(q): Query<HashMap<String, String>>, headers: HeaderMap, Json(req): Json<Write>) -> Response {
+    let id = match doc_id(&q) { Ok(id) => id, Err(e) => return *e };
     if let Err(e) = state.store.stat(&id) {
         return store_error(e);
     }
@@ -201,7 +232,8 @@ async fn write(State(state): State<AppState>, Path(id): Path<String>, headers: H
     }
 }
 
-async fn history(State(state): State<AppState>, Path(id): Path<String>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn history(State(state): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let id = match doc_id(&q) { Ok(id) => id, Err(e) => return *e };
     let rel = match state.store.rel(&id) {
         Ok(r) => r,
         Err(e) => return store_error(e),
@@ -213,7 +245,8 @@ async fn history(State(state): State<AppState>, Path(id): Path<String>, Query(q)
     }
 }
 
-async fn diff(State(state): State<AppState>, Path(id): Path<String>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn diff(State(state): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let id = match doc_id(&q) { Ok(id) => id, Err(e) => return *e };
     let rel = match state.store.rel(&id) {
         Ok(r) => r,
         Err(e) => return store_error(e),
@@ -226,7 +259,9 @@ async fn diff(State(state): State<AppState>, Path(id): Path<String>, Query(q): Q
     }
 }
 
-async fn revision(State(state): State<AppState>, Path((id, rev)): Path<(String, String)>) -> Response {
+async fn revision(State(state): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let id = match doc_id(&q) { Ok(id) => id, Err(e) => return *e };
+    let rev = q.get("rev").cloned().unwrap_or_default();
     let rel = match state.store.rel(&id) {
         Ok(r) => r,
         Err(e) => return store_error(e),
@@ -243,7 +278,8 @@ struct Restore {
     rev: String,
 }
 
-async fn restore(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<Restore>) -> Response {
+async fn restore(State(state): State<AppState>, Query(q): Query<HashMap<String, String>>, headers: HeaderMap, Json(req): Json<Restore>) -> Response {
+    let id = match doc_id(&q) { Ok(id) => id, Err(e) => return *e };
     if req.rev.trim().is_empty() {
         return error(StatusCode::BAD_REQUEST, "revision is required");
     }
@@ -265,7 +301,8 @@ async fn restore(State(state): State<AppState>, Path(id): Path<String>, headers:
     }
 }
 
-async fn websocket(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap, ws: WebSocketUpgrade, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn websocket(State(state): State<AppState>, headers: HeaderMap, ws: WebSocketUpgrade, Query(q): Query<HashMap<String, String>>) -> Response {
+    let id = match doc_id(&q) { Ok(id) => id, Err(e) => return *e };
     if let Err(e) = state.store.stat(&id) {
         return store_error(e);
     }
@@ -461,22 +498,22 @@ mod tests {
         let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         let id = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"].as_str().unwrap().to_string();
 
-        let res = app.clone().oneshot(Request::builder().uri(format!("/api/docs/{id}")).body(Body::empty()).unwrap()).await.unwrap();
+        let res = app.clone().oneshot(Request::builder().uri(format!("/api/doc?id={id}")).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         assert!(String::from_utf8_lossy(&body).contains("# Note"));
 
-        let res = app.clone().oneshot(json_request("PUT", &format!("/api/docs/{id}"), json!({"base": 1, "content": "# Note\n\nbody\n"}))).await.unwrap();
+        let res = app.clone().oneshot(json_request("PUT", &format!("/api/doc?id={id}"), json!({"base": 1, "content": "# Note\n\nbody\n"}))).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["rev"], 2);
 
-        let res = app.clone().oneshot(Request::builder().uri(format!("/api/docs/{id}/history")).body(Body::empty()).unwrap()).await.unwrap();
+        let res = app.clone().oneshot(Request::builder().uri(format!("/api/history?id={id}")).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         assert!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["commits"].as_array().unwrap().len() >= 2);
 
-        let res = app.clone().oneshot(Request::builder().uri(format!("/api/docs/{id}/diff?to=HEAD")).body(Body::empty()).unwrap()).await.unwrap();
+        let res = app.clone().oneshot(Request::builder().uri(format!("/api/diff?id={id}&to=HEAD")).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
         let _ = std::fs::remove_dir_all(root);

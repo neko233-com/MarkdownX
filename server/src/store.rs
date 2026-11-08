@@ -38,27 +38,29 @@ pub struct Doc {
     pub modified: u64,
 }
 
+/// The Git repository is the workspace. Document ids are repository-relative
+/// paths (`design/gdd.md`), which keeps the tree, Git history and backlinks
+/// pointing at the same thing.
 #[derive(Clone, Debug)]
 pub struct Store {
-    docs: PathBuf,
+    root: PathBuf,
 }
 
 impl Store {
     pub fn open(root: impl AsRef<Path>) -> std::io::Result<Self> {
         let root = root.as_ref().to_path_buf();
-        let docs = root.join("docs");
-        fs::create_dir_all(&docs)?;
-        Ok(Self { docs })
+        fs::create_dir_all(root.join("docs"))?;
+        Ok(Self { root })
     }
 
     pub fn path(&self, id: &str) -> Result<PathBuf, StoreError> {
         if !valid_id(id) { return Err(StoreError::BadId); }
-        Ok(self.docs.join(format!("{id}.md")))
+        Ok(self.root.join(id))
     }
 
     pub fn rel(&self, id: &str) -> Result<String, StoreError> {
         self.path(id)?;
-        Ok(format!("docs/{id}.md"))
+        Ok(id.to_string())
     }
 
     pub fn read(&self, id: &str) -> Result<String, StoreError> {
@@ -74,52 +76,123 @@ impl Store {
         atomic_write(&self.path(id)?, content.as_bytes()).map_err(StoreError::Io)
     }
 
+    /// Create a new note under `folder`, returning its repository-relative id.
+    /// `folder` is optional and may itself be nested; the default is `docs`.
+    pub fn create(&self, title: &str, folder: &str, content: &str, max: usize) -> Result<String, StoreError> {
+        if content.len() > max { return Err(StoreError::TooBig); }
+        let folder = folder.trim().trim_matches('/').replace('\\', "/");
+        if !folder.is_empty() && !valid_folder(&folder) { return Err(StoreError::BadId); }
+        let dir = if folder.is_empty() { "docs".to_string() } else { folder };
+        let base = slug(title);
+        // A title made only of CJK/punctuation leaves a number like "2" after
+        // slugging. Keep the path meaningful instead of shipping "2.md".
+        let base = if base.chars().all(|c| c.is_ascii_digit() || c == '-') {
+            format!("doc-{}", &Uuid::new_v4().simple().to_string()[..8])
+        } else {
+            base
+        };
+        let mut id = format!("{dir}/{base}.md");
+        let mut n = 2;
+        while self.path(&id)?.exists() {
+            id = format!("{dir}/{base}-{n}.md");
+            n += 1;
+            if n > 999 { return Err(StoreError::BadId); }
+        }
+        self.write(&id, content, max)?;
+        Ok(id)
+    }
+
     pub fn stat(&self, id: &str) -> Result<Doc, StoreError> {
         let path = self.path(id)?;
         let content = self.read(id)?;
         let meta = fs::metadata(&path)?;
         Ok(Doc {
             id: id.to_string(),
-            title: title(&content, id),
+            title: title(&content, fallback_title(id).as_str()),
             path: path.display().to_string(),
             size: meta.len(),
             modified: meta.modified().ok().and_then(since_epoch).unwrap_or(0),
         })
     }
 
+    /// List every Markdown file in the repository. Build output, dependencies
+    /// and hidden folders are skipped; nested paths stay nested.
     pub fn list(&self) -> std::io::Result<Vec<Doc>> {
         let mut out = vec![];
-        for e in fs::read_dir(&self.docs)? {
-            let e = e?;
-            if !e.file_type()?.is_file() { continue; }
-            let name = e.file_name().to_string_lossy().to_string();
-            let Some(id) = name.strip_suffix(".md") else { continue };
-            if !valid_id(id) { continue; }
-            let Ok(content) = fs::read_to_string(e.path()) else { continue };
-            let meta = e.metadata()?;
+        walk(&self.root, &self.root, 0, &mut out)?;
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(out)
+    }
+}
+
+fn walk(dir: &Path, root: &Path, depth: usize, out: &mut Vec<Doc>) -> std::io::Result<()> {
+    if depth > 16 { return Ok(()); }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else { continue };
+        if name.starts_with('.') || matches!(name.as_str(), "target" | "node_modules" | "__pycache__" | "dist" | "build") {
+            continue;
+        }
+        // Workflow starters are served by /api/templates, not as ordinary docs.
+        if depth == 0 && name == "templates" {
+            continue;
+        }
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            walk(&path, root, depth + 1, out)?;
+        } else if ty.is_file() && is_markdown(&path) {
+            let id = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+            if !valid_id(&id) { continue; }
+            let Ok(content) = fs::read_to_string(&path) else { continue };
+            let Ok(meta) = entry.metadata() else { continue };
             out.push(Doc {
-                id: id.to_string(),
-                title: title(&content, id),
-                path: e.path().display().to_string(),
+                id: id.clone(),
+                title: title(&content, fallback_title(&id).as_str()),
+                path: path.display().to_string(),
                 size: meta.len(),
                 modified: meta.modified().ok().and_then(since_epoch).unwrap_or(0),
             });
         }
-        out.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.id.cmp(&b.id)));
-        Ok(out)
     }
+    Ok(())
+}
+
+fn is_markdown(path: &Path) -> bool {
+    matches!(path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(), Some("md" | "markdown"))
+}
+
+fn fallback_title(id: &str) -> String {
+    Path::new(id).file_stem().unwrap_or_default().to_string_lossy().replace(['-', '_'], " ")
 }
 
 fn since_epoch(t: SystemTime) -> Option<u64> {
     t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
+/// A repository-relative Markdown path: `/`-separated segments, no `..`,
+/// no absolute paths, no backslashes, and always a Markdown extension.
 pub fn valid_id(id: &str) -> bool {
-    let mut chars = id.chars();
-    let Some(first) = chars.next() else { return false };
-    if !first.is_ascii_alphanumeric() { return false; }
-    if id.len() > 97 || id.contains("..") { return false; }
-    id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    if id.is_empty() || id.len() > 240 || id.starts_with('/') || id.contains("..") || id.contains('\\') {
+        return false;
+    }
+    if !id.ends_with(".md") && !id.ends_with(".markdown") { return false; }
+    id.split('/').all(valid_segment)
+}
+
+fn valid_folder(folder: &str) -> bool {
+    !folder.is_empty() && folder.len() <= 160 && folder.split('/').all(valid_segment)
+}
+
+/// Chinese, Japanese and Korean filenames are normal in a team repository;
+/// reject only control characters, path separators and Windows-reserved
+/// characters. Leading dots are hidden files and stay out of the editor.
+fn valid_segment(part: &str) -> bool {
+    !part.is_empty()
+        && part.len() <= 96
+        && !part.starts_with('.')
+        && !part.ends_with(' ')
+        && !part.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
 }
 
 pub fn title(content: &str, fallback: &str) -> String {
@@ -177,10 +250,13 @@ mod tests {
 
     #[test]
     fn ids_are_conservative() {
-        assert!(valid_id("lesson-01"));
-        assert!(!valid_id("../x"));
-        assert!(!valid_id("a b"));
+        assert!(valid_id("docs/lesson-01.md"));
+        assert!(valid_id("design/levels/level-1.markdown"));
+        assert!(valid_id("设计/关卡 1.md"));
+        assert!(!valid_id("../x.md"));
+        assert!(!valid_id("docs/a:b.md"));
         assert!(!valid_id(""));
+        assert!(!valid_id("docs/a.txt"));
     }
 
     #[test]
@@ -193,8 +269,23 @@ mod tests {
     fn slugs_are_ascii_ids() {
         assert_eq!(slug("Hello World"), "hello-world");
         let zh = slug("中文标题");
-        assert!(valid_id(&zh), "{zh}");
-        assert!(zh.starts_with("doc-"));
+        assert!(zh.starts_with("doc-"), "{zh}");
+    }
+
+    #[test]
+    fn creates_nested_docs_and_lists_them() {
+        let root = temp();
+        let store = Store::open(&root).unwrap();
+        let id = store.create("Game Design", "design", "# Game Design\n", 1 << 20).unwrap();
+        assert_eq!(id, "design/game-design.md");
+        let zh = store.create("关卡 2", "design", "# 关卡 2\n", 1 << 20).unwrap();
+        assert!(zh.starts_with("design/doc-"), "{zh}");
+        assert_eq!(store.read(&id).unwrap(), "# Game Design\n");
+        let docs = store.list().unwrap();
+        assert_eq!(docs.len(), 2);
+        assert!(docs.iter().any(|d| d.id == id));
+        assert!(docs.iter().any(|d| d.id == zh));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
