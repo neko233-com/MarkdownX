@@ -69,6 +69,17 @@ $openScript = Join-Path $dest 'server\open-web.ps1'
 @'
 $data = Join-Path $env:LOCALAPPDATA 'MarkdownX\server'
 $token = (Get-Content -LiteralPath (Join-Path $data 'token.txt') -Raw).Trim()
+$health = 'http://127.0.0.1:8787/api/health'
+$ready = $false
+for ($i = 0; $i -lt 8; $i++) {
+    try { Invoke-RestMethod -Uri $health -TimeoutSec 1 | Out-Null; $ready = $true; break } catch { Start-Sleep -Milliseconds 400 }
+}
+if (-not $ready) {
+    Start-Process powershell.exe -ArgumentList ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'start-server.ps1') + '"') -WindowStyle Hidden
+    for ($i = 0; $i -lt 20; $i++) {
+        try { Invoke-RestMethod -Uri $health -TimeoutSec 1 | Out-Null; $ready = $true; break } catch { Start-Sleep -Milliseconds 400 }
+    }
+}
 $url = 'http://127.0.0.1:8787/web/?token=' + [Uri]::EscapeDataString($token)
 Start-Process $url
 '@ | Set-Content -LiteralPath $openScript -Encoding UTF8
