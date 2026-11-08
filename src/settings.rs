@@ -31,6 +31,9 @@ pub struct Preferences {
     /// The old two-way switch, still written so older builds keep the base style.
     pub feishu: bool,
     pub english: bool,
+    /// Interface language: "auto" follows the OS, "zh" and "en" pin it.
+    /// Empty in files written before this field existed; those keep `english`.
+    pub language: String,
     /// Fetch `http(s)` images referenced by documents.
     pub remote_images: bool,
     /// The system-wide quick note hotkey is registered.
@@ -44,7 +47,7 @@ pub struct Preferences {
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new() } }
+    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new() } }
 }
 
 impl Preferences {
@@ -62,10 +65,63 @@ pub fn load() {
 
 fn apply(p: Preferences) {
     FEISHU.store(p.feishu, Ordering::Relaxed);
-    ENGLISH.store(p.english, Ordering::Relaxed);
+    ENGLISH.store(english_for(&p.language, p.english), Ordering::Relaxed);
     // Before the themes are read (startup) the base comes from `feishu`.
     themes::select(&p.theme_id());
     *PREFS.write().unwrap() = Some(p);
+}
+
+/// Which UI language a preference asks for. `auto` reads the OS once per
+/// launch; an empty language is a file from before the selector existed and
+/// keeps its old `english` bit.
+fn english_for(language: &str, legacy_english: bool) -> bool {
+    match language {
+        "" => legacy_english,
+        "zh" => false,
+        "en" => true,
+        "auto" => !system_language().starts_with("zh"),
+        _ => true,
+    }
+}
+
+/// Selector position: automatic, Chinese, English.
+fn language_index(p: &Preferences) -> usize {
+    match p.language.as_str() {
+        "zh" => 1,
+        "en" => 2,
+        "auto" => 0,
+        _ => if p.english { 2 } else { 1 },
+    }
+}
+
+/// The user's OS language tag, lowercased (`zh-cn`, `en-us`, …). Windows
+/// reads the user locale from the registry; macOS and Linux read the
+/// environment, which is what their launchers export.
+fn system_language() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(key) = windows_registry::CURRENT_USER.open(r"Control Panel\International")
+            && let Ok(name) = key.get_string("LocaleName")
+        {
+            return name.to_ascii_lowercase();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("defaults").args(["read", "-g", "AppleLocale"]).output()
+            && out.status.success()
+        {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_ascii_lowercase();
+            if !s.is_empty() { return s }
+        }
+    }
+    for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(v) = std::env::var(key) {
+            let v = v.to_ascii_lowercase();
+            if !v.is_empty() { return v }
+        }
+    }
+    "en".into()
 }
 
 /// Tell the OS which look the app wants (macOS: the window material, menus
@@ -465,7 +521,10 @@ impl Workspace {
             if p.quick_hotkey { crate::quick_note::register(cx); } else { crate::quick_note::suspend_hotkey(); }
         }
         if p.appearance != old.appearance { apply_appearance(&p.appearance); }
-        if p.theme_id() != old.theme_id() || p.english != old.english || sync_dark(cx) {
+        if p.theme_id() != old.theme_id()
+            || english_for(&p.language, p.english) != english_for(&old.language, old.english)
+            || sync_dark(cx)
+        {
             refresh_all(self, cx);
         }
         cx.notify();
@@ -601,10 +660,14 @@ impl Workspace {
         div().w_full().flex().flex_col().gap(px(28.))
             .child(group(None, vec![
                 row(tr("界面语言", "Interface language"), None,
-                    segmented("lang", &["简体中文", "English"], p.english as usize, |w, i, cx| w.set_pref(|p| p.english = i == 1, cx), cx)).into_any_element(),
+                    segmented("lang", &[tr("自动", "Auto"), tr("简体中文", "中文"), "English"], language_index(&p), |w, i, cx| {
+                        let language = ["auto", "zh", "en"][i];
+                        let legacy = match i { 0 => !system_language().starts_with("zh"), 1 => false, _ => true };
+                        w.set_pref(move |p| { p.language = language.into(); p.english = legacy; }, cx)
+                    }, cx)).into_any_element(),
                 row(tr("自动下载网络图片", "Download web images"), desc(tr("关闭后不联网，网络图片显示为占位，点击单独加载。", "When off the app stays offline; web images show a placeholder you can click to load.")),
                     switch("pref-remote", p.remote_images).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.remote_images = !p.remote_images, cx)))).into_any_element(),
-                row(tr("自动检查更新", "Check for updates automatically"), desc(tr("只读取一份版本信息，不发送任何数据；新版本由你决定何时下载安装。", "Reads a version file and sends nothing about you; you decide when to download and install.")),
+                row(tr("自动检查更新", "Check for updates automatically"), desc(tr("启动后和每 12 小时检查一次 GitHub 发布页；发现新版本会提示下载地址，不自动安装。", "Checks the GitHub releases page after launch and every 12 hours; a new version is announced with its download page, never installed silently.")),
                     switch("pref-update", p.auto_update).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.auto_update = !p.auto_update, cx)))).into_any_element(),
             ]))
             .into_any_element()
@@ -687,7 +750,7 @@ impl Workspace {
             .child(img(about_icon()).size(px(88.)))
             .child(div().text_size(px(20.)).line_height(px(26.)).font_weight(FontWeight::SEMIBOLD).child("MarkdownX"))
             .child(div().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text_caption()).child(format!("{} {}", tr("版本", "Version"), env!("CARGO_PKG_VERSION"))))
-            .child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text_caption()).child(tr("本地优先的笔记应用：无需账号，文档就是你电脑上的文件。", "Local-first notes: no account, your documents are files on your Mac."))))
+            .child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text_caption()).child(tr("本地优先的交互书编辑器：无需账号，书就是你电脑上的文件。", "A local-first editor for interactive books: no account, your books are files on your computer."))))
             .child(group(None, vec![update_row(cx).into_any_element()]))
             .into_any_element()
     }
@@ -1294,6 +1357,27 @@ fn diagnostic_for(message: &str, english: bool) -> String {
         }
     }
     localize(message, true).to_string()
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::{english_for, language_index, Preferences};
+
+    #[test]
+    fn explicit_and_automatic_languages_resolve() {
+        assert!(!english_for("zh", true));
+        assert!(english_for("en", false));
+        assert!(english_for("ja-jp", false), "unsupported UI languages fall back to English");
+    }
+
+    #[test]
+    fn old_preferences_keep_their_language_bit() {
+        let mut p = Preferences::default();
+        p.language.clear();
+        p.english = false;
+        assert_eq!(language_index(&p), 1);
+        assert!(!english_for(&p.language, p.english));
+    }
 }
 
 #[cfg(test)]

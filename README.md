@@ -25,6 +25,7 @@ MarkdownX is a writing and reading environment for **dynamic books**: documents 
 - **Local first.** No account, no cloud, no telemetry. The desktop library is a folder you own.
 - **A folder is a workspace.** Open any directory and edit its `.md` files in place; the same tree can hold `.mdxb` books. The sidebar is a directory tree, with fuzzy path search and optional full-text search.
 - **Notes live beside the text.** Temporary comments are stored in `.annotations.json` sidecars, so reviewers can hide, resolve, batch-edit and merge them without touching the prose.
+- **Follows your computer.** The first launch follows the system language (Chinese or English) and the setting can pin either one. The app checks the GitHub releases page after launch and every 12 hours, and announces a newer version with its download page.
 
 ## Two ways to use it
 
@@ -45,6 +46,14 @@ cargo run --release
 ```
 
 On Windows, run the build from a Visual Studio developer prompt, or call `vcvars64.bat` first.
+
+To install the built app for the current Windows user, with Start Menu/desktop shortcuts, `.mdxb` registration, and the collaboration server running at sign-in:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+```
+
+No administrator rights are needed. The app goes to `%LOCALAPPDATA%\Programs\MarkdownX`, the server token and Git workspace go to `%LOCALAPPDATA%\MarkdownX\server`, and an uninstaller is written beside the app and registered in **Apps & features**. The installer preserves an existing server token when reinstalling.
 
 The desktop app creates its library at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`). Use **文件 → 打开文件夹…** / **File → Open Folder…** for a Typora-style directory workspace, and **文件 → 打包成电子书…** / **File → Package as E-book…** (`⌘⇧E`) to turn the current folder, or the open Markdown file, into one `.mdxb`. **下载为 → MarkdownX 书 (.mdxb)** exports a library page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
 
@@ -200,10 +209,20 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 - **原生中英双语。** 界面、书名和章节正文都可以同时带中文和英文。
 - **为屏幕而生的阅读器。** 手机单列，桌面目录 + 正文；无构建步骤，Chrome 直接打开。
 - **本地优先。** 不登录、不上传、不统计；桌面文档库就是你自己的文件夹。
+- **文件夹就是工作区。** 打开任意目录，目录树直接编辑 `.md`；同一个树里也能放 `.mdxb`。支持模糊路径搜索、内容搜索、`[[双链]]` 和行内批注。
+- **跟着你的电脑走。** 首次启动跟随系统语言（中文/English），也可以在设置里固定一种；应用启动后和每 12 小时检查 GitHub 发布页，发现新版本会提示下载地址。
 
 ### 快速开始
 
 需要 Rust 1.99.1；Windows 还需要 Visual Studio 2022 的 C++ 生成工具和 Windows SDK。Python 3 只用于示例和本地静态服务器。
+
+在当前 Windows 用户下安装构建好的版本（开始菜单/桌面快捷方式、`.mdxb` 文件关联、登录时启动协作服务器）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+```
+
+不需要管理员权限。应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和 Git 工作区在 `%LOCALAPPDATA%\MarkdownX\server`；卸载脚本随应用一起安装并登记到「应用和功能」。重新安装会保留已有服务器令牌。
 
 ```sh
 cargo run --release

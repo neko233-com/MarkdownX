@@ -25,6 +25,7 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 - **本地优先。** 不登录、不上传、不统计；桌面文档库就是你自己的文件夹。
 - **文件夹就是工作区。** 打开任意目录，直接编辑里面的 `.md`；同一个目录树也能放 `.mdxb`。侧栏是目录树，支持模糊路径搜索和可开关的内容搜索。
 - **批注在正文旁边。** 临时批注保存为 `.annotations.json` sidecar，可以隐藏、解决、批量操作和合并，不必改动正文。
+- **跟着你的电脑走。** 首次启动跟随系统语言（中文/English），也可以在设置里固定一种；应用启动后和每 12 小时检查 GitHub 发布页，发现新版本会提示下载地址。
 
 ## 两种用法
 
@@ -46,6 +47,14 @@ cargo run --release
 
 Windows 请在 Visual Studio 开发者命令行里构建，或先调用 `vcvars64.bat`。
 
+在当前 Windows 用户下安装构建好的版本（开始菜单/桌面快捷方式、`.mdxb` 文件关联、登录时启动协作服务器）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+```
+
+不需要管理员权限。应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和 Git 工作区在 `%LOCALAPPDATA%\MarkdownX\server`；卸载脚本随应用一起安装并登记到「应用和功能」。重新安装会保留已有服务器令牌。
+
 桌面端默认把文档库放在 `~/Documents/MarkdownX`，可用 `MARKDOWNX_HOME` 改。用 **文件 → 打开文件夹…** 进入 Typora 式目录工作区；用 **文件 → 打包成电子书…**（`⌘⇧E`）把当前目录或当前 Markdown 文件打成一本 `.mdxb`。导出文档库页面及其子页仍用「下载为 → MarkdownX 书 (.mdxb)」。
 
 浏览器阅读：直接用托管版 **https://neko233-com.github.io/MarkdownX/web/**，或在本地运行：
@@ -56,6 +65,18 @@ python -m http.server 8765 --bind 127.0.0.1
 ```
 
 首页自带五个示例，其中包括两本中国初中教材：**力与运动**（物理）和 **物质与变化**（化学）。也可以把任意 `.mdxb` 拖进页面。
+
+## 协作服务器
+
+`server/` 是给团队共用一个工作区的可选 Rust 服务器：文档仍是普通 `.md` 文件，每次接受的保存都会成为一次 Git 提交，浏览器编辑器里能看见谁在线。
+
+```sh
+MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
+  -root ./data -web server/web
+# 打开 http://127.0.0.1:8787/
+```
+
+它支持在线光标/在线成员、WebSocket 保存、三方合并与冲突提示（载入最新、采用合并稿、覆盖远端），版本面板可以看 Git 历史、diff 并把任意版本恢复成一次新提交。附多阶段 `Dockerfile`。服务器是单租户、一个共享令牌，请放在 TLS 反向代理之后；参数、HTTP/WebSocket 协议和部署说明见 [server/README.md](server/README.md)。
 
 ## 给 agent
 
@@ -148,7 +169,7 @@ Web 阅读器没有构建步骤。改完 `web/js/` 后对每个文件跑 `node -
 
 ## 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、Typora 式文件夹工作区与目录树、模糊/内容搜索、直接编辑 `.md`、Markdown/DocxXML 互转、`.mdxb` 导入导出与打包、响应式 Web 阅读器、Canvas/HTML 交互块，以及支持批量解决/删除的批注 sidecar。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。当前构建机无法创建 DirectX 设备，桌面 UI 未做真机截图；单元测试与 CI 覆盖代码路径。Windows 安装器会注册 `.mdxb`；macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
+这是早期公开快照。现在可用：桌面编辑与文档库、Typora 式文件夹工作区与目录树、模糊/内容搜索、直接编辑 `.md`、Markdown/DocxXML 互转、`.mdxb` 导入导出与打包、Markdown 文件夹导出、响应式 Web 阅读器、Canvas/HTML 交互块、`[[双链]]`、批注 sidecar（批量解决/删除/合并），以及带 Git 历史/diff/恢复的 Rust 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 安装脚本会注册 `.mdxb`、创建快捷方式，并在登录时启动后台 server。当前构建机无法创建 DirectX 设备，桌面 UI 未做真机截图；单元测试与 CI 覆盖代码路径。macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
 
 ## 许可
 

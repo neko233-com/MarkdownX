@@ -63,10 +63,16 @@ fn set(state: State, cx: &mut App) {
     cx.refresh_windows();
 }
 
+/// Release check without a signature: it only tells the user a newer
+/// GitHub release exists and where to read it. The signed updater below is
+/// still used when a release key is configured.
+struct ReleaseCheck { last: Option<std::time::Instant>, told: Option<String> }
+impl Global for ReleaseCheck {}
+
 /// Starts the periodic check.
 pub fn init(cx: &mut App) {
-    if !ENABLED { return }
-    cx.set_global(Updater { state: State::Idle, told: None, last: None });
+    cx.set_global(ReleaseCheck { last: None, told: None });
+    if ENABLED { cx.set_global(Updater { state: State::Idle, told: None, last: None }); }
     cx.spawn(async |cx| {
         cx.background_executor().timer(Duration::from_secs(10)).await;
         loop {
@@ -79,11 +85,59 @@ pub fn init(cx: &mut App) {
 /// A window came to the front: check again if the last check is over an
 /// hour old, so a copy left open learns of a release within hours, not 12.
 pub fn check_if_stale(cx: &mut App) {
-    if !ENABLED { return }
-    let Some(u) = cx.try_global::<Updater>() else { return };
+    if !crate::settings::prefs().auto_update { return }
+    let Some(u) = cx.try_global::<ReleaseCheck>() else { return };
     // Before the first check (10s after launch) the timer has it.
-    if !crate::settings::prefs().auto_update || u.last.is_none_or(|t| t.elapsed() < Duration::from_secs(3600)) { return }
+    if u.last.is_none_or(|t| t.elapsed() < Duration::from_secs(3600)) { return }
     check(false, cx);
+}
+
+/// Latest public release, without downloading or installing anything.
+fn fetch_release() -> Result<Option<(String, String)>, String> {
+    let body = match curl(&["--max-time", "20", "-H", "Accept: application/vnd.github+json", "https://api.github.com/repos/neko233-com/MarkdownX/releases/latest"]) {
+        Ok(body) => body,
+        // No published release yet: the installed version is the newest one.
+        Err(e) if e.contains("404") => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    let tag = v.get("tag_name").and_then(|x| x.as_str()).unwrap_or_default().trim_start_matches('v');
+    let url = v.get("html_url").and_then(|x| x.as_str()).unwrap_or("https://github.com/neko233-com/MarkdownX/releases");
+    if tag.is_empty() || !newer(tag, env!("CARGO_PKG_VERSION")) { return Ok(None) }
+    Ok(Some((tag.to_string(), url.to_string())))
+}
+
+fn check_release(manual: bool, cx: &mut App) {
+    if manual {
+        let window = cx.active_window().or_else(|| cx.windows().first().copied()).and_then(|w| w.downcast::<crate::app::Workspace>());
+        if let Some(w) = window { let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Info, crate::settings::tr("正在检查更新…", "Checking for updates…"), cx)); }
+    }
+    let task = cx.background_executor().spawn(async { fetch_release() });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = cx.update(|cx| {
+            if cx.try_global::<ReleaseCheck>().is_none() { return }
+            cx.global_mut::<ReleaseCheck>().last = Some(std::time::Instant::now());
+            let window = cx.active_window().or_else(|| cx.windows().first().copied()).and_then(|w| w.downcast::<crate::app::Workspace>());
+            let Some(w) = window else { return };
+            match result {
+                Ok(Some((version, url))) => {
+                    if manual || cx.global::<ReleaseCheck>().told.as_ref() != Some(&version) {
+                        cx.global_mut::<ReleaseCheck>().told = Some(version.clone());
+                        let msg = crate::localized_format!("MarkdownX {} 已发布：{}", "MarkdownX {} is available: {}", version, url);
+                        let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Info, &msg, cx));
+                    }
+                }
+                Ok(None) if manual => {
+                    let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Info, crate::settings::tr("已是最新版本。", "MarkdownX is up to date."), cx));
+                }
+                Err(e) if manual => {
+                    let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Error, &e, cx));
+                }
+                _ => {}
+            }
+        });
+    }).detach();
 }
 
 /// Asks the server for the newest version. `manual` (检查更新…) also reports
@@ -91,11 +145,7 @@ pub fn check_if_stale(cx: &mut App) {
 /// for a toast, once per version, when there is something new.
 pub fn check(manual: bool, cx: &mut App) {
     if !ENABLED {
-        if manual {
-            let msg = crate::settings::tr("此源码版本不检查更新。", "Updates are disabled in this source build.");
-            let window = cx.active_window().or_else(|| cx.windows().first().copied()).and_then(|w| w.downcast::<crate::app::Workspace>());
-            if let Some(w) = window { let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Info, msg, cx)); }
-        }
+        check_release(manual, cx);
         return;
     }
     match state(cx) {
