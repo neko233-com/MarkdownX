@@ -40,7 +40,8 @@ def die(message: str, code: int = 2) -> "NoReturn":
 
 def read_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig tolerates a leading BOM (e.g. files written by PowerShell).
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         die(f"{path}: {exc}")
 
@@ -333,8 +334,13 @@ def cmd_search(args: argparse.Namespace) -> int:
     root = Path(args.folder)
     query = args.query.lower()
     hits = []
-    for path in sorted(root.rglob("*.md")):
+    # Books unpack to `.md` (Markdown) and `.xml` (DocxXML) chapters; the
+    # desktop also writes a parallel `.en.md` for the English text, which we
+    # still search for content but never score on its filename.
+    for path in sorted(p for p in root.rglob("*") if p.suffix.lower() in (".md", ".xml")):
         rel = str(path.relative_to(root)).replace("\\", "/")
+        if rel.endswith(".en.md"):
+            continue  # counted with its base chapter, not scored as a path
         score = 0
         if query in rel.lower():
             score += 3
