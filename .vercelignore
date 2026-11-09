@@ -13,6 +13,8 @@ vendor
 server
 tools
 packaging
+# NOTE: scripts/ must NOT be ignored — scripts/build-vercel.mjs is the build
+# command and has to be uploaded for the remote build to run.
 shared-mock
 docs
 assets
