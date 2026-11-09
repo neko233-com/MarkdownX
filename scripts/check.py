@@ -3,8 +3,17 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 
-os.chdir(Path(__file__).resolve().parent.parent)
+ROOT = Path(__file__).resolve().parent.parent
+os.chdir(ROOT)
+sys.path.insert(0, str(ROOT / "scripts"))
+from clean_test_artifacts import clean  # noqa: E402
+
+# A previous failed run must not leak screenshots, MSI logs or Python caches
+# into the tree before the tests start. See AGENTS.md "测试前清理".
+if clean() != 0:
+    raise SystemExit("artifact cleanup failed")
 def cargo(*args, env=None):
     subprocess.run(["cargo", *args], check=True, env=env)
 

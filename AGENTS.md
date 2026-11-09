@@ -44,6 +44,15 @@ scripts/check.sh        # cargo test --release + clippy --all-targets 零警告
 - 指南里的截图用 `shared-mock/guides/shots/shots.sh` 重拍（窗口会在屏幕中间浮一分钟左右，不抢焦点）；改了指南里展示的界面后记得重拍。
 - 测试用的文档库一律放在临时目录，用 `MARKDOWNX_HOME` 指定。
 
+## 测试前清理
+
+- 每次跑测试或打包前先运行 `python scripts/clean_test_artifacts.py`；`scripts/check.py` 会自动执行。
+- 只清理仓库内的固定生成物：`.dsh-*`、`test-results`、`playwright-report`、`.pytest_cache`、`__pycache__`、`dist/*.log`、`dist/*.wixpdb`、`dist/*.wixobj` 和旧版本 MSI。
+- 绝不删除 `~/Documents/MarkdownX`、`MARKDOWNX_HOME` 指向的用户库、已安装程序、当前 MSI、`target/` 缓存或 `.git`。
+- 测试截图、日志和临时库只放在 `.dsh-*`（已 ignore）或系统临时目录，测试结束前清掉；不要留下未 ignore 的报告文件。
+- 新增生成物时，同时更新 `.gitignore` 和 `scripts/clean_test_artifacts.py`。
+- 发布前保留当前版本 MSI，删除旧 MSI、安装日志和一次性的测试报告。
+
 ## UI 脚本（tools/harness）
 
 规则见 tools/harness/README.md，要点：

@@ -66,6 +66,8 @@ python -m http.server 8765 --bind 127.0.0.1
 # 打开 http://127.0.0.1:8765/web/
 ```
 
+同一份阅读器也可以用 `vercel.json` 部署到 Vercel：`npx vercel deploy` 只把 `web/` 与 `examples/` 构建进 `.vercel-out`。不登录也可以先做一次可认领的临时部署：`npx vercel deploy --temporary`。
+
 首页自带五个示例，其中包括两本中国初中教材：**力与运动**（物理）和 **物质与变化**（化学）。也可以把任意 `.mdxb` 拖进页面。
 
 ## 协作服务器

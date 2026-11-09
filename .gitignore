@@ -16,3 +16,14 @@ server/data/
 __pycache__/
 *.pyc
 
+# local test/build reports
+/test-results/
+/playwright-report/
+/.pytest_cache/
+/.vercel/
+/.vercel-out/
+*.tmp
+/dist/*.log
+/dist/*.wixpdb
+/dist/*.wixobj
+.vercel

@@ -170,7 +170,7 @@ markdownx-server -addr 0.0.0.0:8877 \
   -git-name "MarkdownX" -git-email "docs@intra.example.com"
 ```
 
-Open `https://docs.intra.example.com/web/?token=…` once; the token is stored in
+Open `https://docs.intra.example.com/?token=…` once; the token is stored in
 the browser and reused for HTTP and WebSocket. Put TLS in front (Caddy, nginx,
 or an internal load balancer); `-origin` must match that public origin, and
 WebSocket upgrade must be allowed. The process needs read/write access to the

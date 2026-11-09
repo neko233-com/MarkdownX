@@ -60,8 +60,15 @@ impl Preferences {
 fn path() -> std::path::PathBuf { crate::store::Store::root_dir().join("preferences.json") }
 
 pub fn load() {
-    let p = std::fs::read(path()).ok().and_then(|b| serde_json::from_slice::<Preferences>(&b).ok()).unwrap_or_default();
+    let p = std::fs::read(path()).ok().and_then(|b| parse_preferences(&b)).unwrap_or_default();
     apply(p);
+}
+
+/// Preferences written by Windows PowerShell 5.1 often start with a UTF-8 BOM.
+/// `serde_json` rejects that prefix, which used to silently reset the language.
+fn parse_preferences(bytes: &[u8]) -> Option<Preferences> {
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    serde_json::from_slice(bytes).ok()
 }
 
 fn apply(p: Preferences) {
@@ -1366,7 +1373,16 @@ fn diagnostic_for(message: &str, english: bool) -> String {
 
 #[cfg(test)]
 mod language_tests {
-    use super::{english_for, language_index, Preferences};
+    use super::{english_for, language_index, parse_preferences, Preferences};
+
+    #[test]
+    fn preferences_accept_utf8_bom() {
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(br#"{"language":"en","english":false}"#);
+        let p = parse_preferences(&bytes).expect("BOM-prefixed preferences");
+        assert_eq!(p.language, "en");
+        assert!(english_for(&p.language, p.english));
+    }
 
     #[test]
     fn explicit_and_automatic_languages_resolve() {

@@ -49,7 +49,7 @@ if (Test-Path -LiteralPath $tokenFile) {
     $token = -join ($bytes | ForEach-Object { $_.ToString('x2') })
     Set-Content -LiteralPath $tokenFile -Value $token -NoNewline
 }
-Set-Content -LiteralPath (Join-Path $data 'server-url.txt') -Value "http://127.0.0.1:$port/web/`nToken: $token"
+Set-Content -LiteralPath (Join-Path $data 'server-url.txt') -Value "http://127.0.0.1:$port/`nToken: $token"
 
 $startScript = Join-Path $dest 'server\start-server.ps1'
 $openScript = Join-Path $dest 'server\open-web.ps1'
@@ -136,7 +136,7 @@ Start-Sleep -Seconds 2
 try {
     $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 5
     Write-Host "MarkdownX installed to $dest"
-    Write-Host "Collaboration server: http://127.0.0.1:$port/web/ (token in $tokenFile)"
+    Write-Host "Collaboration server: http://127.0.0.1:$port/ (token in $tokenFile)"
     Write-Host "Health: $($health | ConvertTo-Json -Compress)"
 } catch {
     Write-Warning "MarkdownX installed, but the server did not answer on port $port. Start it from the Start Menu shortcut, or see $data\server.log."

@@ -67,6 +67,8 @@ python -m http.server 8765 --bind 127.0.0.1
 # open http://127.0.0.1:8765/web/
 ```
 
+The same reader deploys to Vercel with `vercel.json`; `npx vercel deploy` builds `.vercel-out` from `web/` and `examples/` only. A temporary, claimable deployment can be made without an account: `npx vercel deploy --temporary`.
+
 The landing page ships with five examples, including two Chinese middle-school books: **力与运动** (physics) and **物质与变化** (chemistry). You can also drag any `.mdxb` onto the page.
 
 ## For agents

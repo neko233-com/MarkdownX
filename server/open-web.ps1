@@ -24,4 +24,4 @@ if (-not $ready) {
     return
 }
 $token = (Get-Content -LiteralPath $tokenFile -Raw).Trim()
-Start-Process ('http://127.0.0.1:8877/web/?token=' + [Uri]::EscapeDataString($token))
+Start-Process ('http://127.0.0.1:8877/?token=' + [Uri]::EscapeDataString($token))
