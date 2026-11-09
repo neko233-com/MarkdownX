@@ -119,12 +119,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'MSI build failed' }
           $msi = Join-Path $PWD 'dist\MarkdownX-0.1.8-x64.msi'
           if (!(Test-Path $msi)) { throw 'MSI was not created' }
-          msiexec.exe /i "$msi" /qn /l*v msi-install.log
-          if ($LASTEXITCODE -ne 0) { throw 'MSI install failed' }
+          $log = Join-Path $PWD 'msi-install.log'
+          $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /l*v `"$log`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content $log -Tail 40; throw "MSI install failed ($($p.ExitCode))" }
           $app = Join-Path $env:LOCALAPPDATA 'Programs\MarkdownX\markdownx.exe'
-          if (!(Test-Path $app)) { throw 'MSI did not install markdownx.exe' }
-          msiexec.exe /x "$msi" /qn
-          if ($LASTEXITCODE -ne 0) { throw 'MSI uninstall failed' }
+          for ($i = 0; $i -lt 30 -and !(Test-Path $app); $i++) { Start-Sleep -Milliseconds 500 }
+          if (!(Test-Path $app)) { Get-Content $log -Tail 40; throw 'MSI did not install markdownx.exe' }
+          $p = Start-Process msiexec.exe -ArgumentList "/x `"$msi`" /qn /l*v `"$PWD\msi-uninstall.log`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$PWD\msi-uninstall.log" -Tail 40; throw "MSI uninstall failed ($($p.ExitCode))" }
 
   linux-build:
     name: Linux x64 build + checks
