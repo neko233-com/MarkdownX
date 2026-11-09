@@ -15,6 +15,12 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.8", &[
+        ("没有可用显卡时自动使用 WARP 软件渲染，Windows 安装后也能打开界面", "Fall back to WARP software rendering when no GPU is usable, so the Windows app opens after install"),
+        ("新增 Windows MSI 安装包，带应用、协作服务器、模板和 .mdxb 关联", "A Windows MSI installs the app, collaboration server, templates and .mdxb association"),
+        ("首次启动跟随系统语言，可选手动中文/English；自动检查 GitHub 新版本", "Follow the system language on first launch, pin Chinese/English, and check GitHub releases"),
+        ("协作服务器改用 Rust，默认端口 8877，支持 Git 历史、diff、恢复和多人编辑", "The Rust collaboration server uses port 8877 and supports Git history, diff, restore and multiplayer editing"),
+    ]),
     ("0.1.7", &[
         ("退出时检查所有窗口的保存状态，保存冲突支持重新载入和另存副本", "Check every window before quitting; reload or save a copy when saving fails"),
         ("退出时无法保存的内容会保留为恢复副本，下次启动恢复", "Preserve unsaved work as recovery copies when quitting and restore it on next launch"),

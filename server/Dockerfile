@@ -24,11 +24,11 @@ WORKDIR /app
 COPY --from=build /src/target/release/markdownx-server /usr/local/bin/markdownx-server
 COPY --from=build /src/server/web ./web
 USER markdownx
-ENV MARKDOWNX_SERVER_ADDR=:8787 \
+ENV MARKDOWNX_SERVER_ADDR=:8877 \
     MARKDOWNX_SERVER_ROOT=/data \
     MARKDOWNX_SERVER_WEB=/app/web
-EXPOSE 8787
+EXPOSE 8877
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
-    CMD curl -fsS http://127.0.0.1:8787/api/health >/dev/null || exit 1
+    CMD curl -fsS http://127.0.0.1:8877/api/health >/dev/null || exit 1
 ENTRYPOINT ["markdownx-server"]

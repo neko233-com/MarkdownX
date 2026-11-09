@@ -14,9 +14,9 @@ $data = Join-Path $env:LOCALAPPDATA 'MarkdownX\server'
 $app = Join-Path $root 'target\release\markdownx.exe'
 $server = Join-Path $root 'target\release\markdownx-server.exe'
 $icon = Join-Path $root 'assets\branding\app-icon.ico'
-$version = '0.1.7'
+$version = '0.1.8'
 $taskName = 'MarkdownX Collaboration Server'
-$port = 8787
+$port = 8877
 
 foreach ($f in @($app, $server, $icon)) {
     if (-not (Test-Path -LiteralPath $f)) { throw "Missing build output: $f. Run cargo build --release --locked -p markdownx -p markdownx-server first." }
@@ -52,37 +52,10 @@ if (Test-Path -LiteralPath $tokenFile) {
 Set-Content -LiteralPath (Join-Path $data 'server-url.txt') -Value "http://127.0.0.1:$port/web/`nToken: $token"
 
 $startScript = Join-Path $dest 'server\start-server.ps1'
-@'
-$ErrorActionPreference = 'Stop'
-$here = Split-Path -Parent $PSCommandPath
-$data = Join-Path $env:LOCALAPPDATA 'MarkdownX\server'
-$token = (Get-Content -LiteralPath (Join-Path $data 'token.txt') -Raw).Trim()
-$log = Join-Path $data 'server.log'
-if ((Test-Path -LiteralPath $log) -and ((Get-Item -LiteralPath $log).Length -gt 5MB)) {
-    Move-Item -LiteralPath $log -Destination ($log + '.1') -Force
-}
-& (Join-Path $here 'markdownx-server.exe') -addr 127.0.0.1:8787 -root $data -token $token -web (Join-Path $here 'web') 2>&1 |
-    Out-File -LiteralPath $log -Append -Encoding utf8
-'@ | Set-Content -LiteralPath $startScript -Encoding UTF8
-
 $openScript = Join-Path $dest 'server\open-web.ps1'
-@'
-$data = Join-Path $env:LOCALAPPDATA 'MarkdownX\server'
-$token = (Get-Content -LiteralPath (Join-Path $data 'token.txt') -Raw).Trim()
-$health = 'http://127.0.0.1:8787/api/health'
-$ready = $false
-for ($i = 0; $i -lt 8; $i++) {
-    try { Invoke-RestMethod -Uri $health -TimeoutSec 1 | Out-Null; $ready = $true; break } catch { Start-Sleep -Milliseconds 400 }
+foreach ($name in @('start-server.ps1', 'open-web.ps1', 'start-server.vbs', 'open-web.vbs')) {
+    Copy-Item -LiteralPath (Join-Path $root "server\$name") -Destination (Join-Path $dest "server\$name") -Force
 }
-if (-not $ready) {
-    Start-Process powershell.exe -ArgumentList ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'start-server.ps1') + '"') -WindowStyle Hidden
-    for ($i = 0; $i -lt 20; $i++) {
-        try { Invoke-RestMethod -Uri $health -TimeoutSec 1 | Out-Null; $ready = $true; break } catch { Start-Sleep -Milliseconds 400 }
-    }
-}
-$url = 'http://127.0.0.1:8787/web/?token=' + [Uri]::EscapeDataString($token)
-Start-Process $url
-'@ | Set-Content -LiteralPath $openScript -Encoding UTF8
 
 $uninstallScript = Join-Path $dest 'uninstall.ps1'
 @'
@@ -145,7 +118,7 @@ try {
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $startScript + '"')
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'MarkdownX collaboration server on 127.0.0.1:8787' -Force | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'MarkdownX collaboration server on 127.0.0.1:8877' -Force | Out-Null
 } catch {
     # Older Windows without the ScheduledTasks module: a hidden Startup link.
     $startup = [Environment]::GetFolderPath('Startup')

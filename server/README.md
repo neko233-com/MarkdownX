@@ -22,7 +22,7 @@ cargo run -p markdownx-server -- \
   -root ./data -web server/web
 ```
 
-Open <http://127.0.0.1:8787/>. If no token is configured and `-dev` is not set,
+Open <http://127.0.0.1:8877/>. If no token is configured and `-dev` is not set,
 the server generates a token and prints it to the log; paste it into the token
 dialog.
 
@@ -39,7 +39,7 @@ Flags override environment variables; both override defaults.
 
 | Flag | Environment | Default | Meaning |
 | --- | --- | --- | --- |
-| `-addr` | `MARKDOWNX_SERVER_ADDR` | `:8787` | Listen address. |
+| `-addr` | `MARKDOWNX_SERVER_ADDR` | `:8877` | Listen address. |
 | `-root` | `MARKDOWNX_SERVER_ROOT` | `./data` | Workspace root; created if missing. |
 | `-token` | `MARKDOWNX_SERVER_TOKEN` | empty | Shared bearer token. |
 | `-origin` | `MARKDOWNX_SERVER_ORIGIN` | empty | Exact allowed browser origin. |
@@ -149,7 +149,7 @@ the desktop app:
 
 ```sh
 docker build -f server/Dockerfile -t markdownx-server .
-docker run --rm -p 8787:8787 \
+docker run --rm -p 8877:8877 \
   -e MARKDOWNX_SERVER_TOKEN=change-me \
   -v "$PWD/data:/data" \
   markdownx-server
@@ -163,7 +163,7 @@ healthcheck on `/api/health`.
 Point the server at the repository the team already clones:
 
 ```sh
-markdownx-server -addr 0.0.0.0:8787 \
+markdownx-server -addr 0.0.0.0:8877 \
   -root /srv/team/design-repo \
   -token "$(openssl rand -hex 32)" \
   -origin https://docs.intra.example.com \

@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!-- ProductCode changes every release; UpgradeCode stays fixed so the MSI
+       removes the previous per-user install. -->
+  <Product Id="{0A3790A3-DCFF-4DAB-9989-3532AAEBBF88}"
+           Name="MarkdownX"
+           Language="1033"
+           Version="0.1.8"
+           Manufacturer="neko233-com"
+           UpgradeCode="{5F2E3D9A-8A1B-4C7E-9E4D-2B7C6A1F0D31}">
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perUser"
+             Platform="x64"
+             Description="Interactive books and collaborative Markdown workspaces" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of MarkdownX is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/neko233-com/MarkdownX" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+
+    <Icon Id="AppIcon" SourceFile="assets\branding\app-icon.ico" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLDIR" Name="MarkdownX">
+            <Directory Id="ServerDir" Name="server">
+              <Directory Id="WebDir" Name="web" />
+            </Directory>
+            <Directory Id="TemplatesDir" Name="templates" />
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuFolder" Name="MarkdownX" />
+      </Directory>
+      <Directory Id="DesktopFolder" />
+      <Directory Id="StartupFolder" />
+    </Directory>
+
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="AppExe" Guid="{8907AEC6-0BEE-41C0-B48D-C1BA33B30EED}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="AppFiles" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallDir" Directory="INSTALLDIR" On="uninstall" />
+        <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+        <File Id="MarkdownXExe" Source="target\release\markdownx.exe" />
+        <File Id="AppIconFile" Source="assets\branding\app-icon.ico" />
+        <File Id="LicenseFile" Source="LICENSE" />
+        <File Id="ReadmeFile" Source="README.md" />
+        <File Id="ThirdPartyFile" Source="THIRD_PARTY.md" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ServerDir">
+      <Component Id="ServerExe" Guid="{F3534639-F3EB-4C0D-9410-45020B59560B}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ServerFiles" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveServerDir" Directory="ServerDir" On="uninstall" />
+        <File Id="MarkdownXServerExe" Source="target\release\markdownx-server.exe" />
+        <File Id="ServerStartPs1" Source="server\start-server.ps1" />
+        <File Id="ServerOpenPs1" Source="server\open-web.ps1" />
+        <File Id="ServerStartVbs" Source="server\start-server.vbs" />
+        <File Id="ServerOpenVbs" Source="server\open-web.vbs" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="WebDir">
+      <Component Id="WebAssets" Guid="{B3FA8084-DEC5-4897-82FB-CB4F28462E2E}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="WebFiles" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveWebDir" Directory="WebDir" On="uninstall" />
+        <File Id="WebIndex" Source="server\web\index.html" />
+        <File Id="WebCss" Source="server\web\style.css" />
+        <File Id="WebJs" Source="server\web\app.js" />
+        <File Id="WebFavicon" Source="server\web\favicon.svg" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="TemplatesDir">
+      <Component Id="Templates" Guid="{1A4BAA40-32F1-4500-99E2-BBE6A7BE3278}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="TemplateFiles" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveTemplatesDir" Directory="TemplatesDir" On="uninstall" />
+        <File Id="TemplateGame" Source="templates\game-design.md" />
+        <File Id="TemplateLevel" Source="templates\level-design.md" />
+        <File Id="TemplateNarrative" Source="templates\narrative.md" />
+        <File Id="TemplateProduct" Source="templates\product-prd.md" />
+        <File Id="TemplateFilm" Source="templates\film-treatment.md" />
+        <File Id="TemplateContent" Source="templates\content-article.md" />
+        <File Id="TemplateMeeting" Source="templates\meeting-notes.md" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="AppMenuFolder">
+      <Component Id="AppShortcuts" Guid="{B92F01EB-4247-43AD-ACF3-B80CD6B3326D}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="Shortcuts" Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="StartMenuApp"
+                  Name="MarkdownX"
+                  Description="Interactive books and team workspaces"
+                  Target="[INSTALLDIR]markdownx.exe"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="AppIcon" />
+        <Shortcut Id="StartMenuCollab"
+                  Name="MarkdownX Collaboration"
+                  Description="Open the team workspace in the browser"
+                  Target="[ServerDir]open-web.vbs"
+                  WorkingDirectory="ServerDir"
+                  Icon="AppIcon" />
+        <RemoveFolder Id="RemoveAppMenuFolder" Directory="AppMenuFolder" On="uninstall" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="{D771204D-4688-4319-B3F2-4DB113D97991}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="DesktopApp"
+                  Name="MarkdownX"
+                  Description="Interactive books and team workspaces"
+                  Target="[INSTALLDIR]markdownx.exe"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="AppIcon" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="StartupFolder">
+      <Component Id="StartupServer" Guid="{0CACDFD6-B7DD-47F3-A767-0B9F28E2BA6E}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="Startup" Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="StartupServerShortcut"
+                  Name="MarkdownX Server"
+                  Description="Start the MarkdownX collaboration server"
+                  Target="[ServerDir]start-server.vbs"
+                  WorkingDirectory="ServerDir"
+                  Icon="AppIcon" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="FileAssociation" Guid="{BA900DF5-FA85-4B21-9F98-21518D1CC0BE}">
+        <RegistryKey Root="HKCU" Key="Software\Classes\.mdxb">
+          <RegistryValue Type="string" Value="MarkdownX.Book" />
+        </RegistryKey>
+        <RegistryKey Root="HKCU" Key="Software\Classes\MarkdownX.Book">
+          <RegistryValue Type="string" Value="MarkdownX Book" />
+          <RegistryValue Name="FriendlyTypeName" Type="string" Value="MarkdownX Book" />
+          <RegistryKey Key="DefaultIcon">
+            <RegistryValue Type="string" Value="[INSTALLDIR]markdownx.exe,0" />
+          </RegistryKey>
+          <RegistryKey Key="shell\open\command">
+            <RegistryValue Type="string" Value="&quot;[INSTALLDIR]markdownx.exe&quot; &quot;%1&quot;" />
+          </RegistryKey>
+        </RegistryKey>
+        <RemoveRegistryKey Root="HKCU" Key="Software\Classes\.mdxb" Action="removeOnUninstall" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\Classes\MarkdownX.Book" Action="removeOnUninstall" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="MarkdownX" Level="1">
+      <ComponentRef Id="AppExe" />
+      <ComponentRef Id="ServerExe" />
+      <ComponentRef Id="WebAssets" />
+      <ComponentRef Id="Templates" />
+      <ComponentRef Id="AppShortcuts" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="StartupServer" />
+      <ComponentRef Id="FileAssociation" />
+    </Feature>
+
+    <UIRef Id="WixUI_Minimal" />
+  </Product>
+</Wix>
+
+
+

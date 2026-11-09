@@ -56,6 +56,8 @@ powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
 
 No administrator rights are needed. The app goes to `%LOCALAPPDATA%\Programs\MarkdownX`, the server token and Git workspace go to `%LOCALAPPDATA%\MarkdownX\server`, and an uninstaller is written beside the app and registered in **Apps & features**. The installer preserves an existing server token when reinstalling.
 
+To build a per-user MSI instead, run `pwsh -File scripts/build-msi.ps1` after the release build and install `dist\MarkdownX-0.1.8-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
+
 The desktop app creates its library at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`). Use **文件 → 打开文件夹…** / **File → Open Folder…** for a Typora-style directory workspace, and **文件 → 打包成电子书…** / **File → Package as E-book…** (`⌘⇧E`) to turn the current folder, or the open Markdown file, into one `.mdxb`. **下载为 → MarkdownX 书 (.mdxb)** exports a library page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
 
 To read a book in the browser, use the hosted reader at **https://neko233-com.github.io/MarkdownX/web/**, or run it locally:
@@ -87,7 +89,7 @@ See [agent/README.md](agent/README.md) for the chapter dialect, annotation sidec
 ```sh
 MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
   -root ./data -web server/web
-# open http://127.0.0.1:8787/
+# open http://127.0.0.1:8877/
 ```
 
 The editor shows who else is in the room, saves over WebSocket, and resolves stale writes with a three-way merge. Overlapping edits are reported as a conflict with **load latest**, **use merged draft** and **overwrite remote** choices instead of silently dropping text. The history panel reads Git commits, shows a unified diff, and can restore any revision as a new commit. A multi-stage `Dockerfile` is included.
@@ -187,7 +189,7 @@ cargo clippy -p markdownx-server --all-targets -- -D warnings
 
 ## Status
 
-This is an early public snapshot. Working today: the desktop editor and library, a folder workspace with a Typora-style tree and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. The desktop UI was not visually verified on this build machine because GPUI could not create a DirectX device; unit tests and CI cover the code paths. The Windows installer, macOS Info.plist and the Linux MIME package register `.mdxb`; double-click behavior on macOS/Linux still needs a real desktop check, and mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
+This is an early public snapshot. Working today: the desktop editor and library, a folder workspace with a Typora-style tree and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. On Windows it falls back to WARP when a hardware D3D11 device is unavailable, so the installed app opens even on VMs and RDP sessions; the fallback is covered by a captured window smoke test. The Windows MSI registers `.mdxb` and starts the collaboration server at sign-in; macOS Info.plist and the Linux MIME package register `.mdxb`, while double-click behavior on macOS/Linux still needs a real desktop check. Mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
 
 ## License
 
@@ -227,6 +229,8 @@ powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
 
 不需要管理员权限。应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和 Git 工作区在 `%LOCALAPPDATA%\MarkdownX\server`；卸载脚本随应用一起安装并登记到「应用和功能」。重新安装会保留已有服务器令牌。
 
+也可以构建 per-user MSI：release 构建后运行 `pwsh -File scripts/build-msi.ps1`，安装 `dist\MarkdownX-0.1.8-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+
 ```sh
 cargo run --release
 ```
@@ -265,7 +269,7 @@ Markdown 里则是 `mdxb-canvas` / `mdxb-html` 围栏代码块，正文是一层
 ```sh
 MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
   -root ./data -web server/web
-# 打开 http://127.0.0.1:8787/
+# 打开 http://127.0.0.1:8877/
 ```
 
 它支持在线光标/在线成员、WebSocket 保存、三方合并与冲突提示（载入最新、采用合并稿、覆盖远端），版本面板可以看 Git 历史、diff 并把任意版本恢复成一次新提交。附多阶段 `Dockerfile`。服务器是单租户、一个共享令牌，请放在 TLS 反向代理之后；参数、HTTP/WebSocket 协议和部署说明见 [server/README.md](server/README.md)。
@@ -301,7 +305,7 @@ cargo clippy -p markdownx-server --all-targets -- -D warnings
 
 ### 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块，以及带 Git 历史和 diff 的 Rust 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 安装器、macOS Info.plist 和 Linux MIME 包都会注册 `.mdxb`；macOS/Linux 的双击行为仍待真机验证，移动端壳是下一步。
+这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块，以及带 Git 历史和 diff 的 Rust 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 在硬件 D3D11 不可用时会自动回退 WARP，VM/RDP 里也能打开桌面 UI，并已用窗口截图冒烟验证。Windows MSI 会注册 `.mdxb` 并在登录时启动协作服务器；macOS Info.plist 和 Linux MIME 包也会注册 `.mdxb`，但双击行为仍待真机验证，移动端壳是下一步。
 
 ### 许可
 

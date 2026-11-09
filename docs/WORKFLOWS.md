@@ -28,7 +28,7 @@ studio-repo/
 The collaboration server points at the same repository:
 
 ```sh
-markdownx-server -addr 0.0.0.0:8787 -root /srv/studio-repo \
+markdownx-server -addr 0.0.0.0:8877 -root /srv/studio-repo \
   -token "$(openssl rand -hex 32)" -origin https://docs.studio.example
 ```
 

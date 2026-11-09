@@ -55,6 +55,8 @@ powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
 
 不需要管理员权限。应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和 Git 工作区在 `%LOCALAPPDATA%\MarkdownX\server`；卸载脚本随应用一起安装并登记到「应用和功能」。重新安装会保留已有服务器令牌。
 
+也可以构建 per-user MSI：release 构建后运行 `pwsh -File scripts/build-msi.ps1`，安装 `dist\MarkdownX-0.1.8-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+
 桌面端默认把文档库放在 `~/Documents/MarkdownX`，可用 `MARKDOWNX_HOME` 改。用 **文件 → 打开文件夹…** 进入 Typora 式目录工作区；用 **文件 → 打包成电子书…**（`⌘⇧E`）把当前目录或当前 Markdown 文件打成一本 `.mdxb`。导出文档库页面及其子页仍用「下载为 → MarkdownX 书 (.mdxb)」。
 
 浏览器阅读：直接用托管版 **https://neko233-com.github.io/MarkdownX/web/**，或在本地运行：
@@ -73,7 +75,7 @@ python -m http.server 8765 --bind 127.0.0.1
 ```sh
 MARKDOWNX_SERVER_TOKEN=change-me cargo run -p markdownx-server -- \
   -root ./data -web server/web
-# 打开 http://127.0.0.1:8787/
+# 打开 http://127.0.0.1:8877/
 ```
 
 它支持在线光标/在线成员、WebSocket 保存、三方合并与冲突提示（载入最新、采用合并稿、覆盖远端），版本面板可以看 Git 历史、diff 并把任意版本恢复成一次新提交。附多阶段 `Dockerfile`。服务器是单租户、一个共享令牌，请放在 TLS 反向代理之后；参数、HTTP/WebSocket 协议和部署说明见 [server/README.md](server/README.md)。
@@ -169,7 +171,7 @@ Web 阅读器没有构建步骤。改完 `web/js/` 后对每个文件跑 `node -
 
 ## 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、Typora 式文件夹工作区与目录树、模糊/内容搜索、直接编辑 `.md`、Markdown/DocxXML 互转、`.mdxb` 导入导出与打包、Markdown 文件夹导出、响应式 Web 阅读器、Canvas/HTML 交互块、`[[双链]]`、批注 sidecar（批量解决/删除/合并），以及带 Git 历史/diff/恢复的 Rust 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 安装脚本会注册 `.mdxb`、创建快捷方式，并在登录时启动后台 server。当前构建机无法创建 DirectX 设备，桌面 UI 未做真机截图；单元测试与 CI 覆盖代码路径。macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
+这是早期公开快照。现在可用：桌面编辑与文档库、Typora 式文件夹工作区与目录树、模糊/内容搜索、直接编辑 `.md`、Markdown/DocxXML 互转、`.mdxb` 导入导出与打包、Markdown 文件夹导出、响应式 Web 阅读器、Canvas/HTML 交互块、`[[双链]]`、批注 sidecar（批量解决/删除/合并），以及带 Git 历史/diff/恢复的 Rust 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 在硬件 D3D11 不可用时会自动回退 WARP，VM/RDP 里也能打开桌面 UI，并已用窗口截图冒烟验证。Windows MSI 会注册 `.mdxb` 并在登录时启动后台 server；macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
 
 ## 许可
 

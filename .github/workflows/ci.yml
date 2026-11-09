@@ -102,10 +102,29 @@ jobs:
           if (!$vs) { throw 'Visual Studio C++ tools were not found' }
           Import-Module "$vs/Common7/Tools/Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
-          & cargo build --release --locked
+          & cargo build --release --locked -p markdownx -p markdownx-server
           if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
           & python scripts/check.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows checks failed' }
+
+      - name: Build and smoke-test MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wix = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
+          if (!(Test-Path "$wix\candle.exe")) {
+            choco install wixtoolset --version=3.14.1 -y --no-progress
+          }
+          & .\scripts\build-msi.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'MSI build failed' }
+          $msi = Join-Path $PWD 'dist\MarkdownX-0.1.8-x64.msi'
+          if (!(Test-Path $msi)) { throw 'MSI was not created' }
+          msiexec.exe /i "$msi" /qn /l*v msi-install.log
+          if ($LASTEXITCODE -ne 0) { throw 'MSI install failed' }
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\MarkdownX\markdownx.exe'
+          if (!(Test-Path $app)) { throw 'MSI did not install markdownx.exe' }
+          msiexec.exe /x "$msi" /qn
+          if ($LASTEXITCODE -ne 0) { throw 'MSI uninstall failed' }
 
   linux-build:
     name: Linux x64 build + checks

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
-pub const DEFAULT_ADDR: &str = ":8787";
+pub const DEFAULT_ADDR: &str = ":8877";
 pub const DEFAULT_MAX_BYTES: usize = 2 << 20;
 
 #[derive(Clone, Debug)]

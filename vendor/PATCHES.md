@@ -38,6 +38,8 @@ diff -ru $R/taffy-0.9.0/src vendor/taffy/src
 
 | 18 | `platform/linux/wayland/client.rs`、`platform/linux/x11/client.rs` | 外观变化时先复制窗口句柄，释放 client 的 RefCell 借用后再触发窗口回调 | 避免回调重新访问平台、更新菜单时触发重复借用 panic |
 
+| 19 | `platform/windows/directx_devices.rs` | 硬件 D3D11 设备创建失败时回退 WARP：新增 `new_warp`、`get_warp_device`，从 WARP 设备的 `IDXGIDevice::GetAdapter` 取适配器；`get_device` 同时返回 device 与 context，抽出 `device_flags` / `finish_device` | 没有可用 D3D11 适配器的 Windows（VM/RDP/驱动受限）也能启动桌面 UI，不再报 `0x887A0004` |
+
 ## taffy 0.9.0
 
 | 文件 | 改动 | 用途 |

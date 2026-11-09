@@ -4,8 +4,8 @@ use windows::Win32::{
     Foundation::HMODULE,
     Graphics::{
         Direct3D::{
-            D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_1,
-            D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
+            D3D_DRIVER_TYPE_UNKNOWN, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
+            D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
         },
         Direct3D11::{
             D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG,
@@ -14,7 +14,7 @@ use windows::Win32::{
         },
         Dxgi::{
             CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, DXGI_CREATE_FACTORY_FLAGS,
-            IDXGIAdapter1, IDXGIFactory6,
+            IDXGIAdapter1, IDXGIDevice, IDXGIFactory6,
         },
     },
 };
@@ -53,33 +53,42 @@ impl DirectXDevices {
         let debug_layer_available = check_debug_layer_available();
         let dxgi_factory =
             get_dxgi_factory(debug_layer_available).context("Creating DXGI factory")?;
-        let adapter =
-            get_adapter(&dxgi_factory, debug_layer_available).context("Getting DXGI adapter")?;
-        let (device, device_context) = {
-            let mut context: Option<ID3D11DeviceContext> = None;
-            let mut feature_level = D3D_FEATURE_LEVEL::default();
-            let device = get_device(
-                &adapter,
-                Some(&mut context),
-                Some(&mut feature_level),
-                debug_layer_available,
-            )
-            .context("Creating Direct3D device")?;
-            match feature_level {
-                D3D_FEATURE_LEVEL_11_1 => {
-                    log::info!("Created device with Direct3D 11.1 feature level.")
-                }
-                D3D_FEATURE_LEVEL_11_0 => {
-                    log::info!("Created device with Direct3D 11.0 feature level.")
-                }
-                D3D_FEATURE_LEVEL_10_1 => {
-                    log::info!("Created device with Direct3D 10.1 feature level.")
-                }
-                _ => unreachable!(),
-            }
-            (device, context.unwrap())
-        };
 
+        let hardware = (|| -> Result<Self> {
+            let adapter =
+                get_adapter(&dxgi_factory, debug_layer_available).context("Getting DXGI adapter")?;
+            let (device, device_context) =
+                get_device(&adapter, debug_layer_available).context("Creating Direct3D device")?;
+            Ok(Self {
+                adapter,
+                dxgi_factory: dxgi_factory.clone(),
+                device,
+                device_context,
+            })
+        })();
+
+        match hardware {
+            Ok(devices) => Ok(devices),
+            Err(hardware_error) => {
+                log::warn!(
+                    "Hardware Direct3D device unavailable ({hardware_error:#}); falling back to WARP software rendering."
+                );
+                Self::new_warp(dxgi_factory, debug_layer_available)
+                    .context("Creating WARP Direct3D device")
+            }
+        }
+    }
+
+    fn new_warp(dxgi_factory: IDXGIFactory6, debug_layer_available: bool) -> Result<Self> {
+        let (device, device_context) = get_warp_device(debug_layer_available)?;
+        let dxgi_device: IDXGIDevice = device.cast()?;
+        let adapter: IDXGIAdapter1 = unsafe { dxgi_device.GetAdapter()? }.cast()?;
+        if let Ok(desc) = unsafe { adapter.GetDesc1() } {
+            let gpu_name = String::from_utf16_lossy(&desc.Description)
+                .trim_matches(char::from(0))
+                .to_string();
+            log::info!("Using software renderer: {}", gpu_name);
+        }
         Ok(Self {
             adapter,
             dxgi_factory,
@@ -130,8 +139,8 @@ fn get_adapter(dxgi_factory: &IDXGIFactory6, debug_layer_available: bool) -> Res
             log::info!("Using GPU: {}", gpu_name);
         }
         // Check to see whether the adapter supports Direct3D 11, but don't
-        // create the actual device yet.
-        if get_device(&adapter, None, None, debug_layer_available)
+        // keep the probe device; the real one is created below.
+        if get_device(&adapter, debug_layer_available)
             .log_err()
             .is_some()
         {
@@ -143,24 +152,16 @@ fn get_adapter(dxgi_factory: &IDXGIFactory6, debug_layer_available: bool) -> Res
 }
 
 #[inline]
-fn get_device(
-    adapter: &IDXGIAdapter1,
-    context: Option<*mut Option<ID3D11DeviceContext>>,
-    feature_level: Option<*mut D3D_FEATURE_LEVEL>,
-    debug_layer_available: bool,
-) -> Result<ID3D11Device> {
+fn get_device(adapter: &IDXGIAdapter1, debug_layer_available: bool) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device: Option<ID3D11Device> = None;
-    let device_flags = if debug_layer_available {
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG
-    } else {
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT
-    };
+    let mut context: Option<ID3D11DeviceContext> = None;
+    let mut feature_level = D3D_FEATURE_LEVEL::default();
     unsafe {
         D3D11CreateDevice(
             adapter,
             D3D_DRIVER_TYPE_UNKNOWN,
             HMODULE::default(),
-            device_flags,
+            device_flags(debug_layer_available),
             // 4x MSAA is required for Direct3D Feature Level 10.1 or better
             Some(&[
                 D3D_FEATURE_LEVEL_11_1,
@@ -169,11 +170,57 @@ fn get_device(
             ]),
             D3D11_SDK_VERSION,
             Some(&mut device),
-            feature_level,
-            context,
+            Some(&mut feature_level),
+            Some(&mut context),
         )?;
     }
-    let device = device.unwrap();
+    finish_device(device.unwrap(), context.unwrap(), feature_level)
+}
+
+/// WARP is Microsoft's D3D11 software rasterizer. It implements the same
+/// feature levels as a modern GPU, so the UI still renders when a machine has
+/// no usable hardware adapter (VMs, RDP sessions, broken drivers).
+#[inline]
+fn get_warp_device(debug_layer_available: bool) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+    let mut device: Option<ID3D11Device> = None;
+    let mut context: Option<ID3D11DeviceContext> = None;
+    let mut feature_level = D3D_FEATURE_LEVEL::default();
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_WARP,
+            HMODULE::default(),
+            device_flags(debug_layer_available),
+            Some(&[
+                D3D_FEATURE_LEVEL_11_1,
+                D3D_FEATURE_LEVEL_11_0,
+                D3D_FEATURE_LEVEL_10_1,
+            ]),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            Some(&mut feature_level),
+            Some(&mut context),
+        )?;
+    }
+    log::info!("Created WARP device with feature level {:?}.", feature_level);
+    finish_device(device.unwrap(), context.unwrap(), feature_level)
+}
+
+#[inline]
+fn device_flags(debug_layer_available: bool) -> windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_FLAG {
+    if debug_layer_available {
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG
+    } else {
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT
+    }
+}
+
+#[inline]
+fn finish_device(
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    feature_level: D3D_FEATURE_LEVEL,
+) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut data = D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS::default();
     unsafe {
         device
@@ -188,7 +235,13 @@ fn get_device(
         .ComputeShaders_Plus_RawAndStructuredBuffers_Via_Shader_4_x
         .as_bool()
     {
-        Ok(device)
+        match feature_level {
+            D3D_FEATURE_LEVEL_11_1 => log::info!("Created device with Direct3D 11.1 feature level."),
+            D3D_FEATURE_LEVEL_11_0 => log::info!("Created device with Direct3D 11.0 feature level."),
+            D3D_FEATURE_LEVEL_10_1 => log::info!("Created device with Direct3D 10.1 feature level."),
+            _ => {}
+        }
+        Ok((device, context))
     } else {
         Err(anyhow::anyhow!(
             "Required feature StructuredBuffer is not supported by GPU/driver"
