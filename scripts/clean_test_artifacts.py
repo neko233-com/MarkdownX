@@ -9,11 +9,38 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import stat
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def installed_msi_versions() -> set[tuple[int, int, int]] | None:
+    """Windows versions still installed; None when Windows MSI does not apply."""
+    if os.name != "nt":
+        return None
+    import winreg
+    found: set[tuple[int, int, int]] = set()
+    key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for view in (winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY):
+            try:
+                with winreg.OpenKey(hive, key_path, 0, winreg.KEY_READ | view) as parent:
+                    for i in range(winreg.QueryInfoKey(parent)[0]):
+                        try:
+                            with winreg.OpenKey(parent, winreg.EnumKey(parent, i)) as item:
+                                name = winreg.QueryValueEx(item, "DisplayName")[0]
+                                version = winreg.QueryValueEx(item, "DisplayVersion")[0]
+                                match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", str(version))
+                                if str(name).casefold() == "markdownx" and match:
+                                    found.add(tuple(map(int, match.groups())))
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+    return found
 
 
 def targets() -> list[Path]:
@@ -28,8 +55,24 @@ def targets() -> list[Path]:
             found.append(pycache)
     dist = ROOT / "dist"
     if dist.is_dir():
-        for pattern in ("*.log", "*.wixpdb", "*.wixobj", "MarkdownX-0.1.7-*"):
+        for pattern in ("*.log", "*.wixpdb", "*.wixobj"):
             found.extend(sorted(dist.glob(pattern)))
+        manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        match = re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"', manifest, re.MULTILINE)
+        if match:
+            current = tuple(map(int, match.groups()))
+            current_msi = dist / ("MarkdownX-" + ".".join(match.groups()) + "-x64.msi")
+            installed = installed_msi_versions()
+            # Keep the installed version until the new MSI is installed too.
+            if current_msi.exists() and (installed is None or current in installed):
+                for candidate in sorted(dist.glob("MarkdownX-*-x64.msi")):
+                    version = re.fullmatch(r"MarkdownX-(\d+)\.(\d+)\.(\d+)-x64\.msi", candidate.name)
+                    number = tuple(map(int, version.groups())) if version else None
+                    if number and number < current and (installed is None or number not in installed):
+                        found.append(candidate)
+                        checksum = candidate.with_name(candidate.name + ".sha256")
+                        if checksum.exists():
+                            found.append(checksum)
     return list(dict.fromkeys(p for p in found if p.exists() and p != ROOT))
 
 

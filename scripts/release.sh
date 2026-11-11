@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build, sign, notarize and package this checkout; never launches the app.
 # MACOS_TARGET=x86_64-apple-darwin cross-compiles Intel on Apple Silicon.
-# SIGNING_IDENTITY=- creates an ad-hoc signed, unnotarized CI package only.
+# SIGNING_IDENTITY=- creates an ad-hoc signed, unnotarized test package.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${SIGNING_IDENTITY:?Set SIGNING_IDENTITY to your Developer ID Application identity}"
@@ -79,7 +79,7 @@ codesign --verify --deep --strict --verbose=2 "$app"
 suffix=
 if [ "$SIGNING_IDENTITY" = - ]; then
   suffix=-unsigned
-  echo "CI package only: ad-hoc signed, without notarization; do not publish."
+  echo "Ad-hoc signed and not notarized: publish only as an explicitly labeled test release."
 else
   ditto -c -k --keepParent "$app" "$out/notarization.zip"
   xcrun notarytool submit "$out/notarization.zip" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json > "$out/notarization.json"
@@ -97,4 +97,5 @@ fi
 archive="$out/markdownx-$version-macos-$arch$suffix.zip"
 ditto -c -k --keepParent "$app" "$archive"
 (cd "$out" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
+bash scripts/package-macos-dmg.sh "$app" "$out/markdownx-$version-macos-$arch$suffix.dmg"
 printf 'Release artifact: %s\n' "$archive"

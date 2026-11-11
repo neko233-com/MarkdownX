@@ -29,6 +29,7 @@ mod html;
 mod input;
 mod logging;
 mod modes;
+mod markdown_source;
 #[cfg(target_os = "macos")]
 mod native_header;
 #[cfg(not(target_os = "macos"))]
@@ -76,22 +77,20 @@ fn set_app_icon() {
     }
 }
 
-/// A `.mdxb` passed by the OS (Windows file association) opens once, in the
-/// first main window. `take` makes a Dock/activate reopen a no-op.
-fn startup_book() -> Option<std::path::PathBuf> {
-    static BOOK: std::sync::OnceLock<std::sync::Mutex<Option<std::path::PathBuf>>> = std::sync::OnceLock::new();
-    BOOK.get_or_init(|| {
-        let path = std::env::args_os()
-            .skip(1)
-            .map(std::path::PathBuf::from)
-            .find(|p| !p.to_string_lossy().starts_with('-')
-                && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mdxb"))
-                && p.is_file());
-        std::sync::Mutex::new(path)
+/// A folder or supported document argument opens once in the first main window.
+fn startup_target_from(args: impl IntoIterator<Item = std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    args.into_iter().map(std::path::PathBuf::from).find(|p| {
+        !p.to_string_lossy().starts_with('-')
+            && (p.is_dir() || (workspace_fs::DocKind::of(p).is_some() && p.is_file()))
     })
-    .lock()
-    .ok()
-    .and_then(|mut book| book.take())
+}
+
+fn startup_target() -> Option<std::path::PathBuf> {
+    static TARGET: std::sync::OnceLock<std::sync::Mutex<Option<std::path::PathBuf>>> = std::sync::OnceLock::new();
+    TARGET.get_or_init(|| std::sync::Mutex::new(startup_target_from(std::env::args_os().skip(1))))
+        .lock()
+        .ok()
+        .and_then(|mut target| target.take())
 }
 
 /// The main window, centred at the remembered size.
@@ -117,8 +116,11 @@ fn open_main_window(scripted: bool, cx: &mut App) {
         |window, cx| {
             devtools::start(window, cx);
             let workspace = cx.new(|cx| app::Workspace::new(window, cx));
-            if !scripted && let Some(path) = startup_book() {
-                workspace.update(cx, |w, cx| w.open_book_path(path, window, cx));
+            if !scripted && let Some(path) = startup_target() {
+                workspace.update(cx, |w, cx| {
+                    if path.is_dir() { w.open_folder_tree_path(path, window, cx); }
+                    else { w.open_external_path(path, window, cx); }
+                });
             }
             workspace
         },
@@ -178,3 +180,23 @@ fn main() {
     });
 }
 mod annotations_panel;
+
+#[cfg(test)]
+mod startup_tests {
+    use super::startup_target_from;
+
+    #[test]
+    fn accepts_existing_folder_or_book_argument() {
+        let dir = std::env::temp_dir().join(format!("markdownx-startup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let book = dir.join("book.mdxb");
+        std::fs::write(&book, "{}").unwrap();
+        let note = dir.join("note.MD");
+        std::fs::write(&note, "note").unwrap();
+        assert_eq!(startup_target_from([dir.as_os_str().to_os_string()]), Some(dir.clone()));
+        assert_eq!(startup_target_from([book.as_os_str().to_os_string()]), Some(book));
+        assert_eq!(startup_target_from([note.as_os_str().to_os_string()]), Some(note));
+        assert_eq!(startup_target_from([dir.join("missing").into_os_string()]), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

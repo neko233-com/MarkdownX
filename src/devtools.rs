@@ -228,6 +228,30 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 cx.update(|cx| crate::app::check_save_safety(rest.trim(), cx)).unwrap();
                 continue;
             }
+            if cmd == "open-folder" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| ws.open_folder(window, cx)).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "open-file" || cmd == "new-folder-file" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| {
+                        if cmd == "open-file" { ws.open_file(window, cx); } else { ws.new_folder_file(window, cx); }
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "check-folder-state" {
+                cx.update(|cx| crate::app::check_folder_state(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            if cmd == "check-folder-safety" {
+                cx.update(|cx| crate::app::check_folder_safety(rest.trim(), cx)).unwrap();
+                continue;
+            }
             #[cfg(target_os = "macos")]
             let handled = mouse_step(ns_view, cmd, &nums(rest));
             #[cfg(not(target_os = "macos"))]

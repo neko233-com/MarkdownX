@@ -167,13 +167,7 @@ async fn create(State(state): State<AppState>, Json(req): Json<Create>) -> Respo
         if !store::valid_id(&id) {
             return error(StatusCode::BAD_REQUEST, "invalid document id");
         }
-        match state.store.read(&id) {
-            Ok(_) => return error(StatusCode::CONFLICT, "document already exists"),
-            Err(StoreError::NotFound) => {}
-            Err(StoreError::BadId) => return error(StatusCode::BAD_REQUEST, "invalid document id"),
-            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        }
-        if let Err(e) = state.store.write(&id, &content, state.cfg.max_bytes) {
+        if let Err(e) = state.store.create_at(&id, &content, state.cfg.max_bytes) {
             return store_error(e);
         }
         id
@@ -182,12 +176,12 @@ async fn create(State(state): State<AppState>, Json(req): Json<Create>) -> Respo
         Ok(r) => r,
         Err(e) => return store_error(e),
     };
-    let commit = match state.repo.commit(&rel, &format!("create: {id}"), &state.cfg.commit_name).await {
-        Ok(hash) => Some(hash),
-        Err(GitError::NoChanges) => None,
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("git commit: {e}")),
+    let (commit, warning) = match state.repo.commit(&rel, &format!("create: {id}"), &state.cfg.commit_name).await {
+        Ok(hash) => (Some(hash), None),
+        Err(GitError::NoChanges) => (None, None),
+        Err(e) => (None, Some(e.to_string())),
     };
-    (StatusCode::CREATED, Json(json!({"id": id, "commit": commit}))).into_response()
+    (StatusCode::CREATED, Json(json!({"id": id, "commit": commit, "warning": warning}))).into_response()
 }
 
 fn doc_id(q: &HashMap<String, String>) -> Result<String, Box<Response>> {
@@ -296,6 +290,7 @@ async fn restore(State(state): State<AppState>, Query(q): Query<HashMap<String, 
         Err(e) => return save_error(e),
     };
     match room.restore(content, &author(&state.cfg, &headers, None), "restore").await {
+        Ok(out) if out.conflict.is_some() => conflict(out),
         Ok(out) => Json(json!({"rev": out.rev, "commit": out.commit, "warning": out.warning})).into_response(),
         Err(e) => save_error(e),
     }
@@ -436,6 +431,8 @@ fn store_error(e: StoreError) -> Response {
     match e {
         StoreError::BadId => error(StatusCode::BAD_REQUEST, &e.to_string()),
         StoreError::NotFound => error(StatusCode::NOT_FOUND, &e.to_string()),
+        StoreError::AlreadyExists => error(StatusCode::CONFLICT, &e.to_string()),
+        StoreError::Changed => error(StatusCode::CONFLICT, &e.to_string()),
         StoreError::TooBig => error(StatusCode::PAYLOAD_TOO_LARGE, &e.to_string()),
         StoreError::Io(_) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -530,6 +527,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn external_change_returns_a_resolvable_conflict() {
+        let (app, root) = test_app("", true).await;
+        let res = app.clone().oneshot(json_request("POST", "/api/docs", json!({"title": "Note", "content": ""}))).await.unwrap();
+        let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        let id = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"].as_str().unwrap().to_string();
+        let uri = format!("/api/doc?id={id}");
+        let res = app.clone().oneshot(json_request("PUT", &uri, json!({"base": 1, "content": "# Note\n\nroom\n"}))).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        std::fs::write(root.join(&id), "# External\n").unwrap();
+        let res = app.clone().oneshot(json_request("PUT", &uri, json!({"base": 2, "content": "# Local\n"}))).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["content"], "# External\n");
+        assert_eq!(std::fs::read_to_string(root.join(&id)).unwrap(), "# External\n");
         let _ = std::fs::remove_dir_all(root);
     }
 }

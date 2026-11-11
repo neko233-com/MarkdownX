@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing, manually pushed tag (for example v0.1.13)
+        required: true
+        type: string
+      confirmation:
+        description: Type PUBLISH followed by the exact tag, for example PUBLISH v0.1.13
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag }}
+
+jobs:
+  confirm:
+    name: Verify manual confirmation and existing tag
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - name: Verify confirmation
+        id: tag
+        shell: bash
+        env:
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid tag.' >&2; exit 1; }
+          [[ "$RELEASE_CONFIRMATION" == "PUBLISH $RELEASE_TAG" ]] || { echo 'Manual release confirmation did not match.' >&2; exit 1; }
+          refs=$(git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}") || { echo 'The manually pushed tag does not exist.' >&2; exit 1; }
+          commit=$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ { peeled=$1 } END { if (peeled) print peeled; else print $1 }')
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'Could not resolve the tag commit.' >&2; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows x86_64 MSI
+    needs: confirm
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.confirm.outputs.commit }}
+      - name: Verify tag and build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $match = Select-String -LiteralPath Cargo.toml -Pattern '^version = "(\d+\.\d+\.\d+)"' | Select-Object -First 1
+          if (!$match -or $env:RELEASE_TAG -cne ('v' + $match.Matches[0].Groups[1].Value)) { throw 'Tag and package version must match.' }
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Visual Studio C++ tools were not found.' }
+          Import-Module "$vs/Common7/Tools/Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          python scripts/clean_test_artifacts.py
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup failed.' }
+          cargo build --release --locked -p markdownx -p markdownx-server
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+          python scripts/check.py
+          if ($LASTEXITCODE -ne 0) { throw 'Checks failed.' }
+      - name: Build and inspect MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wix = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
+          if (!(Test-Path "$wix\candle.exe")) {
+            choco install wixtoolset --version=3.14.1 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
+          }
+          python scripts/clean_test_artifacts.py
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup failed.' }
+          & ./scripts/build-msi.ps1
+          $version = $env:RELEASE_TAG.Substring(1)
+          $msi = Join-Path $PWD "dist/MarkdownX-$version-x64.msi"
+          if (!(Test-Path $msi) -or !(Test-Path "$msi.sha256")) { throw 'MSI or checksum missing.' }
+          & ./install.ps1 -MsiPath $msi -DryRun
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x86_64
+          path: |
+            dist/MarkdownX-*-x64.msi
+            dist/MarkdownX-*-x64.msi.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: macOS arm64 unsigned DMG test build
+    needs: confirm
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.confirm.outputs.commit }}
+      - name: Check release prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\([0-9][0-9.]*\)".*/\1/p' Cargo.toml | head -1)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$RELEASE_TAG" == "v$version" ]] || { echo 'Tag and version must match.' >&2; exit 1; }
+          [[ $(uname -m) == arm64 ]] || { echo 'An Apple Silicon runner is required.' >&2; exit 1; }
+      - name: Build and test the unsigned disk image
+        shell: bash
+        env:
+          SIGNING_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          python3 scripts/clean_test_artifacts.py
+          scripts/check.sh
+          python3 scripts/clean_test_artifacts.py
+          scripts/release.sh
+          version=${RELEASE_TAG#v}
+          images=(dist-release.*/"markdownx-$version-macos-arm64-unsigned.dmg")
+          [[ ${#images[@]} -eq 1 && -f ${images[0]} ]] || { echo 'Expected exactly one unsigned test DMG.' >&2; exit 1; }
+          sh install.sh --package "${images[0]}" --applications-dir "$RUNNER_TEMP/Applications" --allow-unsigned --dry-run
+          sh install.sh --package "${images[0]}" --applications-dir "$RUNNER_TEMP/Applications" --allow-unsigned
+          codesign --verify --deep --strict "$RUNNER_TEMP/Applications/MarkdownX.app"
+          mkdir -p "$RUNNER_TEMP/markdownx-release-assets"
+          cp "${images[0]}" "$RUNNER_TEMP/markdownx-release-assets/markdownx-macos-arm64-unsigned.dmg"
+          (cd "$RUNNER_TEMP/markdownx-release-assets" && shasum -a 256 markdownx-macos-arm64-unsigned.dmg > markdownx-macos-arm64-unsigned.dmg.sha256)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-arm64
+          path: ${{ runner.temp }}/markdownx-release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [confirm, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.confirm.outputs.commit }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/markdownx-release-assets
+          merge-multiple: true
+      - name: Publish only after both platforms pass
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_COMMIT: ${{ needs.confirm.outputs.commit }}
+        run: |
+          set -euo pipefail
+          version=${RELEASE_TAG#v}
+          refs=$(git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")
+          commit=$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ { peeled=$1 } END { if (peeled) print peeled; else print $1 }')
+          [[ "$commit" == "$EXPECTED_COMMIT" ]] || { echo 'Tag changed during the build; refusing to publish.' >&2; exit 1; }
+          for file in "MarkdownX-$version-x64.msi" "MarkdownX-$version-x64.msi.sha256" markdownx-macos-arm64-unsigned.dmg markdownx-macos-arm64-unsigned.dmg.sha256; do
+            [[ -f "$RUNNER_TEMP/markdownx-release-assets/$file" ]] || { echo "Missing $file" >&2; exit 1; }
+          done
+          (cd "$RUNNER_TEMP/markdownx-release-assets" && sha256sum --check "MarkdownX-$version-x64.msi.sha256" && sha256sum --check markdownx-macos-arm64-unsigned.dmg.sha256)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then echo 'Release already exists; refusing to overwrite it.' >&2; exit 1; fi
+          gh release create "$RELEASE_TAG" "$RUNNER_TEMP"/markdownx-release-assets/* install.ps1 install.sh --verify-tag --prerelease --title "MarkdownX $RELEASE_TAG (test)" --notes 'Test release: Windows x86_64 MSI and macOS arm64 DMG. The macOS app uses an ad-hoc signature and is not notarized. macOS may require explicit user approval before opening it.'

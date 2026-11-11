@@ -753,6 +753,16 @@ pub fn markdown_to_blocks(text: &str, off: Off) -> Vec<Block> {
     md_blocks(&lines, off)
 }
 
+/// Whole-file blocks and the zero-based source line ranges they consumed.
+/// Blank separators are left between ranges so callers can preserve them.
+pub fn markdown_file_with_spans(text: &str) -> (Vec<Block>, Vec<std::ops::Range<usize>>) {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = text.trim_end_matches('\n').split('\n').collect();
+    let mut spans = vec![];
+    let blocks = md_blocks_spanned(&lines, Off { file: true, ..Default::default() }, &mut spans);
+    (blocks, spans)
+}
+
 /// Inline rules only (pasting into a non-empty block): one block per line.
 pub fn markdown_inline_lines(text: &str) -> Vec<Block> {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -867,6 +877,10 @@ fn todo_prefix(s: &str) -> Option<(bool, &str)> {
 }
 
 fn md_blocks(lines: &[&str], off: Off) -> Vec<Block> {
+    md_blocks_spanned(lines, off, &mut vec![])
+}
+
+fn md_blocks_spanned(lines: &[&str], off: Off, spans: &mut Vec<std::ops::Range<usize>>) -> Vec<Block> {
     let mut out: Vec<Block> = vec![];
     let mut i = 0;
     // Ordered items continue the previous item's numbering.
@@ -877,6 +891,7 @@ fn md_blocks(lines: &[&str], off: Off) -> Vec<Block> {
         if line.trim().is_empty() {
             if !out.is_empty() && !off.file {
                 out.push(Block::text(""));
+                spans.push(i..i + 1);
             }
             last_list = false;
             i += 1;
@@ -918,12 +933,14 @@ fn md_blocks(lines: &[&str], off: Off) -> Vec<Block> {
                         }),
                         RichText::default(),
                     ));
+                    spans.push(i..(j + 1).min(lines.len()));
                     i = j + 1;
                     last_list = false;
                     continue;
                 }
             }
             out.push(Block::new(BlockKind::Code { lang, caption: None, wrap: false }, RichText::plain(body)));
+            spans.push(i..(j + 1).min(lines.len()));
             i = j + 1;
             last_list = false;
             continue;
@@ -961,30 +978,35 @@ fn md_blocks(lines: &[&str], off: Off) -> Vec<Block> {
                     }
                 },
             };
-            out.push(Block::new(kind, md_inline(text.trim())).with_children(md_blocks(&sub, off)));
+            out.push(Block::new(kind, md_inline_mode(text.trim(), off.file)).with_children(md_blocks(&sub, off)));
+            spans.push(i..j);
             last_list = true;
             i = j;
             continue;
         }
         last_list = false;
         if let Some((done, rest)) = todo_prefix(body).filter(|_| !off.todo) {
-            out.push(Block::new(BlockKind::Todo { done }, md_inline(rest.trim())));
+            out.push(Block::new(BlockKind::Todo { done }, md_inline_mode(rest.trim(), off.file)));
+            spans.push(i..i + 1);
             i += 1;
             continue;
         }
         let hashes = body.bytes().take_while(|&b| b == b'#').count();
         if (1..=9).contains(&hashes) && body[hashes..].starts_with([' ', '\t']) {
             let t = body[hashes..].trim().trim_end_matches('#').trim_end();
-            out.push(Block::new(BlockKind::Heading { level: hashes as u8, seq_auto: false }, md_inline(t)));
+            out.push(Block::new(BlockKind::Heading { level: hashes as u8, seq_auto: false }, md_inline_mode(t, off.file)));
+            spans.push(i..i + 1);
             i += 1;
             continue;
         }
         if divider(body) && !off.code_divider {
             out.push(Block::new(BlockKind::Divider, RichText::default()));
+            spans.push(i..i + 1);
             i += 1;
             continue;
         }
         if quote_line(body).is_some() && !off.quote {
+            let start = i;
             let mut sub = vec![];
             while i < lines.len() {
                 let Some(r) = quote_line(lines[i].trim()) else { break };
@@ -994,39 +1016,43 @@ fn md_blocks(lines: &[&str], off: Off) -> Vec<Block> {
             let kids = md_blocks(&sub, Off { quote: true, ..off });
             if !kids.is_empty() {
                 out.push(Block::new(BlockKind::Quote, RichText::default()).with_children(kids));
+                spans.push(start..i);
             }
             continue;
         }
-        if let Some((t, n)) = pipe_table(&lines[i..]) {
+        if let Some((t, n)) = pipe_table(&lines[i..], off.file) {
             out.push(t);
+            spans.push(i..i + n);
             i += n;
             continue;
         }
-        if let Some(src) = image_line(body).filter(|_| off.file) {
+        if let Some((src, alt)) = image_line(body).filter(|_| off.file) {
             let mut b = Block::new(
-                BlockKind::Image { src_kind: "src".into(), src: src.to_string(), width: None, height: None, caption: None, crop: None },
+                BlockKind::Image { src_kind: "src".into(), src: src.to_string(), width: None, height: None, caption: (!alt.is_empty()).then(|| alt.to_string()), crop: None },
                 RichText::default(),
             );
             b.align = crate::model::Align::Center;
             out.push(b);
+            spans.push(i..i + 1);
             i += 1;
             continue;
         }
         // Leading spaces stay literal.
-        out.push(Block::new(BlockKind::Text, md_inline(&tabs(line.trim_end()))));
+        out.push(Block::new(BlockKind::Text, md_inline_mode(&tabs(line.trim_end()), off.file)));
+        spans.push(i..i + 1);
         i += 1;
     }
     out
 }
 
 /// `![alt](src "title")` filling the whole line: its src.
-fn image_line(s: &str) -> Option<&str> {
+fn image_line(s: &str) -> Option<(&str, &str)> {
     let rest = s.strip_prefix("![")?;
-    let (_, tail) = rest.split_once("](")?;
+    let (alt, tail) = rest.split_once("](")?;
     let inner = tail.strip_suffix(')')?;
     let src = inner.split_once([' ', '\t']).map_or(inner, |(a, _)| a);
     let src = src.trim_start_matches('<').trim_end_matches('>');
-    (!src.is_empty() && !inner.contains(')')).then_some(src)
+    (!src.is_empty() && !inner.contains(')')).then_some((src, alt))
 }
 
 fn quote_line(s: &str) -> Option<&str> {
@@ -1061,7 +1087,7 @@ fn table_cells(line: &str) -> Vec<String> {
 }
 
 /// GFM pipe table at the start of `lines`: (table, lines used).
-fn pipe_table(lines: &[&str]) -> Option<(Block, usize)> {
+fn pipe_table(lines: &[&str], file: bool) -> Option<(Block, usize)> {
     let head = lines.first()?;
     let sep = lines.get(1)?;
     if !head.contains('|') {
@@ -1102,7 +1128,7 @@ fn pipe_table(lines: &[&str]) -> Option<(Block, usize)> {
         .map(|r| {
             (0..ncols)
                 .map(|c| {
-                    let mut b = Block::new(BlockKind::Text, md_inline(r.get(c).map_or("", String::as_str)));
+                    let mut b = Block::new(BlockKind::Text, md_inline_mode(r.get(c).map_or("", String::as_str), file));
                     b.align = aligns[c];
                     TableCell { blocks: vec![b], ..TableCell::empty() }
                 })
@@ -1122,6 +1148,15 @@ fn is_boundary(c: Option<char>) -> bool {
 /// rules of the live shortcuts (`~x~` is underline). Paste turns escapes,
 /// images and `<…>` autolinks off.
 pub fn md_inline(s: &str) -> RichText {
+    md_inline_mode(s, false)
+}
+
+/// Whole-file imports must understand the escapes and tags emitted by export.
+fn md_inline_mode(s: &str, file: bool) -> RichText {
+    md_inline_with(s, file, true)
+}
+
+fn md_inline_with(s: &str, file: bool, autolink: bool) -> RichText {
     let mut out = RichText::default();
     let mut plain = String::new();
     let flush = |plain: &mut String, out: &mut RichText| {
@@ -1135,13 +1170,44 @@ pub fn md_inline(s: &str) -> RichText {
         let rest = &s[i..];
         let c = rest.chars().next().unwrap();
         let prev = s[..i].chars().next_back();
+        if file && c == '\\' && let Some(next) = rest[1..].chars().next().filter(char::is_ascii_punctuation) {
+            plain.push(next);
+            i += 1 + next.len_utf8();
+            continue;
+        }
+        if file {
+            if rest.starts_with("&#32;") {
+                plain.push(' ');
+                i += 5;
+                continue;
+            }
+            if let Some(tag) = ["<br>", "<br/>", "<br />"].iter().find(|tag| rest.starts_with(**tag)) {
+                plain.push('\n');
+                i += tag.len();
+                continue;
+            }
+            let mut tagged = false;
+            for (open, close, style) in [("<u>", "</u>", 0), ("<strong>", "</strong>", 1), ("<em>", "</em>", 2), ("<del>", "</del>", 3)] {
+                if let Some(body) = rest.strip_prefix(open) && let Some(end) = find_unescaped(body, close) {
+                    flush(&mut plain, &mut out);
+                    let mut t = md_inline_with(&body[..end], file, autolink);
+                    let len = t.len();
+                    t.update_marks(0..len, |m| match style { 0 => m.underline = true, 1 => m.bold = true, 2 => m.italic = true, _ => m.strike = true });
+                    out.append(&t);
+                    i += open.len() + end + close.len();
+                    tagged = true;
+                    break;
+                }
+            }
+            if tagged { continue; }
+        }
         // Code span.
         if c == '`' {
             let n = rest.bytes().take_while(|&b| b == b'`').count();
             let delim = &rest[..n];
-            if let Some(end) = find_run(&rest[n..], delim, b'`') {
+            if let Some(end) = find_run(&rest[n..], delim, b'`', false) {
                 let inner = &rest[n..n + end];
-                let inner = if inner.len() > 2 && inner.starts_with(' ') && inner.ends_with(' ') { &inner[1..inner.len() - 1] } else { inner };
+                let inner = if inner.len() > 2 && inner.starts_with(' ') && inner.ends_with(' ') && (!file || !inner.trim_matches(' ').is_empty()) { &inner[1..inner.len() - 1] } else { inner };
                 if !inner.is_empty() {
                     flush(&mut plain, &mut out);
                     out.push(inner, Marks { code: true, ..Marks::default() });
@@ -1182,9 +1248,9 @@ pub fn md_inline(s: &str) -> RichText {
         // Links `[text](url)`.
         if c == '[' {
             let open = 0;
-            if let Some((label, url, used)) = link_at(&rest[open..]) {
+            if let Some((label, url, used)) = link_at(&rest[open..], file) {
                 flush(&mut plain, &mut out);
-                let mut t = md_inline(label);
+                let mut t = md_inline_with(label, file, false);
                 if t.is_empty() {
                     t = RichText::plain(url);
                 }
@@ -1196,7 +1262,7 @@ pub fn md_inline(s: &str) -> RichText {
             }
         }
         // Bare URLs (they get links when drawn).
-        if (c == 'h' || c == 'w') && !prev.is_some_and(|p| p.is_alphanumeric()) {
+        if autolink && (c == 'h' || c == 'w') && !prev.is_some_and(|p| p.is_alphanumeric()) {
             let l = rest.get(..8).unwrap_or(rest).to_ascii_lowercase();
             if l.starts_with("https://") || l.starts_with("http://") || l.starts_with("www.") {
                 let end = rest.find(|c: char| c.is_whitespace() || "<>\"'`".contains(c) || !c.is_ascii()).unwrap_or(rest.len());
@@ -1229,13 +1295,13 @@ pub fn md_inline(s: &str) -> RichText {
             let bounded = c == '_' || (c == '~' && n == 1);
             if let Some(set) = rule
                 && (!bounded || is_boundary(prev))
-                && let Some(end) = find_run(&rest[n..], run, c as u8)
+                && let Some(end) = find_run(&rest[n..], run, c as u8, file)
             {
                 let inner = &rest[n..n + end];
                 let after = rest[n + end + n..].chars().next();
                 if !inner.starts_with(char::is_whitespace) && !inner.ends_with(char::is_whitespace) && (!bounded || is_boundary(after)) {
                     flush(&mut plain, &mut out);
-                    let mut t = md_inline(inner);
+                    let mut t = md_inline_with(inner, file, autolink);
                     let len = t.len();
                     t.update_marks(0..len, set);
                     out.append(&t);
@@ -1254,16 +1320,22 @@ pub fn md_inline(s: &str) -> RichText {
     out
 }
 
+/// Find a tag that is not preceded by an odd run of escape slashes.
+fn find_unescaped(s: &str, needle: &str) -> Option<usize> {
+    s.match_indices(needle).map(|(at, _)| at).find(|&at| s[..at].bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 0)
+}
+
 /// Offset in `s` of a delimiter run exactly equal to `delim` (not part of a
 /// longer run of `ch`), skipping a non-empty match only.
-fn find_run(s: &str, delim: &str, ch: u8) -> Option<usize> {
+fn find_run(s: &str, delim: &str, ch: u8, escapes: bool) -> Option<usize> {
     let b = s.as_bytes();
     let mut from = 0;
     while let Some(k) = s[from..].find(delim) {
         let at = from + k;
         let before_ok = at == 0 || b[at - 1] != ch;
         let after_ok = b.get(at + delim.len()) != Some(&ch);
-        if at > 0 && before_ok && after_ok {
+        let escaped = escapes && s[..at].bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1;
+        if at > 0 && before_ok && after_ok && !escaped {
             return Some(at);
         }
         from = at + delim.len().max(1);
@@ -1276,14 +1348,17 @@ fn find_run(s: &str, delim: &str, ch: u8) -> Option<usize> {
 }
 
 /// `[label](url "title")` at the start of `s`: (label, url, bytes used).
-fn link_at(s: &str) -> Option<(&str, &str, usize)> {
+fn link_at(s: &str, file: bool) -> Option<(&str, &str, usize)> {
     let b = s.as_bytes();
     if b.first() != Some(&b'[') {
         return None;
     }
     let mut depth = 0;
     let mut close = None;
+    let mut escaped = false;
     for (k, &c) in b.iter().enumerate() {
+        if file && escaped { escaped = false; continue; }
+        if file && c == b'\\' { escaped = true; continue; }
         match c {
             b'[' => depth += 1,
             b']' => {
@@ -1316,6 +1391,16 @@ mod tests {
 
     fn xml(html: &str) -> String {
         docxml::serialize(&Document { blocks: html_to_blocks(html), ..Default::default() })
+    }
+
+    #[test]
+    fn markdown_source_spans_cover_complete_blocks() {
+        let text = "# Title\r\n\r\nfirst\r\nsecond\r\n\r\n- item\r\n  nested\r\n\r\n```rust\r\na\r\n```\r\n";
+        let (blocks, spans) = super::markdown_file_with_spans(text);
+        assert_eq!(spans, vec![0..1, 2..3, 3..4, 5..7, 8..11]);
+        let plain = super::markdown_to_blocks(text, super::Off { file: true, ..Default::default() });
+        let doc = |blocks| Document { blocks, ..Default::default() };
+        assert_eq!(docxml::serialize(&doc(blocks)), docxml::serialize(&doc(plain)));
     }
 
     #[test]
@@ -1382,6 +1467,32 @@ mod tests {
         assert!(x.contains("<hr/>"), "{x}");
         assert!(x.contains("fn main() {}"), "{x}");
         assert!(x.contains("<table"), "{x}");
+    }
+
+    #[test]
+    fn markdown_files_roundtrip_escaped_text_and_inline_markup() {
+        use crate::model::{Block, BlockKind, Marks};
+        let mut text = RichText::plain(r"literal *stars* _underscores_ [brackets] <angle> C:\notes\a_b ");
+        text.push("underlined", Marks { underline: true, ..Default::default() });
+        text.push("\nsecond line", Marks::default());
+        let doc = Document {
+            title: RichText::plain(r"Title_[brackets] \"),
+            blocks: vec![Block::new(BlockKind::Text, text.clone())],
+            ..Default::default()
+        };
+        let output = crate::markdown::export(&doc, &crate::markdown::Options::default());
+        let blocks = super::markdown_to_blocks(&output.text, super::Off { file: true, ..Default::default() });
+        assert_eq!(blocks[0].text.text, doc.title.text);
+        assert_eq!(blocks[1].text.text, text.text);
+        assert!(blocks[1].text.runs.iter().any(|r| r.marks.underline));
+        let url = "https://example.com/a_b";
+        let input = format!("# Title\n\n{url}\n");
+        let first = super::markdown_to_blocks(&input, super::Off { file: true, ..Default::default() });
+        let doc = Document { title: first[0].text.clone(), blocks: first[1..].to_vec(), ..Default::default() };
+        let output = crate::markdown::export(&doc, &crate::markdown::Options::default());
+        let second = super::markdown_to_blocks(&output.text, super::Off { file: true, ..Default::default() });
+        assert_eq!(second[1].text.text, url);
+        assert_eq!(super::md_inline(r"a\_b").text, r"a\_b");
     }
 
     #[test]

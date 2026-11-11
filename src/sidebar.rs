@@ -173,6 +173,8 @@ impl Workspace {
                 if folder.children.is_empty() {
                     list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::text("这个目录里没有 Markdown 或 .mdxb 文件")));
                 }
+            } else if self.folder_searching {
+                list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::tr("正在搜索…", "Searching…")));
             } else if self.folder_hits.is_empty() {
                 list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::text("没有匹配的文件")));
             } else {
@@ -281,6 +283,28 @@ impl Workspace {
                     .hover(|s| s.bg(Theme::sidebar_hover()))
                     .child(icon("folder-open", ROW_ICON, Theme::icon()))
                     .child(div().flex_1().min_w_0().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text()).truncate().child(folder.name.clone()))
+                    .child(
+                        div().id("folder-new-file").flex_none().size(px(22.)).flex().items_center().justify_center()
+                            .rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::sidebar_selected()))
+                            .child(icon("plus", 14., Theme::text_caption()))
+                            .tip(crate::settings::tr("新建 Markdown 文件", "New Markdown file"), None)
+                            .on_click(cx.listener(|w, _, window, cx| w.new_folder_file(window, cx))),
+                    )
+                    .child(
+                        div()
+                            .id("folder-refresh")
+                            .flex_none()
+                            .px(px(4.))
+                            .h(px(22.))
+                            .flex().items_center().justify_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(Theme::sidebar_selected()))
+                            .text_size(px(11.))
+                            .text_color(Theme::text_caption())
+                            .child(crate::settings::tr("刷新", "Refresh"))
+                            .on_click(cx.listener(|w, _, _, cx| w.refresh_folder(cx))),
+                    )
                     .child(
                         div()
                             .id("folder-close")
@@ -419,7 +443,8 @@ impl Workspace {
 
     fn folder_nodes(&mut self, nodes: &[crate::workspace_fs::FileNode], depth: usize, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
         let mut out = vec![];
-        for n in nodes {
+        let mut pending: Vec<_> = nodes.iter().rev().map(|n| (n, depth)).collect();
+        while let Some((n, depth)) = pending.pop() {
             let id = SharedString::from(format!("fd-{}", n.path.to_string_lossy()));
             if n.dir {
                 let open = self.folder_expanded.contains(&n.path);
@@ -446,7 +471,7 @@ impl Workspace {
                         })),
                 );
                 if open {
-                    out.extend(self.folder_nodes(&n.children, depth + 1, cx));
+                    pending.extend(n.children.iter().rev().map(|child| (child, depth + 1)));
                 }
             } else {
                 let selected = self.file.as_ref() == Some(&n.path);

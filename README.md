@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/neko233-com/MarkdownX/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/neko233-com/MarkdownX/ci.yml?branch=main&label=CI" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"></a>
-  <a href="#简体中文">简体中文</a>
+  <a href="README-CN.md">简体中文</a>
 </p>
 
 ![MarkdownX reader](docs/images/reader.png)
@@ -38,6 +38,26 @@ MarkdownX is a writing and reading environment for **dynamic books**: documents 
 |---|---|
 | ![Landing](docs/images/landing.png) | ![Reader](docs/images/reader.png) |
 
+## Install a release
+
+The commands below require the corresponding GitHub Release to be published. The current release is a **test pre-release**: the macOS Apple Silicon DMG is ad-hoc signed and not notarized. The in-app update checker follows stable releases and does not announce test pre-releases.
+
+Windows x86_64 (PowerShell 7, current user):
+
+```powershell
+irm https://github.com/neko233-com/MarkdownX/releases/download/v0.1.13/install.ps1 | iex
+```
+
+macOS arm64 (Apple Silicon):
+
+```sh
+curl -fsSL https://github.com/neko233-com/MarkdownX/releases/download/v0.1.13/install.sh | sh -s -- --allow-unsigned
+```
+
+The installer verifies the package checksum; Windows requests normal save/exit and preserves the collaboration server and library. macOS installs to `~/Applications/MarkdownX.app`: close an existing copy first. For the unsigned test build, macOS may block the first launch; review the warning and approve opening it in **System Settings → Privacy & Security** if you trust this build. The installer does not change Gatekeeper settings. For offline installs, download the MSI or DMG and its `.sha256`, then use `pwsh -File ./install.ps1 -MsiPath <file>` or `sh ./install.sh --package <file> --allow-unsigned`. Add `-DryRun` or `--dry-run` to inspect without installing. In Windows Git Bash, `sh ./install.sh` delegates to PowerShell 7.
+
+The release workflow never creates or pushes a tag. After a person has reviewed and manually pushed a version tag, run **Actions → Release** with that existing tag and enter `PUBLISH vX.Y.Z` as the confirmation. Both platform builds and checksum checks must pass before the test release is published; a tag push alone does not publish it.
+
 ## Quick start
 
 **Requirements:** Rust 1.99.1, and on Windows the Visual Studio 2022 C++ build tools plus a Windows SDK. Python 3 is only needed for the examples and a local web server.
@@ -51,14 +71,18 @@ On Windows, run the build from a Visual Studio developer prompt, or call `vcvars
 To install the built app for the current Windows user, with Start Menu/desktop shortcuts, `.mdxb` registration, and the collaboration server running at sign-in:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+pwsh -File scripts/install-windows.ps1
 ```
 
-No administrator rights are needed. The app goes to `%LOCALAPPDATA%\Programs\MarkdownX`, the server token and Git workspace go to `%LOCALAPPDATA%\MarkdownX\server`, and an uninstaller is written beside the app and registered in **Apps & features**. The installer preserves an existing server token when reinstalling.
+No administrator rights are needed. The local MSI is preferred. The app goes to `%LOCALAPPDATA%\Programs\MarkdownX`; the server token and workspace remain in `%LOCALAPPDATA%\MarkdownX\server`. The installation is registered in **Apps & features**. The helper refuses to force-close a running installed app or server.
 
-To build a per-user MSI instead, run `pwsh -File scripts/build-msi.ps1` after the release build and install `dist\MarkdownX-0.1.8-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
+Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-0.1.13-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
 
 The desktop app creates its library at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`). Use **文件 → 打开文件夹…** / **File → Open Folder…** for a Typora-style directory workspace, and **文件 → 打包成电子书…** / **File → Package as E-book…** (`⌘⇧E`) to turn the current folder, or the open Markdown file, into one `.mdxb`. **下载为 → MarkdownX 书 (.mdxb)** exports a library page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
+
+Passing a folder path as the first argument opens its tree without selecting a file. Opening a folder from the menu shows directories and supported files, opens the first file and expands its parent folders. Use **Refresh** after external changes; returning focus to the window also refreshes the tree. Dot-prefixed entries, symlinks, `target`, `node_modules` and `__pycache__` are excluded. Unchanged Markdown source is preserved where possible; unsupported edited constructs may still change; UTF-8 BOM and predominant CRLF line endings are retained. If another program changed the file, or an export would lose detected text, references a missing asset, or conflicts with a different existing asset, MarkdownX keeps the pending edit instead of replacing the source.
+
+**File → Open File…** (`Ctrl+O` on Windows) and a file path argument open Markdown or text files in place, with their folder tree. Use the plus button beside the folder name to create a new Markdown file. Folder saves and link indexing run in the background; switching or closing waits for pending edits to finish. Existing staged changes to the same file prevent Git auto-commit and are reported without undoing the file save.
 
 To read a book in the browser, use the hosted reader at **https://neko233-com.github.io/MarkdownX/web/**, or run it locally:
 
@@ -219,25 +243,49 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 - **团队工作流开箱即用。** `templates/` 里有游戏策划、产品 PRD、影视 treatment、内容选题等模板；浏览器协作端会直接列出这些模板。见 [docs/WORKFLOWS.md](docs/WORKFLOWS.md)。
 - **跟着你的电脑走。** 首次启动跟随系统语言（中文/English），也可以在设置里固定一种；应用启动后和每 12 小时检查 GitHub 发布页，发现新版本会提示下载地址。
 
-### 快速开始
+### 安装发布版
+
+以下命令需要对应 GitHub Release 已发布。当前版本是**测试预发布版**：macOS Apple Silicon DMG 为临时签名，尚未经过 Apple 公证。应用内更新检查只提示正式版，不提示测试预发布版。
+
+Windows x86_64（PowerShell 7，安装到当前用户）：
+
+```powershell
+irm https://github.com/neko233-com/MarkdownX/releases/download/v0.1.13/install.ps1 | iex
+```
+
+macOS arm64（Apple Silicon）：
+
+```sh
+curl -fsSL https://github.com/neko233-com/MarkdownX/releases/download/v0.1.13/install.sh | sh -s -- --allow-unsigned
+```
+
+安装脚本会校验安装包；Windows 会请求应用正常保存并退出，保留文档库及协作服务器数据。macOS 安装到 `~/Applications/MarkdownX.app`，请先关闭正在运行的旧版。未公证测试版首次启动时，macOS 可能阻止打开；确认信任后，可在「系统设置 → 隐私与安全性」中检查提示并允许打开。脚本不会修改 Gatekeeper 设置。离线安装时下载 MSI 或 DMG 与其 `.sha256`，运行 `pwsh -File ./install.ps1 -MsiPath <文件>` 或 `sh ./install.sh --package <文件> --allow-unsigned`；添加 `-DryRun` 或 `--dry-run` 可只检查。Windows Git Bash 可通过 `sh ./install.sh` 调用 PowerShell 7。
+
+发布工作流不会创建或推送标签。人工审核并手动推送版本标签后，在 **Actions → Release** 中选择已有标签，并输入 `PUBLISH vX.Y.Z` 确认；Windows 和 macOS 两个平台构建与校验均通过后才发布测试版。仅推送标签不会触发发布。
+
+## 快速开始
 
 需要 Rust 1.99.1；Windows 还需要 Visual Studio 2022 的 C++ 生成工具和 Windows SDK。Python 3 只用于示例和本地静态服务器。
 
 在当前 Windows 用户下安装构建好的版本（开始菜单/桌面快捷方式、`.mdxb` 文件关联、登录时启动协作服务器）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+pwsh -File scripts/install-windows.ps1
 ```
 
-不需要管理员权限。应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和 Git 工作区在 `%LOCALAPPDATA%\MarkdownX\server`；卸载脚本随应用一起安装并登记到「应用和功能」。重新安装会保留已有服务器令牌。
+不需要管理员权限。优先使用当前构建的 MSI；应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和工作区保留在 `%LOCALAPPDATA%\MarkdownX\server`，并在「应用和功能」中管理。安装脚本不会强制结束运行中的安装版应用或服务器。
 
-也可以构建 per-user MSI：release 构建后运行 `pwsh -File scripts/build-msi.ps1`，安装 `dist\MarkdownX-0.1.8-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.13-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
 
 ```sh
 cargo run --release
 ```
 
 桌面端默认把文档库放在 `~/Documents/MarkdownX`，可用 `MARKDOWNX_HOME` 改。用「下载为 → MarkdownX 书 (.mdxb)」导出当前页及其子页。
+
+启动 MarkdownX 时传入文件夹路径会直接显示目录树，不会自动打开文件。「文件 → 打开文件夹…」会在侧栏显示目录和支持的文件，打开首个文件并展开其上级目录。外部增删文件后可点「刷新」，窗口重新获得焦点时也会刷新。名称以点开头的项、符号链接、`target`、`node_modules` 和 `__pycache__` 不显示。保存时 Markdown 会重新导出，原有排版和未支持的语法可能变化；UTF-8 BOM 和主要的 CRLF 换行会保留。检测到文件已被其他程序修改、导出会丢失标题或正文、资源无法导出或同名资源内容不同时，未保存内容会保留，源文件不会被替换。
+
+「文件 → 打开文件…」（Windows 为 `Ctrl+O`）或启动参数可直接编辑 Markdown 和文本文件，并显示所在目录树；侧栏目录名旁的加号可新建 Markdown 文件。文件保存与双链索引在后台进行，切换或关闭前会等待最新修改保存。若同一文件已有 Git 暂存内容，自动提交会跳过并提示，文件保存结果仍保留。
 
 浏览器阅读：
 

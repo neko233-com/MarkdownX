@@ -14,6 +14,8 @@ from clean_test_artifacts import clean  # noqa: E402
 # into the tree before the tests start. See AGENTS.md "测试前清理".
 if clean() != 0:
     raise SystemExit("artifact cleanup failed")
+subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py"], check=True)
+
 def cargo(*args, env=None):
     subprocess.run(["cargo", *args], check=True, env=env)
 

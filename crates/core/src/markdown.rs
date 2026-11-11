@@ -40,6 +40,34 @@ pub fn export(doc: &Document, opts: &Options) -> Export {
     Export { text: out, files: w.files, missing: w.missing }
 }
 
+/// Render selected top-level blocks with one shared asset map and list state.
+/// Unrendered blocks still advance numbering, but don't read or copy assets.
+pub struct FragmentWriter<'a> {
+    writer: Writer<'a>,
+    previous_list: bool,
+    sequence: u32,
+}
+
+impl<'a> FragmentWriter<'a> {
+    pub fn new(opts: &'a Options<'a>) -> Self {
+        Self { writer: Writer { opts, files: vec![], missing: 0 }, previous_list: false, sequence: 0 }
+    }
+
+    pub fn block(&mut self, block: &Block, render: bool) -> Option<String> {
+        self.sequence = match &block.kind {
+            BlockKind::Ordered { seq: Some(n) } => *n,
+            BlockKind::Ordered { seq: None } => if self.previous_list && self.sequence > 0 { self.sequence + 1 } else { 1 },
+            _ => 0,
+        };
+        self.previous_list = block.kind.is_list();
+        render.then(|| self.writer.block(block, self.sequence))
+    }
+
+    pub fn finish(self) -> (Vec<(PathBuf, String)>, usize) {
+        (self.writer.files, self.writer.missing)
+    }
+}
+
 struct Writer<'a> {
     missing: usize,
     opts: &'a Options<'a>,
@@ -64,7 +92,7 @@ impl Writer<'_> {
                 continue;
             }
             if !out.is_empty() {
-                out.push_str(if list && prev_list { "\n" } else { "\n\n" });
+                out.push_str(if list && prev_list && !matches!(b.kind, BlockKind::Ordered { seq: Some(_) }) { "\n" } else { "\n\n" });
             }
             out.push_str(&s);
             prev_list = list;
@@ -78,17 +106,30 @@ impl Writer<'_> {
             if b.children.is_empty() {
                 return head;
             }
-            format!("{head}\n{}", indent(&w.blocks(&b.children), "    "))
+            let prefix = match &b.kind {
+                BlockKind::Bullet | BlockKind::Todo { .. } => "  ".to_string(),
+                BlockKind::Ordered { .. } => " ".repeat(seq.to_string().len() + 2),
+                _ => "    ".to_string(),
+            };
+            format!("{head}\n{}", indent(&w.blocks(&b.children), &prefix))
         };
         match &b.kind {
-            BlockKind::Text => nested(self, text),
+            BlockKind::Text => {
+                let leading = text.bytes().take_while(|&b| b == b' ').count();
+                nested(self, format!("{}{}", "&#32;".repeat(leading), &text[leading..]))
+            },
             BlockKind::Heading { level, .. } => nested(self, format!("{} {text}", "#".repeat((*level).clamp(1, 6) as usize))),
             BlockKind::Bullet => nested(self, format!("- {text}")),
             BlockKind::Ordered { .. } => nested(self, format!("{seq}. {text}")),
             BlockKind::Todo { done } => nested(self, format!("- [{}] {text}", if *done { "x" } else { " " })),
             BlockKind::Code { lang, .. } => {
                 let lang = if lang.eq_ignore_ascii_case("plain text") { String::new() } else { lang.to_lowercase().replace(' ', "") };
-                let fence = if b.text.text.contains("```") { "````" } else { "```" };
+                let mut run = 0;
+                let mut longest = 0;
+                for ch in b.text.text.chars() {
+                    if ch == '`' { run += 1; longest = longest.max(run); } else { run = 0; }
+                }
+                let fence = "`".repeat((longest + 1).max(3));
                 format!("{fence}{lang}\n{}\n{fence}", b.text.text)
             }
             BlockKind::Quote => indent(&self.blocks(&b.children), "> "),
@@ -175,27 +216,68 @@ fn table(t: &Table, files: &mut impl FnMut(&FileBlock) -> Option<String>) -> Str
         Some(r) => lines.push(row(r)),
         None => lines.push(row(&vec![])),
     }
-    lines.push(format!("|{}", " --- |".repeat(cols)));
+    let markers = (0..cols).map(|col| {
+        match t.rows.iter().filter_map(|row| row.get(col)).filter_map(|cell| cell.blocks.first()).next().map(|block| block.align).unwrap_or_default() {
+            Align::Left => "---", Align::Center => ":---:", Align::Right => "---:",
+        }
+    }).collect::<Vec<_>>().join(" | ");
+    lines.push(format!("| {markers} |"));
     lines.extend(rows.map(row));
     lines.join("\n")
 }
 
 fn indent(s: &str, prefix: &str) -> String {
     s.lines()
-        .map(|l| if l.is_empty() && prefix.trim().is_empty() { String::new() } else { format!("{prefix}{l}").trim_end().to_string() })
+        .map(|l| if l.is_empty() { prefix.trim_end().to_string() } else { format!("{prefix}{l}") })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn escape(s: &str) -> String {
+fn escape(s: &str) -> String { escape_text(s, false) }
+
+/// Preserve plain wiki and safe relative links from folder Markdown sources.
+fn escape_text(s: &str, preserve_links: bool) -> String {
     let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if matches!(c, '\\' | '*' | '_' | '`' | '[' | ']' | '<' | '~') {
+    let mut at = 0;
+    while at < s.len() {
+        let rest = &s[at..];
+        if preserve_links && let Some(len) = plain_link_len(rest) {
+            out.push_str(&rest[..len]);
+            at += len;
+            continue;
+        }
+        let c = rest.chars().next().unwrap();
+        if matches!(c, '\\' | '*' | '_' | '`' | '[' | ']' | '<' | '~' | '&') || rest.starts_with("&#32;") {
             out.push('\\');
         }
         out.push(c);
+        at += c.len_utf8();
     }
     out
+}
+
+fn plain_link_len(s: &str) -> Option<usize> {
+    if let Some(body) = s.strip_prefix("[[")
+        && let Some(end) = body.find("]]")
+    {
+        let inner = &body[..end];
+        if !inner.trim().is_empty() && !inner.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | '\\')) {
+            return Some(2 + end + 2);
+        }
+    }
+    let body = s.strip_prefix('[')?;
+    let end = body.find("](")?;
+    let label = &body[..end];
+    let target = &body[end + 2..];
+    let close = target.find(')')?;
+    let url = &target[..close];
+    if label.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | '\\'))
+        || url.is_empty() || url.starts_with('/') || url.starts_with('\\') || url.contains(':')
+        || url.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | '\\'))
+    {
+        return None;
+    }
+    Some(1 + end + 2 + close + 1)
 }
 
 #[derive(PartialEq, Clone, Default)]
@@ -242,36 +324,52 @@ fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) ->
             _ => runs.push((md, s)),
         }
     }
+    let adjacent = |left: &(Md, String), right: &(Md, String)| {
+        let styled = |m: &Md| m.bold || m.italic || m.strike;
+        styled(&left.0) && styled(&right.0)
+            && left.1.chars().next_back().is_some_and(|c| !c.is_whitespace())
+            && right.1.chars().next().is_some_and(|c| !c.is_whitespace())
+    };
+    let html: Vec<bool> = (0..runs.len()).map(|i| {
+        (i > 0 && adjacent(&runs[i - 1], &runs[i])) || (i + 1 < runs.len() && adjacent(&runs[i], &runs[i + 1]))
+    }).collect();
     let mut out = String::new();
-    for (m, s) in runs {
+    for ((m, s), html) in runs.into_iter().zip(html) {
         if s.is_empty() {
             continue;
         }
-        // Emphasis markers must hug the text: keep outer spaces outside.
-        let body = s.trim();
-        let lead = &s[..s.len() - s.trim_start().len()];
-        let trail = &s[s.trim_end().len()..];
+        // Code spans keep their spaces; emphasis markers must hug the text.
+        let body = if m.code { s.as_str() } else { s.trim() };
+        let lead = if m.code { "" } else { &s[..s.len() - s.trim_start().len()] };
+        let trail = if m.code { "" } else { &s[s.trim_end().len()..] };
         if body.is_empty() {
             out.push_str(&s);
             continue;
         }
         let mut x = if m.code {
-            let tick = if body.contains('`') { "``" } else { "`" };
-            format!("{tick}{body}{tick}")
+            let mut run = 0;
+            let mut longest = 0;
+            for c in body.chars() {
+                if c == '`' { run += 1; longest = longest.max(run); } else { run = 0; }
+            }
+            let tick = "`".repeat(longest + 1);
+            let pad = body.starts_with('`') || body.ends_with('`')
+                || (body.starts_with(' ') && body.ends_with(' ') && !body.trim_matches(' ').is_empty());
+            if pad { format!("{tick} {body} {tick}") } else { format!("{tick}{body}{tick}") }
         } else {
-            escape(body)
+            escape_text(body, m.link.is_none())
         };
         if m.underline {
             x = format!("<u>{x}</u>");
         }
         if m.strike {
-            x = format!("~~{x}~~");
+            x = if html { format!("<del>{x}</del>") } else { format!("~~{x}~~") };
         }
         if m.italic {
-            x = format!("*{x}*");
+            x = if html { format!("<em>{x}</em>") } else { format!("*{x}*") };
         }
         if m.bold {
-            x = format!("**{x}**");
+            x = if html { format!("<strong>{x}</strong>") } else { format!("**{x}**") };
         }
         if let Some(url) = &m.link {
             x = format!("[{x}]({})", url.replace(' ', "%20").replace(')', "%29"));
@@ -310,6 +408,102 @@ mod tests {
     }
 
     #[test]
+    fn ordered_list_restarts_keep_their_explicit_numbers() {
+        let input = "3. alpha\n4. beta\n\n8. gamma\n9. delta\n";
+        let doc = Document { blocks: crate::paste::markdown_to_blocks(input, crate::paste::Off { file: true, ..Default::default() }), ..Default::default() };
+        let output = export(&doc, &Options::default());
+        let parsed = crate::paste::markdown_to_blocks(&output.text, crate::paste::Off { file: true, ..Default::default() });
+        assert!(output.text.contains("4. beta\n\n8. gamma"));
+        assert_eq!(doc.blocks.iter().map(|b| &b.kind).collect::<Vec<_>>(), parsed.iter().map(|b| &b.kind).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn table_column_alignment_round_trips() {
+        let input = "| left | center | right |\n| --- | :---: | ---: |\n| a | b | c |\n";
+        let doc = Document { blocks: crate::paste::markdown_to_blocks(input, crate::paste::Off { file: true, ..Default::default() }), ..Default::default() };
+        let output = export(&doc, &Options::default());
+        assert!(output.text.contains("| --- | :---: | ---: |"));
+        let parsed = crate::paste::markdown_to_blocks(&output.text, crate::paste::Off { file: true, ..Default::default() });
+        let (BlockKind::Table(a), BlockKind::Table(b)) = (&doc.blocks[0].kind, &parsed[0].kind) else { panic!("expected tables") };
+        for (left, right) in a.rows.iter().zip(&b.rows) {
+            for (left, right) in left.iter().zip(right) { assert_eq!(left.blocks[0].align, right.blocks[0].align); }
+        }
+    }
+
+    #[test]
+    fn leading_spaces_remain_text_after_list_items() {
+        let doc = Document { blocks: vec![
+            Block::new(BlockKind::Bullet, RichText::plain("item")),
+            Block::new(BlockKind::Text, RichText::plain("  indented sibling")),
+            Block::new(BlockKind::Bullet, RichText::plain("next")),
+            Block::new(BlockKind::Text, RichText::plain(" &#32; literally")),
+        ], ..Default::default() };
+        let output = export(&doc, &Options::default());
+        let parsed = Document { blocks: crate::paste::markdown_to_blocks(&output.text, crate::paste::Off { file: true, ..Default::default() }), ..Default::default() };
+        assert!(output.text.contains("&#32;&#32;indented sibling"));
+        assert!(output.text.contains("\\&#32; literally"));
+        assert_eq!(parsed.plain_text(), doc.plain_text());
+    }
+
+    #[test]
+    fn adjacent_emphasis_runs_keep_text_and_marks() {
+        let mut text = RichText::plain("plain ");
+        text.push("bold", Marks { bold: true, ..Default::default() });
+        text.push("<", Marks { bold: true, italic: true, ..Default::default() });
+        text.push(">", Marks { bold: true, ..Default::default() });
+        text.push("plain", Marks::default());
+        text.push("italic", Marks { italic: true, ..Default::default() });
+        text.push("both", Marks { bold: true, italic: true, ..Default::default() });
+        let doc = Document { blocks: vec![Block::new(BlockKind::Text, text.clone())], ..Default::default() };
+        let output = export(&doc, &Options::default());
+        let parsed = crate::paste::markdown_to_blocks(&output.text, crate::paste::Off { file: true, ..Default::default() });
+        assert_eq!(parsed[0].text, text);
+    }
+
+    #[test]
+    fn inline_code_keeps_edge_spaces_and_backtick_runs() {
+        let mut text = RichText::plain("prefix ");
+        text.push("  code``  ", Marks { code: true, ..Default::default() });
+        let cell = TableCell { blocks: vec![Block::new(BlockKind::Text, text.clone())], ..TableCell::empty() };
+        let table = Table { col_widths: vec![], header_rows: 0, header_col: false, rows: vec![vec![cell]] };
+        let doc = Document { blocks: vec![Block::new(BlockKind::Text, text), Block::new(BlockKind::Table(table), RichText::default())], ..Default::default() };
+        let output = export(&doc, &Options::default());
+        let parsed = Document { blocks: crate::paste::markdown_to_blocks(&output.text, crate::paste::Off { file: true, ..Default::default() }), ..Default::default() };
+        assert_eq!(parsed.plain_text(), doc.plain_text());
+    }
+
+    #[test]
+    fn nested_lists_keep_text_and_code_indentation() {
+        let input = "- parent\n  paragraph\n  - child\n    nested text\n10. ordered\n    line\n- [x] todo\n  ```text\n  code  \n  ```\n";
+        let blocks = crate::paste::markdown_to_blocks(input, crate::paste::Off { file: true, ..Default::default() });
+        let doc = Document { blocks, ..Default::default() };
+        let output = export(&doc, &Options::default());
+        let again = Document { blocks: crate::paste::markdown_to_blocks(&output.text, crate::paste::Off { file: true, ..Default::default() }), ..Default::default() };
+        assert_eq!(again.plain_text(), doc.plain_text());
+    }
+
+    #[test]
+    fn preserves_plain_wiki_and_safe_relative_links() {
+        let doc = Document {
+            blocks: vec![Block::text("See [[Target|Label]] and [Local](../note.md) and [Bad](javascript:alert)")],
+            ..Default::default()
+        };
+        let output = export(&doc, &Options::default());
+        assert!(output.text.contains("[[Target|Label]]"));
+        assert!(output.text.contains("[Local](../note.md)"));
+        assert!(!output.text.contains("[Bad](javascript:alert)"));
+    }
+
+    #[test]
+    fn plain_ampersand_does_not_become_an_html_entity() {
+        let doc = Document { title: RichText::default(), blocks: vec![Block::text("literal &amp;")], ..Default::default() };
+        let text = export(&doc, &Options::default()).text;
+        assert!(text.contains(r"\&amp;"));
+        let blocks = crate::paste::markdown_to_blocks(&text, crate::paste::Off { file: true, ..Default::default() });
+        assert_eq!(blocks[0].text.text, "literal &amp;");
+    }
+
+    #[test]
     fn exports_common_blocks() {
         let mut bold = RichText::plain("a ");
         bold.push("bold ", Marks { bold: true, ..Default::default() });
@@ -332,7 +526,7 @@ mod tests {
         let md = to_markdown(&doc);
         assert_eq!(
             md,
-            "# 标题\n\n## 小节\n\na **bold** [link](https://x.y)\n\n1. one\n    - sub\n2. two\n- [x] done\n\n```rust\nfn main() {}\n```\n\n> q\n\n---\n"
+            "# 标题\n\n## 小节\n\na **bold** [link](https://x.y)\n\n1. one\n   - sub\n2. two\n- [x] done\n\n```rust\nfn main() {}\n```\n\n> q\n\n---\n"
         );
     }
 

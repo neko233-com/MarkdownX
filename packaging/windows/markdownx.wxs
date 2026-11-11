@@ -2,10 +2,10 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <!-- ProductCode changes every release; UpgradeCode stays fixed so the MSI
        removes the previous per-user install. -->
-  <Product Id="{0A3790A3-DCFF-4DAB-9989-3532AAEBBF88}"
+  <Product Id="*"
            Name="MarkdownX"
            Language="1033"
-           Version="0.1.8"
+           Version="$(var.ProductVersion)"
            Manufacturer="neko233-com"
            UpgradeCode="{5F2E3D9A-8A1B-4C7E-9E4D-2B7C6A1F0D31}">
     <Package InstallerVersion="500"
@@ -14,7 +14,7 @@
              Platform="x64"
              Description="Interactive books and collaborative Markdown workspaces" />
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of MarkdownX is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of MarkdownX is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
@@ -50,6 +50,9 @@
         <File Id="AppIconFile" Source="assets\branding\app-icon.ico" />
         <File Id="LicenseFile" Source="LICENSE" />
         <File Id="ReadmeFile" Source="README.md" />
+        <File Id="ReadmeChineseFile" Source="README-CN.md" />
+        <File Id="InstallPowerShell" Source="install.ps1" />
+        <File Id="InstallShell" Source="install.sh" />
         <File Id="ThirdPartyFile" Source="THIRD_PARTY.md" />
       </Component>
     </DirectoryRef>

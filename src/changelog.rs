@@ -15,6 +15,29 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.13", &[
+        ("新增 Windows 与 macOS 一键安装入口和发布包校验", "Add Windows and macOS one-command installers with package verification"),
+    ]),
+    ("0.1.12", &[
+        ("空 Markdown 文件打开后可直接输入正文并自动保存", "Type into empty Markdown files immediately and save automatically"),
+    ]),
+    ("0.1.11", &[
+        ("编辑文件时保留未修改的 Markdown 原文、换行和代码围栏", "Keep unchanged Markdown source, line endings and code fences when editing"),
+        ("文件夹搜索转到后台，临时写盘失败后自动重试", "Search folders in the background and retry temporary save failures"),
+        ("加强协作中新建文件和工作区路径的保护", "Protect concurrent document creation and workspace paths in collaboration"),
+    ]),
+    ("0.1.10", &[
+        ("直接打开 Markdown 和文本文件，也可在目录中新建文件", "Open Markdown and text files directly, and create files in a folder"),
+        ("文件保存和双链索引在后台处理，切换前等待最新修改保存", "Save files and index links in the background; finish saving before switching"),
+        ("加强外部修改检测与 Git 暂存区保护，保留没有标题的文件", "Strengthen external-change and Git staging protection, and preserve files without a heading"),
+        ("协作服务器遇到外部修改时保留两份内容，避免覆盖已有 Git 暂存", "Preserve both sides of external edits and protect existing Git staging in the collaboration server"),
+    ]),
+    ("0.1.9", &[
+        ("文件夹工作区可显示和刷新完整目录树，支持中文路径和内容搜索", "Browse and refresh folder trees with Unicode paths and content search"),
+        ("保护 Markdown 保存：检测外部修改、标题或正文丢失及资源冲突", "Protect Markdown saves against external edits, detected text loss and asset conflicts"),
+        ("保留段首空格、复合格式、双链和相对链接，修复重复标题", "Preserve leading spaces, combined emphasis, wiki and relative links, and avoid duplicate titles"),
+        ("保留有序列表的重新编号和表格列对齐", "Keep ordered-list restarts and table-column alignment"),
+    ]),
     ("0.1.8", &[
         ("没有可用显卡时自动使用 WARP 软件渲染，Windows 安装后也能打开界面", "Fall back to WARP software rendering when no GPU is usable, so the Windows app opens after install"),
         ("新增 Windows MSI 安装包，带应用、协作服务器、模板和 .mdxb 关联", "A Windows MSI installs the app, collaboration server, templates and .mdxb association"),

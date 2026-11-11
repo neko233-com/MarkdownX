@@ -8,8 +8,12 @@ second content system.
 
 Open a subfolder with **File → Open Folder…**. If Git can resolve a parent,
 MarkdownX widens the tree to the repository root (`git rev-parse
---show-toplevel`). Saves are atomic and become one small commit for the touched
-file plus any copied assets.
+--show-toplevel`). Desktop file saves, folder searches and link indexing run in the background. Empty files open with a ready-to-type body. Unchanged source fragments retain their original Markdown syntax and line endings. A save that cannot preserve the edited content or formatting is stopped and offers a recovery copy; external changes are not overwritten.
+The desktop and collaboration server use isolated Git staging for automatic
+commits; if the touched file already has staged changes, the file remains saved
+and the commit is skipped with a warning. A server edit conflicting with an
+external disk change offers both versions for resolution instead of silently
+overwriting the file.
 
 ```text
 studio-repo/
@@ -32,8 +36,8 @@ markdownx-server -addr 0.0.0.0:8877 -root /srv/studio-repo \
   -token "$(openssl rand -hex 32)" -origin https://docs.studio.example
 ```
 
-The browser tree lists every `.md` path, including nested folders and Chinese
-filenames. The desktop tree does the same. Both commit to the current Git
+The browser tree lists nested `.md` paths and Chinese filenames. The desktop
+tree also shows those paths, excluding dot-prefixed entries and generated folders. Both commit to the current Git
 branch, so a code review or `git log` is the audit trail.
 
 ## Branching

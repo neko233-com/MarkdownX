@@ -37,6 +37,26 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 |---|---|
 | ![首页](docs/images/landing.png) | ![阅读器](docs/images/reader.png) |
 
+## 安装发布版
+
+以下命令需要对应 GitHub Release 已发布。当前版本是**测试预发布版**：macOS Apple Silicon DMG 为临时签名，尚未经过 Apple 公证。应用内更新检查只提示正式版，不提示测试预发布版。
+
+Windows x86_64（PowerShell 7，安装到当前用户）：
+
+```powershell
+irm https://github.com/neko233-com/MarkdownX/releases/download/v0.1.13/install.ps1 | iex
+```
+
+macOS arm64（Apple Silicon）：
+
+```sh
+curl -fsSL https://github.com/neko233-com/MarkdownX/releases/download/v0.1.13/install.sh | sh -s -- --allow-unsigned
+```
+
+安装脚本会校验安装包；Windows 会请求应用正常保存并退出，保留文档库及协作服务器数据。macOS 安装到 `~/Applications/MarkdownX.app`，请先关闭正在运行的旧版。未公证测试版首次启动时，macOS 可能阻止打开；确认信任后，可在「系统设置 → 隐私与安全性」中检查提示并允许打开。脚本不会修改 Gatekeeper 设置。离线安装时下载 MSI 或 DMG 与其 `.sha256`，运行 `pwsh -File ./install.ps1 -MsiPath <文件>` 或 `sh ./install.sh --package <文件> --allow-unsigned`；添加 `-DryRun` 或 `--dry-run` 可只检查。Windows Git Bash 可通过 `sh ./install.sh` 调用 PowerShell 7。
+
+发布工作流不会创建或推送标签。人工审核并手动推送版本标签后，在 **Actions → Release** 中选择已有标签，并输入 `PUBLISH vX.Y.Z` 确认；Windows 和 macOS 两个平台构建与校验均通过后才发布测试版。仅推送标签不会触发发布。
+
 ## 快速开始
 
 需要 Rust 1.99.1；Windows 还需要 Visual Studio 2022 的 C++ 生成工具和 Windows SDK。Python 3 只用于示例和本地静态服务器。
@@ -50,14 +70,16 @@ Windows 请在 Visual Studio 开发者命令行里构建，或先调用 `vcvars6
 在当前 Windows 用户下安装构建好的版本（开始菜单/桌面快捷方式、`.mdxb` 文件关联、登录时启动协作服务器）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+pwsh -File scripts/install-windows.ps1
 ```
 
-不需要管理员权限。应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和 Git 工作区在 `%LOCALAPPDATA%\MarkdownX\server`；卸载脚本随应用一起安装并登记到「应用和功能」。重新安装会保留已有服务器令牌。
+不需要管理员权限。优先使用当前构建的 MSI；应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和工作区保留在 `%LOCALAPPDATA%\MarkdownX\server`，并在「应用和功能」中管理。安装脚本不会强制结束运行中的安装版应用或服务器。
 
-也可以构建 per-user MSI：release 构建后运行 `pwsh -File scripts/build-msi.ps1`，安装 `dist\MarkdownX-0.1.8-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.13-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
 
 桌面端默认把文档库放在 `~/Documents/MarkdownX`，可用 `MARKDOWNX_HOME` 改。用 **文件 → 打开文件夹…** 进入 Typora 式目录工作区；用 **文件 → 打包成电子书…**（`⌘⇧E`）把当前目录或当前 Markdown 文件打成一本 `.mdxb`。导出文档库页面及其子页仍用「下载为 → MarkdownX 书 (.mdxb)」。
+
+「文件 → 打开文件…」（Windows 为 `Ctrl+O`）或启动参数可直接编辑 Markdown 和文本文件，并显示所在目录树；侧栏目录名旁的加号可新建 Markdown 文件。文件保存与双链索引在后台进行，切换或关闭前会等待最新修改保存。若同一文件已有 Git 暂存内容，自动提交会跳过并提示，文件保存结果仍保留。
 
 浏览器阅读：直接用托管版 **https://neko233-com.github.io/MarkdownX/web/**，或在本地运行：
 

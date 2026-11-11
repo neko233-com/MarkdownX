@@ -21,6 +21,7 @@ const state = {
   commits: [],
   selected: '',
   pendingRemote: null,
+  resolvingConflict: false,
   composing: false,
 };
 
@@ -129,6 +130,7 @@ async function openDoc(id) {
   state.inFlight = false;
   state.queued = false;
   state.pendingRemote = null;
+  state.resolvingConflict = false;
   $('banner').hidden = true;
   $('editor').value = '';
   $('editor').disabled = true;
@@ -181,6 +183,7 @@ function closeSocket() {
 function handle(msg) {
   switch (msg.type) {
     case 'snapshot':
+      state.resolvingConflict = false;
       state.clientId = msg.client_id;
       state.doc = {id: msg.id, title: msg.title};
       $('editor').disabled = false;
@@ -206,6 +209,10 @@ function handle(msg) {
       loadHistory();
       break;
     case 'update':
+      if (state.resolvingConflict && msg.origin !== state.clientId) {
+        state.pendingRemote = msg;
+        break;
+      }
       if (msg.origin === state.clientId) {
         const editor = $('editor');
         const pendingLocal = editor.value !== state.sent;
@@ -287,6 +294,7 @@ function handle(msg) {
       break;
     case 'conflict':
       state.inFlight = false;
+      state.resolvingConflict = true;
       showConflict(msg);
       break;
     case 'presence':
@@ -297,6 +305,8 @@ function handle(msg) {
       break;
     case 'error':
       state.inFlight = false;
+      state.sent = null;
+      state.dirty = true;
       toast(msg.message || '服务器错误');
       setStatus('保存失败', 'dirty');
       break;
@@ -348,6 +358,8 @@ function showConflict(msg) {
     <button class="ghost small" id="keep-mine">覆盖远端</button>`;
   setStatus('版本冲突', 'dirty');
   $('take-latest').onclick = () => {
+    state.resolvingConflict = false;
+    state.pendingRemote = null;
     state.suppress = true;
     $('editor').value = msg.content || '';
     state.suppress = false;
@@ -359,6 +371,8 @@ function showConflict(msg) {
     updateCount();
   };
   if (canMerge) $('take-merged').onclick = () => {
+    state.resolvingConflict = false;
+    state.pendingRemote = null;
     state.suppress = true;
     $('editor').value = msg.merged;
     state.suppress = false;
@@ -369,6 +383,8 @@ function showConflict(msg) {
     scheduleSave(80);
   };
   $('keep-mine').onclick = () => {
+    state.resolvingConflict = false;
+    state.pendingRemote = null;
     // The reader explicitly chose their text over the server copy. Rebase
     // onto the current revision first so this is a deliberate overwrite, not
     // another stale-base conflict.
@@ -481,6 +497,7 @@ $('new-doc').onclick = async () => {
     const data = await api('/api/docs', {method: 'POST', body: JSON.stringify({title, id: '', folder, template})});
     await loadDocs();
     await openDoc(data.id);
+    if (data.warning) toast('文件已创建，但 Git 提交失败：' + data.warning);
   } catch (err) {
     if (err.message !== 'unauthorized') toast(err.message);
   }

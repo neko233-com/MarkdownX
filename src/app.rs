@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const SAVE_MAX_DELAY: Duration = Duration::from_secs(2);
 
-actions!(workspace, [NewDoc, ImportDoc, OpenFolder, PackageBook, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
+actions!(workspace, [NewDoc, ImportDoc, OpenFolder, OpenFile, PackageBook, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
     HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
 /// The menu bar, in the interface language.
@@ -54,6 +54,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action(tr("导入为文档…", "Import as Document…"), ImportDoc),
                 MenuItem::action(tr("打开文件夹…", "Open Folder…"), OpenFolder),
                 MenuItem::action(tr("打包成电子书…", "Package as E-book…"), PackageBook),
+                MenuItem::action(tr("打开文件…", "Open File…"), OpenFile),
                 MenuItem::separator(),
                 MenuItem::action(tr("关闭窗口", "Close Window"), CloseWindow),
             ],
@@ -94,6 +95,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-shift-i", ImportDoc, None),
         KeyBinding::new("cmd-shift-o", OpenFolder, None),
+        KeyBinding::new("cmd-o", OpenFile, None),
         KeyBinding::new("cmd-shift-e", PackageBook, None),
         KeyBinding::new("cmd-alt-home", GoHome, None),
         KeyBinding::new("cmd-w", CloseWindow, None),
@@ -229,13 +231,25 @@ pub struct Workspace {
     pub current: Option<String>,
     /// A file opened from a folder workspace; `current` stays None then.
     pub file: Option<std::path::PathBuf>,
+    /// Bytes last read or saved, used to detect changes made by another app.
+    file_snapshot: Option<String>,
+    file_source: Option<crate::markdown_source::Source>,
+    /// File saves run off the UI thread; revisions keep edits made during a save.
+    file_saving: bool,
+    file_revision: u64,
+    window_handle: AnyWindowHandle,
     pub folder: Option<crate::workspace_fs::WorkspaceDir>,
     pub folder_query: Entity<TextField>,
     pub folder_content: bool,
     pub folder_hits: Vec<crate::workspace_fs::Hit>,
+    pub folder_searching: bool,
+    folder_search_generation: u64,
+    folder_search_task: Option<Task<()>>,
     pub folder_expanded: HashSet<std::path::PathBuf>,
     /// `[[wiki links]]` across the open folder, used for the backlink panel.
     pub folder_links: fdl_core::wiki::Index,
+    folder_links_generation: u64,
+    folder_links_loading: bool,
     /// English chapter bodies from the last imported `.mdxb`, if any.
     pub book_english: Vec<Option<String>>,
     /// Root page id those bodies belong to; prevents leaking into other books.
@@ -371,7 +385,7 @@ impl Workspace {
             // The system switched between light and dark (or the app's own look changed).
             cx.observe_window_appearance(window, |this, _, cx| if crate::settings::sync_dark(cx) { crate::settings::refresh_all(this, cx); }),
             cx.observe_window_activation(window, |this, window, cx| {
-                if window.is_window_active() { if let Some(id) = &this.current { crate::quick_note::used(id, cx); } this.entries = this.store.list(); this.sort(); crate::update::check_if_stale(cx); cx.notify(); }
+                if window.is_window_active() { if let Some(id) = &this.current { crate::quick_note::used(id, cx); } this.entries = this.store.list(); this.sort(); this.refresh_folder(cx); crate::update::check_if_stale(cx); cx.notify(); }
                 else { this.cancel_shortcut_recording(cx); this.flush(cx); }
             }),
             cx.subscribe_in(&search, window, |this, _, ev: &TextFieldEvent, window, cx| {
@@ -448,12 +462,22 @@ impl Workspace {
             entries,
             current: None,
             file: None,
+            file_snapshot: None,
+            file_source: None,
+            file_saving: false,
+            file_revision: 0,
+            window_handle: window.window_handle(),
             folder: None,
             folder_query,
             folder_content: false,
             folder_hits: vec![],
+            folder_searching: false,
+            folder_search_generation: 0,
+            folder_search_task: None,
             folder_expanded: HashSet::new(),
             folder_links: fdl_core::wiki::Index::default(),
+            folder_links_generation: 0,
+            folder_links_loading: false,
             book_english: Vec::new(),
             book_english_id: None,
             annotations: fdl_core::annotations::AnnotationStore::new(""),
@@ -539,28 +563,147 @@ impl Workspace {
         self.try_open(id, window, cx);
     }
 
+    /// Open an existing Markdown file in place, with its folder tree visible.
+    pub fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menus();
+        let picked = crate::devtools::take_pick();
+        let prompt = picked.is_none().then(|| cx.prompt_for_paths(PathPromptOptions {
+            files: true, directories: false, multiple: false,
+            prompt: Some(crate::settings::tr("打开文件", "Open file").into()),
+            extensions: Some(["md", "markdown", "mark", "txt", "mdxb"].into_iter().map(SharedString::from).collect()),
+        }));
+        cx.spawn_in(window, async move |this, cx| {
+            let paths = match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked };
+            let Some(path) = paths.and_then(|p| p.into_iter().next()) else { return };
+            let _ = this.update_in(cx, |w, window, cx| w.open_external_path(path, window, cx));
+        }).detach();
+    }
+
+    pub fn open_external_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let path = if path.is_absolute() { path } else { std::env::current_dir().unwrap_or_default().join(path) };
+        if crate::workspace_fs::DocKind::of(&path) == Some(crate::workspace_fs::DocKind::Book) {
+            self.open_book_path(path, window, cx);
+            return;
+        }
+        if crate::workspace_fs::DocKind::of(&path) != Some(crate::workspace_fs::DocKind::Markdown) || !path.is_file() {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("请选择 Markdown 或文本文件", "Choose a Markdown or text file"), cx);
+            return;
+        }
+        let retry = path.clone();
+        if self.save_before(cx, move |w, window, cx| w.open_external_path_now(retry, window, cx)) {
+            self.open_external_path_now(path, window, cx);
+        }
+    }
+
+    fn open_external_path_now(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let canonical = path.canonicalize().ok();
+        let existing = self.folder.as_ref().and_then(|folder| folder.files().into_iter().find(|node|
+            node.path == path || canonical.as_ref().is_some_and(|p| node.path.canonicalize().ok().as_ref() == Some(p))
+        ).map(|node| node.path.clone()));
+        let path = if let Some(existing) = existing { existing } else {
+            let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) else { return };
+            let root = crate::git_workspace::repo_root(parent).unwrap_or_else(|| parent.to_path_buf());
+            let dir = match crate::workspace_fs::WorkspaceDir::scan(root) {
+                Ok(dir) => dir,
+                Err(e) => { self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法打开文件夹：{}", "Could not open folder: {}", e), cx); return; }
+            };
+            let Some(found) = dir.files().into_iter().find(|node|
+                node.path == path || canonical.as_ref().is_some_and(|p| node.path.canonicalize().ok().as_ref() == Some(p))
+            ).map(|node| node.path.clone()) else {
+                self.show_toast_kind(ToastKind::Error, crate::settings::tr("文件不在可显示的目录中", "The file is not in a visible folder"), cx);
+                return;
+            };
+            self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
+            self.folder_search_task = None;
+            self.folder_searching = false;
+            self.folder = Some(dir);
+            self.folder_expanded.clear();
+            self.folder_hits.clear();
+            self.folder_query.update(cx, |q, cx| q.set_text("", cx));
+            self.refresh_folder_links(cx);
+            self.sidebar_open = true;
+            found
+        };
+        if let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) {
+            let mut parent = path.parent();
+            while let Some(dir) = parent {
+                if dir == root || !dir.starts_with(&root) { break; }
+                self.folder_expanded.insert(dir.to_path_buf());
+                parent = dir.parent();
+            }
+        }
+        self.load_file(path, window, cx);
+    }
+
+    /// Create a new file without ever replacing an existing one.
+    pub fn new_folder_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) else { return };
+        let picked = crate::devtools::take_pick().and_then(|p| p.into_iter().next());
+        let prompt = picked.is_none().then(|| cx.prompt_for_new_path(&root, Some("Untitled.md")));
+        cx.spawn_in(window, async move |this, cx| {
+            let path = match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked };
+            let Some(mut path) = path else { return };
+            if path.extension().is_none() { path.set_extension("md"); }
+            let _ = this.update_in(cx, |w, window, cx| {
+                let retry = path.clone();
+                if w.save_before(cx, move |w, window, cx| w.new_folder_file_now(retry, window, cx)) {
+                    w.new_folder_file_now(path, window, cx);
+                }
+            });
+        }).detach();
+    }
+
+    fn new_folder_file_now(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let allowed = self.folder.as_ref().and_then(|f| f.root.canonicalize().ok()).zip(path.parent().and_then(|p| p.canonicalize().ok()))
+            .is_some_and(|(root, parent)| parent.starts_with(root));
+        if !allowed || crate::workspace_fs::DocKind::of(&path) != Some(crate::workspace_fs::DocKind::Markdown) {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("请选择当前文件夹中的 Markdown 文件名", "Choose a Markdown filename inside the current folder"), cx);
+            return;
+        }
+        if let Err(e) = std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法新建文件：{}", "Could not create file: {}", e), cx);
+            return;
+        }
+        self.refresh_folder(cx);
+        self.open_external_path_now(path, window, cx);
+    }
+
     /// Pick a normal folder (Typora's 打开文件夹) and show its tree.
     pub fn open_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menus();
-        let prompt = cx.prompt_for_paths(PathPromptOptions {
+        let picked = crate::devtools::take_pick();
+        let prompt = picked.is_none().then(|| cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
             prompt: Some(crate::settings::text("打开文件夹").into()),
             extensions: None,
-        });
+        }));
         cx.spawn_in(window, async move |this, cx| {
-            let Some(path) = prompt.await.ok().and_then(Result::ok).flatten().and_then(|p| p.into_iter().next()) else { return };
+            let paths = match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked };
+            let Some(path) = paths.and_then(|p| p.into_iter().next()) else { return };
             let _ = this.update_in(cx, |w, window, cx| w.open_folder_path(path, window, cx));
         })
         .detach();
     }
 
-    pub fn open_folder_path(&mut self, path: std::path::PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
-        self.save_before(cx, move |w, window, cx| w.open_folder_path_now(path, window, cx));
+    pub fn open_folder_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_folder_with_selection(path, true, window, cx);
     }
 
-    fn open_folder_path_now(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    /// Startup can show the tree without opening an arbitrary first document.
+    pub fn open_folder_tree_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_folder_with_selection(path, false, window, cx);
+    }
+
+    fn open_folder_with_selection(&mut self, path: std::path::PathBuf, select_first: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let retry = path.clone();
+        if self.save_before(cx, move |w, window, cx| w.open_folder_path_now(retry, select_first, window, cx)) {
+            self.open_folder_path_now(path, select_first, window, cx);
+        }
+    }
+
+    fn open_folder_path_now(&mut self, path: std::path::PathBuf, select_first: bool, window: &mut Window, cx: &mut Context<Self>) {
         // A team's workspace is the Git repository, not whatever nested
         // folder happened to be picked in the dialog.
         let path = crate::git_workspace::repo_root(&path).unwrap_or(path);
@@ -571,78 +714,140 @@ impl Workspace {
                 return;
             }
         };
-        let first = dir.files().first().map(|f| f.path.clone());
+        let first = select_first.then(|| dir.files().first().map(|f| f.path.clone())).flatten();
+        let mut expanded = HashSet::new();
+        let mut parent = first.as_deref().and_then(std::path::Path::parent);
+        while let Some(path) = parent {
+            if path == dir.root { break; }
+            if !path.starts_with(&dir.root) { break; }
+            expanded.insert(path.to_path_buf());
+            parent = path.parent();
+        }
+        self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
+        self.folder_search_task = None;
+        self.folder_searching = false;
         self.folder = Some(dir);
-        self.refresh_folder_links();
-        self.folder_expanded = self
-            .folder
-            .as_ref()
-            .map(|f| {
-                let mut out = HashSet::new();
-                fn walk(nodes: &[crate::workspace_fs::FileNode], out: &mut HashSet<std::path::PathBuf>) {
-                    for n in nodes {
-                        if n.dir {
-                            out.insert(n.path.clone());
-                            walk(&n.children, out);
-                        }
-                    }
-                }
-                walk(&f.children, &mut out);
-                out
-            })
-            .unwrap_or_default();
+        self.refresh_folder_links(cx);
+        self.folder_expanded = expanded;
         self.folder_hits.clear();
         self.folder_query.update(cx, |q, cx| q.set_text("", cx));
+        self.sidebar_open = true;
+        self.list_scroll.set_offset(point(px(0.), px(0.)));
         self.current = None;
         self.file = None;
+        self.file_snapshot = None;
+        self.file_source = None;
         self.editor = None;
         self.view = View::Home;
         if let Some(path) = first {
             self.load_file(path, window, cx);
         }
+        self.show_folder_warnings(cx);
         cx.notify();
     }
 
     /// Close the folder tree and go back to the document library.
-    pub fn close_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.save_before(cx, |w, _, cx| {
-            w.folder = None;
-            w.folder_hits.clear();
-            w.folder_links = fdl_core::wiki::Index::default();
-            w.folder_query.update(cx, |q, cx| q.set_text("", cx));
-            w.file = None;
-            w.current = None;
-            w.editor = None;
-            w.show_view(View::Home, cx);
-        }) {
-            return;
+    pub fn close_folder(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.save_before(cx, |w, _, cx| w.close_folder_now(cx)) {
+            self.close_folder_now(cx);
         }
-        let _ = window;
+    }
+
+    fn close_folder_now(&mut self, cx: &mut Context<Self>) {
+        self.folder = None;
+        self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
+        self.folder_search_task = None;
+        self.folder_searching = false;
+        self.folder_links_generation = self.folder_links_generation.wrapping_add(1);
+        self.folder_links_loading = false;
+        self.folder_hits.clear();
+        self.folder_links = fdl_core::wiki::Index::default();
+        self.folder_query.update(cx, |q, cx| q.set_text("", cx));
+        self.file = None;
+        self.file_snapshot = None;
+        self.file_source = None;
+        self.current = None;
+        self.editor = None;
+        self.show_view(View::Home, cx);
     }
 
     pub fn refresh_folder_hits(&mut self, cx: &mut Context<Self>) {
+        self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
+        let generation = self.folder_search_generation;
         let query = self.folder_query.read(cx).text.clone();
-        self.folder_hits = self.folder.as_ref().map(|f| f.search(&query, self.folder_content)).unwrap_or_default();
+        self.folder_hits.clear();
+        self.folder_search_task = None;
+        let Some(folder) = self.folder.clone().filter(|_| !query.trim().is_empty()) else {
+            self.folder_searching = false;
+            cx.notify();
+            return;
+        };
+        let content = self.folder_content;
+        self.folder_searching = true;
+        self.folder_search_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            let task = cx.background_executor().spawn(async move { folder.search(&query, content) });
+            let hits = task.await;
+            let _ = this.update(cx, |w, cx| if w.folder_search_generation == generation {
+                w.folder_hits = hits;
+                w.folder_searching = false;
+                cx.notify();
+            });
+        }));
         cx.notify();
+    }
+
+    /// Re-scan without replacing the open editor or losing expanded folders.
+    pub fn refresh_folder(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) else { return };
+        match crate::workspace_fs::WorkspaceDir::scan(root) {
+            Ok(folder) => {
+                let mut pending: Vec<_> = folder.children.iter().collect();
+                let mut dirs = HashSet::new();
+                while let Some(node) = pending.pop() {
+                    if node.dir { dirs.insert(node.path.clone()); pending.extend(&node.children); }
+                }
+                self.folder_expanded.retain(|path| dirs.contains(path));
+                self.folder = Some(folder);
+                self.refresh_folder_links(cx);
+                self.refresh_folder_hits(cx);
+                self.show_folder_warnings(cx);
+            }
+            Err(e) => self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法刷新文件夹：{}", "Could not refresh folder: {}", crate::settings::diagnostic(&e.to_string())), cx),
+        }
+    }
+
+    fn show_folder_warnings(&mut self, cx: &mut Context<Self>) {
+        let warning = self.folder.as_ref().and_then(|f| f.warnings.first().map(|(path, error)| (f.warnings.len(), path.display().to_string(), error.clone())));
+        if let Some((count, path, error)) = warning {
+            self.show_toast_kind(ToastKind::Error, &crate::localized_format!("有 {} 处无法读取：{}（{}）", "Could not read {} location(s): {} ({})", count, path, error), cx);
+        }
     }
 
     /// Rebuild the folder-level `[[wiki]]` index. It reads Markdown only; a
     /// `.mdxb` book is a build artifact and keeps its links inside its chapters.
-    pub fn refresh_folder_links(&mut self) {
+    pub fn refresh_folder_links(&mut self, cx: &mut Context<Self>) {
+        self.folder_links_generation = self.folder_links_generation.wrapping_add(1);
+        let generation = self.folder_links_generation;
         let Some(folder) = self.folder.as_ref() else {
             self.folder_links = fdl_core::wiki::Index::default();
+            self.folder_links_loading = false;
             return;
         };
-        let mut files = vec![];
-        for node in folder.files() {
-            if crate::workspace_fs::DocKind::of(&node.path) != Some(crate::workspace_fs::DocKind::Markdown) {
-                continue;
-            }
-            if let Ok(text) = std::fs::read_to_string(&node.path) {
-                files.push((node.path.clone(), text));
-            }
-        }
-        self.folder_links = fdl_core::wiki::Index::build(files);
+        let paths: Vec<_> = folder.files().into_iter().filter(|n| crate::workspace_fs::DocKind::of(&n.path) == Some(crate::workspace_fs::DocKind::Markdown)).map(|n| n.path.clone()).collect();
+        self.folder_links_loading = true;
+        let task = cx.background_executor().spawn(async move {
+            let files = paths.into_iter().filter_map(|p| std::fs::read_to_string(&p).ok().map(|text| (p, text))).collect::<Vec<_>>();
+            fdl_core::wiki::Index::build(files)
+        });
+        cx.spawn(async move |this, cx| {
+            let index = task.await;
+            let _ = this.update(cx, |w, cx| if w.folder_links_generation == generation {
+                w.folder_links = index;
+                w.folder_links_loading = false;
+                cx.notify();
+            });
+        }).detach();
     }
 
     /// Follow a `[[wiki]]` link from the current folder note.
@@ -654,12 +859,20 @@ impl Workspace {
         if let Some(path) = path {
             self.load_file(path, window, cx);
         } else {
-            self.show_toast_kind(ToastKind::Error, crate::settings::text("找不到双链目标"), cx);
+            self.show_toast_kind(ToastKind::Error, if self.folder_links_loading { crate::settings::tr("正在更新双链索引", "Updating link index") } else { crate::settings::text("找不到双链目标") }, cx);
         }
     }
 
-    pub(crate) fn load_file(&mut self, path: std::path::PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
-        self.save_before(cx, move |w, window, cx| w.open_file_path(path, window, cx));
+    pub(crate) fn load_file(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.file.as_ref() == Some(&path) && self.editor.is_some() {
+            self.view = View::Doc;
+            cx.notify();
+            return;
+        }
+        let retry = path.clone();
+        if self.save_before(cx, move |w, window, cx| w.open_file_path(retry, window, cx)) {
+            self.open_file_path(path, window, cx);
+        }
     }
 
     /// Open one file from the folder tree. Markdown is edited in place;
@@ -669,6 +882,8 @@ impl Workspace {
             Some(crate::workspace_fs::DocKind::Book) => {
                 if let Ok(id) = self.import_book(&path) {
                     self.file = None;
+                    self.file_snapshot = None;
+                    self.file_source = None;
                     self.open(&id, window, cx);
                 } else {
                     self.show_toast_kind(ToastKind::Error, crate::settings::text("无法打开这本书"), cx);
@@ -682,7 +897,8 @@ impl Workspace {
                         return;
                     }
                 };
-                let (doc, modified) = parse_markdown_file(&path, &text);
+                let (doc, source) = crate::markdown_source::parse(&path, &text);
+                let modified = file_modified(&path);
                 let editor = cx.new(|cx| {
                     let mut e = Editor::new(doc, modified, crate::store::PageWidth::default(), window, cx);
                     e.cat_pinned = true;
@@ -692,6 +908,8 @@ impl Workspace {
                 self.editor = Some(editor);
                 self.current = None;
                 self.file = Some(path);
+                self.file_snapshot = Some(text);
+                self.file_source = Some(source);
                 self.view = View::Doc;
                 self.status = SaveStatus::Idle;
                 self.doc_menu = false;
@@ -709,6 +927,7 @@ impl Workspace {
                 // 阅读模式 put the document back: nothing to save.
                 let rejected = this.editor.clone().is_some_and(|ed| ed.update(cx, |e, cx| e.reject_read_only_edit(cx)));
                 if !rejected {
+                    this.file_revision = this.file_revision.wrapping_add(1);
                     this.sync_document(window, cx);
                     this.schedule_save(window, cx);
                 }
@@ -803,6 +1022,8 @@ impl Workspace {
         self.editor = Some(editor);
         self.current = Some(id.to_string());
         self.file = None;
+        self.file_snapshot = None;
+        self.file_source = None;
         crate::quick_note::used(id, cx);
         self.reveal_in_tree(id);
         self.sync_sub_pages(cx);
@@ -1128,44 +1349,30 @@ impl Workspace {
         }
         let (Some(id), Some(ed)) = (self.current.clone(), self.editor.clone()) else {
             if let (Some(path), Some(ed)) = (self.file.clone(), self.editor.clone()) {
-                let doc = &ed.read(cx).core.doc;
-                let opts = crate::markdown::Options { library_root: path.parent(), assets: Some("assets"), ..Default::default() };
-                let export = crate::markdown::export(doc, &opts);
-                let title = doc.title.text.trim().replace('\n', " ");
-                let text = if title.is_empty() { export.text.clone() } else { format!("# {title}\n\n{}", export.text) };
-                let ok = crate::workspace_fs::write_atomic(&path, text.as_bytes()).is_ok();
-                if ok {
-                    let mut touched = vec![path.clone()];
-                    if let Some(parent) = path.parent() {
-                        for (from, rel) in &export.files {
-                            let to = parent.join(rel);
-                            if let Some(dir) = to.parent() {
-                                let _ = std::fs::create_dir_all(dir);
-                            }
-                            if std::fs::copy(from, to.clone()).is_ok() {
-                                touched.push(to);
-                            }
-                        }
-                    }
-                    if let Some(root) = crate::git_workspace::repo_root(&path) {
-                        let message = format!("edit: {}", crate::git_workspace::relative(&root, &path));
-                        if let Err(e) = crate::git_workspace::commit_paths(&root, &touched, &message) {
-                            log::warn!("git autosave failed: {e:#}");
-                        }
-                    }
-                    ed.update(cx, |e, cx| {
-                        e.modified = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or_else(crate::time::now);
-                        cx.notify();
+                if self.file_saving { return false; }
+                let Some(snapshot) = self.file_snapshot.clone() else {
+                    self.status = SaveStatus::Failed(crate::settings::tr("缺少文件快照，请另存副本", "File snapshot is missing; save a copy").to_string());
+                    return false;
+                };
+                let Some(source) = self.file_source.clone() else {
+                    self.status = SaveStatus::Failed(crate::settings::tr("缺少文件来源，请另存副本", "File source is missing; save a copy").to_string());
+                    return false;
+                };
+                let doc = ed.read(cx).core.doc.clone();
+                let revision = self.file_revision;
+                self.file_saving = true;
+                self.status = SaveStatus::Saving;
+                let saving_path = path.clone();
+                let task = cx.background_executor().spawn(async move { save_folder_document(&saving_path, &snapshot, &doc, &source) });
+                let handle = self.window_handle;
+                cx.spawn(async move |this, cx| {
+                    let result = task.await;
+                    let _ = handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |w, cx| w.finish_folder_save(path, revision, result, window, cx));
                     });
-                    self.status = SaveStatus::Saved;
-                    self.unsaved = false;
-                    self.refresh_folder_links();
-                } else {
-                    self.status = SaveStatus::Failed(crate::localized_format!("保存失败：{}", "Could not save: {}", crate::settings::diagnostic(&path.display().to_string())));
-                }
-                self.dirty_since = self.unsaved.then(Instant::now);
+                }).detach();
                 cx.notify();
-                return !self.unsaved;
+                return false;
             }
             self.unsaved = false;
             return true;
@@ -1199,6 +1406,50 @@ impl Workspace {
         !self.unsaved
     }
 
+    fn finish_folder_save(&mut self, path: std::path::PathBuf, revision: u64, result: Result<FolderSaveOutcome, crate::workspace_fs::SaveFileError>, window: &mut Window, cx: &mut Context<Self>) {
+        self.file_saving = false;
+        if self.file.as_ref() != Some(&path) { return; }
+        match result {
+            Ok(outcome) => {
+                self.file_snapshot = Some(outcome.text);
+                self.file_source = Some(outcome.source);
+                if let Some(ed) = &self.editor { ed.update(cx, |e, cx| { e.modified = outcome.modified; cx.notify(); }); }
+                self.unsaved = revision != self.file_revision;
+                self.status = if self.unsaved { SaveStatus::Saving } else { SaveStatus::Saved };
+                self.dirty_since = self.unsaved.then(Instant::now);
+                if let Some(error) = outcome.git_warning {
+                    self.show_toast_kind(ToastKind::Error, &crate::localized_format!("文件已保存，Git 自动提交未完成：{}", "File saved; Git auto-commit did not complete: {}", error), cx);
+                }
+                self.refresh_folder_links(cx);
+                if self.unsaved {
+                    if self.after_save.is_some() { self.flush(cx); } else { self.schedule_save(window, cx); }
+                } else if let Some(then) = self.after_save.take() {
+                    then(self, window, cx);
+                }
+            }
+            Err(reason) => {
+                let retry_io = matches!(&reason, crate::workspace_fs::SaveFileError::Io(_));
+                let error = match reason {
+                    crate::workspace_fs::SaveFileError::Changed => crate::settings::tr("文件已被其他程序修改，请重新载入或另存副本", "The file changed outside MarkdownX; reload it or save a copy").to_string(),
+                    crate::workspace_fs::SaveFileError::Lossy => crate::settings::tr("Markdown 内容或格式无法完整保留，请另存副本", "Markdown content or formatting cannot be preserved; save a copy").to_string(),
+                    crate::workspace_fs::SaveFileError::AssetConflict(path) => crate::localized_format!("已有内容不同的同名资源：{}", "An asset with the same name has different content: {}", path.display()),
+                    crate::workspace_fs::SaveFileError::MissingAssets(n) => crate::localized_format!("有 {} 个资源无法导出，请另存副本", "{} asset(s) could not be exported; save a copy", n),
+                    crate::workspace_fs::SaveFileError::Io(e) => crate::localized_format!("保存失败：{}（{}）", "Could not save: {} ({})", path.display(), e),
+                };
+                self.status = SaveStatus::Failed(error);
+                self.dirty_since = Some(Instant::now());
+                if self.after_save.is_some() { self.confirm = Some(Confirm::SaveFailed); }
+                else if retry_io {
+                    self.save_task = Some(cx.spawn_in(window, async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_secs(10)).await;
+                        let _ = this.update(cx, |w, cx| { if w.unsaved && w.file.as_ref() == Some(&path) && !w.file_saving && w.after_save.is_none() { w.flush(cx); } });
+                    }));
+                }
+            }
+        }
+        cx.notify();
+    }
+
     /// Save the open document before something replaces it. When the save
     /// fails nothing is replaced: the 保存失败 dialog offers 重试 / 放弃修改
     /// and runs `then` after either.
@@ -1207,7 +1458,7 @@ impl Workspace {
             return true;
         }
         self.after_save = Some(Box::new(then));
-        self.confirm = Some(Confirm::SaveFailed);
+        if !self.file_saving { self.confirm = Some(Confirm::SaveFailed); }
         cx.notify();
         false
     }
@@ -1217,20 +1468,31 @@ impl Workspace {
     /// document no longer needs saving.
     pub(crate) fn resolve_save_failed(&mut self, retry: bool, window: &mut Window, cx: &mut Context<Self>) {
         if retry {
+            self.confirm = None;
             if !self.flush(cx) {
-                self.confirm = Some(Confirm::SaveFailed);
+                if !self.file_saving { self.confirm = Some(Confirm::SaveFailed); }
                 return;
             }
         } else {
             if let Some(path) = self.file.clone() {
-                if let Ok(text) = std::fs::read_to_string(&path) {
-                    let (doc, _) = parse_markdown_file(&path, &text);
-                    if let Some(ed) = &self.editor {
-                        ed.update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc), cx));
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        let (doc, source) = crate::markdown_source::parse(&path, &text);
+                        if let Some(ed) = &self.editor {
+                            ed.update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc), cx));
+                        }
+                        self.file_snapshot = Some(text);
+                        self.file_source = Some(source);
+                        self.unsaved = false;
+                        self.status = SaveStatus::Idle;
+                        self.dirty_since = None;
                     }
-                    self.unsaved = false;
-                    self.status = SaveStatus::Idle;
-                    self.dirty_since = None;
+                    Err(e) => {
+                        self.status = SaveStatus::Failed(crate::localized_format!("无法重新载入：{}（{}）", "Could not reload: {} ({})", path.display(), e));
+                        self.confirm = Some(Confirm::SaveFailed);
+                        cx.notify();
+                        return;
+                    }
                 }
                 if let Some(then) = self.after_save.take() {
                     then(self, window, cx);
@@ -1274,7 +1536,17 @@ impl Workspace {
                 self.entries = self.store.list();
                 self.sort();
                 self.confirm = None;
-                self.resolve_save_failed(false, window, cx);
+                if self.file.as_ref().is_some_and(|path| std::fs::read_to_string(path).is_err()) {
+                    // The recovery copy is safe even if the original vanished.
+                    self.unsaved = false;
+                    self.file_snapshot = None;
+                    self.file_source = None;
+                    self.status = SaveStatus::Idle;
+                    self.dirty_since = None;
+                    if let Some(then) = self.after_save.take() { then(self, window, cx); }
+                } else {
+                    self.resolve_save_failed(false, window, cx);
+                }
             }
             Err(e) => {
                 self.status = SaveStatus::Failed(e.to_string());
@@ -1568,22 +1840,32 @@ impl Workspace {
     }
 }
 
-/// Read a Markdown file as the document model; a leading `# title` becomes
-/// the page title, everything else stays as blocks.
+struct FolderSaveOutcome { text: String, source: crate::markdown_source::Source, modified: u64, git_warning: Option<String> }
+
+fn save_folder_document(path: &std::path::Path, snapshot: &str, doc: &crate::model::Document, source: &crate::markdown_source::Source) -> Result<FolderSaveOutcome, crate::workspace_fs::SaveFileError> {
+    #[cfg(feature = "devtools")]
+    if let Some(ms) = std::env::var("MARKDOWNX_TEST_SAVE_DELAY_MS").ok().and_then(|s| s.parse::<u64>().ok()) {
+        std::thread::sleep(Duration::from_millis(ms.min(10_000)));
+    }
+    if !source.matches(snapshot) { return Err(crate::workspace_fs::SaveFileError::Changed); }
+    let rendered = crate::markdown_source::render(path, source, doc)?;
+    let copied = crate::workspace_fs::write_export_if_unchanged(path, snapshot.as_bytes(), rendered.text.as_bytes(), &rendered.files)?;
+    let mut touched = vec![path.to_path_buf()];
+    touched.extend(copied);
+    let git_warning = crate::git_workspace::repo_root(path).and_then(|root| {
+        let message = format!("edit: {}", crate::git_workspace::relative(&root, path));
+        crate::git_workspace::commit_paths(&root, &touched, &message).err().map(|e| e.to_string())
+    });
+    Ok(FolderSaveOutcome { text: rendered.text, source: rendered.source, modified: file_modified(path), git_warning })
+}
+
+fn file_modified(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or_else(crate::time::now)
+}
+
+/// Read a Markdown file as the document model; its original source is retained for safe saves.
 pub(crate) fn parse_markdown_file(path: &std::path::Path, text: &str) -> (crate::model::Document, u64) {
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(crate::model::UNTITLED).to_string();
-    let mut blocks = crate::paste::markdown_to_blocks(text, crate::paste::Off { file: true, ..Default::default() });
-    let title = match blocks.first() {
-        Some(b) if matches!(&b.kind, crate::model::BlockKind::Heading { level: 1, .. }) => {
-            let title = b.text.text.clone();
-            blocks.remove(0);
-            if title.trim().is_empty() { stem } else { title }
-        }
-        _ => stem,
-    };
-    let doc = crate::model::Document { title: crate::model::RichText::plain(title), icon: None, cover: None, blocks };
-    let modified = std::fs::metadata(path).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or_else(crate::time::now);
-    (doc, modified)
+    (crate::markdown_source::parse(path, text).0, file_modified(path))
 }
 
 /// Header and action group share an 8px top/right inset.
@@ -1680,6 +1962,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|w, _: &NewDoc, window, cx| w.new_doc(window, cx)))
             .on_action(cx.listener(|w, _: &ImportDoc, window, cx| w.open_import(window, cx)))
             .on_action(cx.listener(|w, _: &OpenFolder, window, cx| w.open_folder(window, cx)))
+            .on_action(cx.listener(|w, _: &OpenFile, window, cx| w.open_file(window, cx)))
             .on_action(cx.listener(|w, _: &PackageBook, window, cx| w.package_book(window, cx)))
             .on_action(cx.listener(|w, _: &ToggleSidebar, _, cx| {
                 w.sidebar_open = !w.sidebar_open;
@@ -1839,9 +2122,180 @@ pub(crate) fn check_save_safety(phase: &str, cx: &mut App) {
     }
 }
 
+/// Check the live folder view without writing to the opened workspace.
+#[cfg(feature = "devtools")]
+pub(crate) fn check_folder_state(root: &str, cx: &mut App) {
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, _, _| {
+        let folder = ws.folder.as_ref().expect("folder was not opened");
+        assert_eq!(folder.root.canonicalize().unwrap(), std::path::Path::new(root).canonicalize().unwrap());
+        assert!(ws.sidebar_open, "the directory tree is hidden");
+        assert!(!folder.children.is_empty());
+        assert!(ws.file.as_ref().is_some_and(|file| folder.files().iter().any(|node| node.path == *file)));
+        assert!(folder.warnings.is_empty(), "workspace scan had warnings");
+        eprintln!("folder-state: PASS; {} root entries, {} supported files", folder.children.len(), folder.files().len());
+    }).unwrap();
+}
+
+/// Exercise switching, refresh and conflict recovery in a marked temporary folder.
+#[cfg(feature = "devtools")]
+pub(crate) fn check_folder_safety(args: &str, cx: &mut App) {
+    use crate::model::{Document, RichText};
+    let (phase, root) = args.split_once(' ').expect("phase and temporary folder");
+    let root = std::path::PathBuf::from(root);
+    assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(root.join(".markdownx-folder-test").is_file());
+    assert!(crate::git_workspace::repo_root(&root).is_none(), "the test fixture must not be inside a Git repository");
+    let first = root.join("A/first.md");
+    let second = root.join("B/second.md");
+    let doc = |title: &str| Document { title: RichText::plain(title), ..Default::default() };
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, window, cx| {
+        match phase {
+            "begin" => {
+                std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+                std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+                std::fs::create_dir_all(root.join("empty")).unwrap();
+                std::fs::write(&first, "# First\r\n\r\nfirst\r\n").unwrap();
+                std::fs::write(&second, "# Second\r\n\r\nsecond\r\n").unwrap();
+                ws.open_folder_path(root.clone(), window, cx);
+                assert!(ws.sidebar_open && ws.folder.is_some());
+                assert_eq!(ws.file.as_deref(), Some(first.as_path()));
+                ws.open_external_path(second.clone(), window, cx);
+                assert_eq!(ws.file.as_deref(), Some(second.as_path()));
+                let editor = ws.editor.as_ref().unwrap().clone();
+                ws.load_file(second.clone(), window, cx);
+                assert_eq!(ws.editor.as_ref().unwrap().entity_id(), editor.entity_id());
+                editor.update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc("Saved")), cx));
+                ws.file_revision += 1;
+                ws.unsaved = true;
+                assert!(!ws.flush(cx) && ws.file_saving);
+                editor.update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc("Latest")), cx));
+                ws.file_revision += 1;
+                ws.load_file(first.clone(), window, cx);
+                assert!(ws.file_saving && ws.after_save.is_some() && ws.confirm.is_none());
+                assert_eq!(ws.file.as_deref(), Some(second.as_path()));
+            }
+            "conflict" => {
+                assert!(!ws.unsaved && !ws.file_saving);
+                assert_eq!(ws.file.as_deref(), Some(first.as_path()));
+                assert!(std::fs::read(&second).unwrap().starts_with(b"# Latest\r\n"));
+                ws.load_file(second.clone(), window, cx);
+                ws.editor.as_ref().unwrap().update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc("Local")), cx));
+                ws.file_revision += 1;
+                ws.unsaved = true;
+                std::fs::write(&second, "# External\r\n").unwrap();
+                ws.load_file(first.clone(), window, cx);
+                assert!(ws.file_saving && ws.confirm.is_none());
+            }
+            "recover" => {
+                assert!(ws.unsaved && !ws.file_saving && matches!(ws.confirm, Some(Confirm::SaveFailed)));
+                assert_eq!(std::fs::read_to_string(&second).unwrap(), "# External\r\n");
+                ws.confirm = None;
+                ws.resolve_save_failed(false, window, cx);
+                assert_eq!(ws.file.as_deref(), Some(first.as_path()));
+                ws.load_file(second.clone(), window, cx);
+                ws.editor.as_ref().unwrap().update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc("Recovery")), cx));
+                ws.file_revision += 1;
+                ws.unsaved = true;
+                std::fs::remove_file(&second).unwrap();
+                ws.load_file(first.clone(), window, cx);
+            }
+            "finish" => {
+                assert!(ws.unsaved && !ws.file_saving && matches!(ws.confirm, Some(Confirm::SaveFailed)));
+                ws.confirm = None;
+                ws.resolve_save_failed(false, window, cx);
+                assert!(ws.unsaved && matches!(ws.confirm, Some(Confirm::SaveFailed)));
+                ws.save_failed_copy(window, cx);
+                assert!(!ws.unsaved && ws.store.list().iter().any(|entry| entry.title.starts_with("Recovery")));
+                assert_eq!(ws.file.as_deref(), Some(first.as_path()));
+                let new_file = root.join("C/new.md");
+                std::fs::create_dir_all(new_file.parent().unwrap()).unwrap();
+                std::fs::write(&new_file, "# New\n").unwrap();
+                ws.refresh_folder(cx);
+                assert!(ws.folder.as_ref().unwrap().files().iter().any(|node| node.path == new_file));
+                ws.close_folder(window, cx);
+                ws.open_folder_tree_path(root.clone(), window, cx);
+                assert!(ws.sidebar_open && ws.folder.is_some() && ws.file.is_none() && ws.editor.is_none());
+                ws.close_folder(window, cx);
+                eprintln!("folder-safety: background save, concurrent edit, switching, conflict and recovery checked");
+            }
+            "empty-begin" => {
+                let editor = ws.editor.as_ref().expect("new empty file has an editor").clone();
+                editor.update(cx, |e, cx| {
+                    assert_eq!(e.core.doc.blocks.len(), 1);
+                    e.core.insert_text("draft");
+                    assert_eq!(e.core.doc.title.text, "from-dialog");
+                    e.changed(window, cx);
+                });
+            }
+            "empty-done" => {
+                let created = root.join("C/from-dialog.md");
+                assert!(!ws.unsaved && !ws.file_saving);
+                assert_eq!(std::fs::read(&created).unwrap(), b"draft");
+                eprintln!("empty-file: PASS; body input and automatic save");
+            }
+            "picker" => {
+                let created = root.join("C/from-dialog.md");
+                assert_eq!(ws.file.as_deref(), Some(created.as_path()));
+                assert!(ws.folder_expanded.contains(&root.join("C")));
+                assert_eq!(std::fs::read(&created).unwrap(), b"draft");
+                std::fs::write(&created, "external marker").unwrap();
+            }
+            "search-begin" => {
+                ws.folder_content = true;
+                ws.folder_query.update(cx, |q, cx| q.set_text("not-the-result", cx));
+                ws.refresh_folder_hits(cx);
+                ws.folder_query.update(cx, |q, cx| q.set_text("external marker", cx));
+                ws.refresh_folder_hits(cx);
+                assert!(ws.folder_searching);
+            }
+            "search-done" => {
+                assert!(!ws.folder_searching);
+                assert!(ws.folder_hits.iter().any(|hit| hit.path == root.join("C/from-dialog.md")));
+                ws.folder_query.update(cx, |q, cx| q.set_text("", cx));
+                ws.refresh_folder_hits(cx);
+                assert!(ws.folder_hits.is_empty());
+                eprintln!("folder-search: PASS; background content search and stale-query protection");
+            }
+            "duplicate" => {
+                let created = root.join("C/from-dialog.md");
+                assert_eq!(std::fs::read(&created).unwrap(), b"external marker");
+                assert_eq!(ws.file.as_deref(), Some(created.as_path()));
+            }
+            "picked" => {
+                assert_eq!(ws.file.as_deref(), Some(first.as_path()));
+                assert!(ws.folder_expanded.contains(&root.join("A")));
+                ws.close_folder(window, cx);
+                eprintln!("folder-safety: PASS; background save, concurrent edit, switching, conflicts, recovery, file picker and safe creation");
+            }
+            _ => panic!("unknown folder safety phase"),
+        }
+    }).unwrap();
+}
+
 #[cfg(test)]
 mod markdown_file_tests {
-    use super::parse_markdown_file;
+    use super::{parse_markdown_file, save_folder_document};
+
+    #[test]
+    fn saves_without_inserting_an_implicit_title() {
+        let dir = std::env::temp_dir().join(format!("markdownx-no-heading-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("note.txt");
+        let text = "\u{feff}First line\r\n\r\nSecond line\r\n";
+        std::fs::write(&path, text).unwrap();
+        let (doc, source) = crate::markdown_source::parse(&path, text);
+        let saved = save_folder_document(&path, text, &doc, &source).unwrap();
+        assert!(saved.text.starts_with("\u{feff}First line\r\n"));
+        assert!(!saved.text.contains("# note"));
+        let mut renamed = doc.clone();
+        renamed.title = crate::model::RichText::plain("New title");
+        let saved = save_folder_document(&path, &saved.text, &renamed, &saved.source).unwrap();
+        assert!(saved.text.starts_with("\u{feff}# New title\r\n"));
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
 
     #[test]
     fn parses_title_and_keeps_tables() {
@@ -1856,7 +2310,139 @@ mod markdown_file_tests {
         let opts = crate::markdown::Options { library_root: Some(dir.as_path()), ..Default::default() };
         let back = crate::markdown::export(&doc, &opts);
         assert!(back.text.contains("| 量 | 单位 |"));
+        assert_eq!(back.text.matches("# 力与运动").count(), 1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parses_a_bom_before_the_title() {
+        let (doc, _) = parse_markdown_file(std::path::Path::new("note.md"), "\u{feff}# 标题\r\n\r\n正文\r\n");
+        assert_eq!(doc.title.text, "标题");
+    }
+
+    #[test]
+    #[ignore = "reads the workspace specified by MARKDOWNX_WORKSPACE_TEST_ROOT"]
+    fn real_workspace_is_readable() {
+        let root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_WORKSPACE_TEST_ROOT").expect("set MARKDOWNX_WORKSPACE_TEST_ROOT"));
+        let folder = crate::workspace_fs::WorkspaceDir::scan(root).unwrap();
+        assert!(folder.warnings.is_empty());
+        let files = folder.files();
+        if let Ok(expected) = std::env::var("MARKDOWNX_EXPECTED_WORKSPACE_FILES") {
+            assert_eq!(files.len(), expected.parse::<usize>().unwrap());
+        }
+        fn unescape(text: &str) -> String {
+            let mut chars = text.chars().peekable();
+            let mut out = String::new();
+            while let Some(ch) = chars.next() {
+                if ch == '\\' && chars.peek().is_some_and(|c| c.is_ascii_punctuation()) { out.push(chars.next().unwrap()); }
+                else { out.push(ch); }
+            }
+            out
+        }
+        fn same_kind(a: &crate::model::BlockKind, b: &crate::model::BlockKind) -> bool {
+            match (a, b) {
+                (crate::model::BlockKind::Table(a), crate::model::BlockKind::Table(b)) => {
+                    a.col_widths == b.col_widths && a.header_rows == b.header_rows && a.header_col == b.header_col
+                        && a.rows.len() == b.rows.len() && a.rows.iter().zip(&b.rows).all(|(left, right)| {
+                            left.len() == right.len() && left.iter().zip(right).all(|(x, y)| {
+                                x.colspan == y.colspan && x.rowspan == y.rowspan && x.bg == y.bg && x.valign == y.valign && x.blocks.len() == y.blocks.len()
+                            })
+                        })
+                }
+                (a, b) => a == b,
+            }
+        }
+        let mut checked = 0;
+        let mut changed_text = 0;
+        let mut changed_titles = 0;
+        let mut missing_assets = 0;
+        let mut asset_conflicts = 0;
+        let mut changed_structure = 0;
+        let mut changed_styles = 0;
+        let mut changed_properties = 0;
+        let mut guarded = 0;
+        let mut causes = [0usize; 4];
+        for file in files {
+            if crate::workspace_fs::DocKind::of(&file.path) != Some(crate::workspace_fs::DocKind::Markdown) { continue; }
+            let text = std::fs::read_to_string(&file.path).unwrap();
+            let (doc, _) = parse_markdown_file(&file.path, &text);
+            let opts = crate::markdown::Options { library_root: file.path.parent(), assets: Some("assets"), ..Default::default() };
+            let exported = crate::markdown::export(&doc, &opts);
+            let (reparsed, _) = parse_markdown_file(&file.path, &exported.text);
+            let mut before_blocks = vec![];
+            let mut after_blocks = vec![];
+            doc.for_each_block(|b| before_blocks.push((b.kind.clone(), b.text.clone(), b.align, b.bg.clone(), b.folded, b.children.len())));
+            reparsed.for_each_block(|b| after_blocks.push((b.kind.clone(), b.text.clone(), b.align, b.bg.clone(), b.folded, b.children.len())));
+            let same_structure = before_blocks.len() == after_blocks.len() && before_blocks.iter().zip(&after_blocks)
+                .all(|(x, y)| std::mem::discriminant(&x.0) == std::mem::discriminant(&y.0));
+            changed_structure += usize::from(!same_structure);
+            if same_structure {
+                changed_styles += usize::from(before_blocks.iter().zip(&after_blocks).any(|(x, y)| x.1 != y.1));
+                changed_properties += usize::from(before_blocks.iter().zip(&after_blocks).any(|(x, y)| {
+                    !same_kind(&x.0, &y.0) || x.2 != y.2 || x.3 != y.3 || x.4 != y.4 || x.5 != y.5
+                }));
+            }
+            let original = doc.plain_text();
+            let after = reparsed.plain_text();
+            let changed_title = doc.title.text != reparsed.title.text;
+            let has_missing = exported.missing > 0;
+            let parent = file.path.parent().unwrap();
+            let canonical_root = parent.canonicalize().unwrap();
+            let has_conflict = exported.files.iter().any(|(source, relative)| {
+                let destination = parent.join(relative);
+                let dir = destination.parent().unwrap();
+                if dir.exists() && !dir.canonicalize().is_ok_and(|p| p.starts_with(&canonical_root)) { return true; }
+                match std::fs::symlink_metadata(&destination) {
+                    Ok(_) => !destination.canonicalize().is_ok_and(|p| p.starts_with(&canonical_root))
+                        || !crate::workspace_fs::same_contents(source, &destination).unwrap_or(false),
+                    Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                }
+            });
+            changed_titles += usize::from(changed_title);
+            missing_assets += usize::from(has_missing);
+            asset_conflicts += usize::from(has_conflict);
+            guarded += usize::from(changed_title || original != after || has_missing || has_conflict);
+            if original != after {
+                changed_text += 1;
+                let kind = if unescape(&after) == original { 0 }
+                    else if after.replace("<br>", "\n") == original { 1 }
+                    else if after.chars().filter(|c| !c.is_whitespace()).eq(original.chars().filter(|c| !c.is_whitespace())) { 2 }
+                    else { 3 };
+                causes[kind] += 1;
+                if std::env::var_os("MARKDOWNX_WORKSPACE_DIAGNOSTICS").is_some() {
+                    let class = |ch: Option<char>| match ch {
+                        None => "end",
+                        Some('\n') => "newline",
+                        Some('\\') => "backslash",
+                        Some(' ') => "space",
+                        Some(c) if c.is_whitespace() => "whitespace",
+                        Some('*') => "star",
+                        Some('_') => "underscore",
+                        Some('~') => "tilde",
+                        Some('`') => "backtick",
+                        Some('[' | ']') => "bracket",
+                        Some('<' | '>') => "angle",
+                        Some(c) if c.is_alphanumeric() => "text",
+                        Some(_) => "punctuation",
+                    };
+                    let prefix = original.chars().zip(after.chars()).take_while(|(a, b)| a == b).count();
+                    let code = doc.blocks.iter().filter(|b| matches!(b.kind, crate::model::BlockKind::Code { .. })).count();
+                    let tables = doc.blocks.iter().filter(|b| matches!(b.kind, crate::model::BlockKind::Table(_))).count();
+                    let shape = |text: &str| text.chars().skip(prefix).take(24).map(|c| match c {
+                        '\n' => 'N', '\\' => 'B', ' ' => 'S',
+                        '*' | '_' | '~' | '`' => 'M', '[' | ']' => 'K', '<' | '>' => 'A',
+                        c if c.is_whitespace() => 'S',
+                        c if c.is_alphanumeric() => 'X',
+                        _ => 'P',
+                    }).collect::<String>();
+                    eprintln!("difference: kind={kind}, before={}, after={}, lengths={}/{}, code={code}, tables={tables}, shape={}/{}",
+                        class(original.chars().nth(prefix)), class(after.chars().nth(prefix)), original.chars().count(), after.chars().count(), shape(&original), shape(&after));
+                }
+            }
+            checked += 1;
+        }
+        eprintln!("workspace-read: {checked} files; {guarded} would be protected; title differences={changed_titles}, text differences={changed_text}, structure differences={changed_structure}, inline style differences={changed_styles}, block property differences={changed_properties}, missing assets={missing_assets}, asset conflicts={asset_conflicts}; text causes: escapes={}, breaks={}, whitespace={}, other={}", causes[0], causes[1], causes[2], causes[3]);
+        assert!(checked > 0);
     }
 
     #[test]

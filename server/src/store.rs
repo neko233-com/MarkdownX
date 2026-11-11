@@ -9,6 +9,8 @@ use uuid::Uuid;
 pub enum StoreError {
     BadId,
     NotFound,
+    AlreadyExists,
+    Changed,
     TooBig,
     Io(std::io::Error),
 }
@@ -18,6 +20,8 @@ impl std::fmt::Display for StoreError {
         match self {
             Self::BadId => write!(f, "invalid document id"),
             Self::NotFound => write!(f, "document not found"),
+            Self::AlreadyExists => write!(f, "document already exists"),
+            Self::Changed => write!(f, "document changed outside the collaboration server"),
             Self::TooBig => write!(f, "document is too large"),
             Self::Io(e) => write!(f, "{e}"),
         }
@@ -48,14 +52,37 @@ pub struct Store {
 
 impl Store {
     pub fn open(root: impl AsRef<Path>) -> std::io::Result<Self> {
-        let root = root.as_ref().to_path_buf();
-        fs::create_dir_all(root.join("docs"))?;
-        Ok(Self { root })
+        fs::create_dir_all(root.as_ref())?;
+        let root = root.as_ref().canonicalize()?;
+        let store = Self { root };
+        let docs = store.root.join("docs");
+        store.check_path(&docs).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+        fs::create_dir_all(&docs)?;
+        store.check_path(&docs).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+        Ok(store)
     }
 
     pub fn path(&self, id: &str) -> Result<PathBuf, StoreError> {
         if !valid_id(id) { return Err(StoreError::BadId); }
-        Ok(self.root.join(id))
+        let path = self.root.join(id);
+        self.check_path(&path)?;
+        Ok(path)
+    }
+
+    fn check_path(&self, path: &Path) -> Result<(), StoreError> {
+        let relative = path.strip_prefix(&self.root).map_err(|_| StoreError::BadId)?;
+        let mut current = self.root.clone();
+        for part in relative.components() {
+            if !matches!(part, std::path::Component::Normal(_)) { return Err(StoreError::BadId); }
+            current.push(part.as_os_str());
+            match fs::symlink_metadata(&current) {
+                Ok(meta) if is_link(&meta) => return Err(StoreError::BadId),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                Err(e) => return Err(StoreError::Io(e)),
+            }
+        }
+        Ok(())
     }
 
     pub fn rel(&self, id: &str) -> Result<String, StoreError> {
@@ -71,9 +98,48 @@ impl Store {
         }
     }
 
+    #[cfg(test)]
     pub fn write(&self, id: &str, content: &str, max: usize) -> Result<(), StoreError> {
         if content.len() > max { return Err(StoreError::TooBig); }
         atomic_write(&self.path(id)?, content.as_bytes()).map_err(StoreError::Io)
+    }
+
+    pub fn write_if_unchanged(&self, id: &str, expected: &str, content: &str, max: usize) -> Result<(), StoreError> {
+        if content.len() > max { return Err(StoreError::TooBig); }
+        let path = self.path(id)?;
+        let check = || match fs::read(self.path(id)?) {
+            Ok(current) if current == expected.as_bytes() => Ok(()),
+            Ok(_) => Err(StoreError::Changed),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StoreError::NotFound),
+            Err(e) => Err(StoreError::Io(e)),
+        };
+        check()?;
+        atomic_write_checked(&path, content.as_bytes(), check)
+    }
+
+    /// Publish a completed new file atomically; never replace an existing path.
+    pub fn create_at(&self, id: &str, content: &str, max: usize) -> Result<(), StoreError> {
+        if content.len() > max { return Err(StoreError::TooBig); }
+        let path = self.path(id)?;
+        let parent = path.parent().ok_or(StoreError::BadId)?;
+        fs::create_dir_all(parent).map_err(StoreError::Io)?;
+        self.check_path(&path)?;
+        let tmp = parent.join(format!(".markdownx-create-{}.tmp", Uuid::new_v4()));
+        let result = (|| {
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(StoreError::Io)?;
+            file.write_all(content.as_bytes()).map_err(StoreError::Io)?;
+            file.sync_all().map_err(StoreError::Io)?;
+            drop(file);
+            self.check_path(&path)?;
+            match fs::hard_link(&tmp, &path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(StoreError::AlreadyExists),
+                Err(e) => Err(StoreError::Io(e)),
+            }
+        })();
+        let _ = fs::remove_file(&tmp);
+        result
     }
 
     /// Create a new note under `folder`, returning its repository-relative id.
@@ -91,15 +157,15 @@ impl Store {
         } else {
             base
         };
-        let mut id = format!("{dir}/{base}.md");
-        let mut n = 2;
-        while self.path(&id)?.exists() {
-            id = format!("{dir}/{base}-{n}.md");
-            n += 1;
-            if n > 999 { return Err(StoreError::BadId); }
+        for n in 1..=999 {
+            let id = if n == 1 { format!("{dir}/{base}.md") } else { format!("{dir}/{base}-{n}.md") };
+            match self.create_at(&id, content, max) {
+                Ok(()) => return Ok(id),
+                Err(StoreError::AlreadyExists) => continue,
+                Err(error) => return Err(error),
+            }
         }
-        self.write(&id, content, max)?;
-        Ok(id)
+        Err(StoreError::AlreadyExists)
     }
 
     pub fn stat(&self, id: &str) -> Result<Doc, StoreError> {
@@ -125,6 +191,16 @@ impl Store {
     }
 }
 
+fn is_link(meta: &fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() { return true; }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes() & 0x400 != 0 { return true; }
+    }
+    false
+}
+
 fn walk(dir: &Path, root: &Path, depth: usize, out: &mut Vec<Doc>) -> std::io::Result<()> {
     if depth > 16 { return Ok(()); }
     for entry in fs::read_dir(dir)? {
@@ -138,6 +214,7 @@ fn walk(dir: &Path, root: &Path, depth: usize, out: &mut Vec<Doc>) -> std::io::R
         if depth == 0 && name == "templates" {
             continue;
         }
+        if is_link(&fs::symlink_metadata(&path)?) { continue; }
         let ty = entry.file_type()?;
         if ty.is_dir() {
             walk(&path, root, depth + 1, out)?;
@@ -225,16 +302,27 @@ pub fn slug(input: &str) -> String {
     }
 }
 
+#[cfg(test)]
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    match atomic_write_checked(path, bytes, || Ok(())) {
+        Ok(()) => Ok(()),
+        Err(StoreError::Io(error)) => Err(error),
+        Err(_) => unreachable!("an unconditional write cannot report a conflict"),
+    }
+}
+
+fn atomic_write_checked(path: &Path, bytes: &[u8], validate: impl FnOnce() -> Result<(), StoreError>) -> Result<(), StoreError> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(dir)?;
+    fs::create_dir_all(dir).map_err(StoreError::Io)?;
     let tmp = dir.join(format!(".{}.markdownx-{}.tmp", path.file_name().unwrap_or_default().to_string_lossy(), Uuid::new_v4()));
     let write = (|| {
-        let mut f = fs::File::create(&tmp)?;
+        let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp).map_err(StoreError::Io)?;
         use std::io::Write;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        fs::rename(&tmp, path)
+        f.write_all(bytes).map_err(StoreError::Io)?;
+        f.sync_all().map_err(StoreError::Io)?;
+        drop(f);
+        validate()?;
+        fs::rename(&tmp, path).map_err(StoreError::Io)
     })();
     if write.is_err() { let _ = fs::remove_file(&tmp); }
     write
@@ -249,6 +337,43 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_creation_never_overwrites_existing_files() {
+        let root = temp();
+        let store = Store::open(&root).unwrap();
+        store.create_at("docs/existing.md", "kept", 100).unwrap();
+        assert!(matches!(store.create_at("docs/existing.md", "replacement", 100), Err(StoreError::AlreadyExists)));
+        assert_eq!(store.read("docs/existing.md").unwrap(), "kept");
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8).map(|i| {
+            let store = store.clone();
+            let gate = gate.clone();
+            std::thread::spawn(move || { gate.wait(); (store.create("Same", "docs", &i.to_string(), 100).unwrap(), i) })
+        }).collect();
+        let mut ids = std::collections::HashSet::new();
+        for t in threads {
+            let (id, i) = t.join().unwrap();
+            assert!(ids.insert(id.clone()));
+            assert_eq!(store.read(&id).unwrap(), i.to_string());
+        }
+        assert_eq!(ids.len(), 8);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinks_outside_the_workspace() {
+        let root = temp();
+        let outside = temp();
+        fs::create_dir_all(&outside).unwrap();
+        let store = Store::open(&root).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("docs/link")).unwrap();
+        assert!(matches!(store.create_at("docs/link/escaped.md", "bad", 100), Err(StoreError::BadId)));
+        assert!(!outside.join("escaped.md").exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
     fn ids_are_conservative() {
         assert!(valid_id("docs/lesson-01.md"));
         assert!(valid_id("design/levels/level-1.markdown"));
@@ -257,6 +382,22 @@ mod tests {
         assert!(!valid_id("docs/a:b.md"));
         assert!(!valid_id(""));
         assert!(!valid_id("docs/a.txt"));
+    }
+
+    #[test]
+    fn staged_save_keeps_external_changes() {
+        let root = temp();
+        let store = Store::open(&root).unwrap();
+        store.write("docs/a.md", "original", 100).unwrap();
+        let path = root.join("docs/a.md");
+        let result = atomic_write_checked(&path, b"local", || {
+            fs::write(&path, "external").unwrap();
+            if fs::read(&path).unwrap() == b"original" { Ok(()) } else { Err(StoreError::Changed) }
+        });
+        assert!(matches!(result, Err(StoreError::Changed)));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "external");
+        assert!(matches!(store.write_if_unchanged("docs/a.md", "original", "local", 100), Err(StoreError::Changed)));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

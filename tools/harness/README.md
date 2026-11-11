@@ -47,6 +47,10 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 | `deskshot <名字> [边距]` | 连同窗口下面的内容截图，四周多留「边距」pt（默认 48）。窗口下面先用 `shared-mock/guides/backdrop.swift` 铺一张壁纸，见 `shared-mock/guides/shots.sh` |
 | `bench <n> <命令>` | 把一条命令跑 n 次，每次同步画一帧，输出耗时 |
 | `record <文件.mp4>` / `record stop` / `glide` / `scroll` / `caption` | 录制演示视频 |
+| `open-folder` | 触发打开文件夹操作，配合 `pick` 使用 |
+| `open-file` / `new-folder-file` | 触发打开文件 / 在目录中新建文件，配合 `pick` 使用 |
+| `check-folder-state <目录>` | 只读检查已打开的目录、侧栏和首个文件 |
+| `check-folder-safety <阶段> <临时目录>` | 依次检查后台保存、切换、外部冲突及恢复；包含 `begin` / `conflict` / `recover` / `finish`、`empty-begin` / `empty-done`、`picker` / `duplicate` / `picked` 和 `search-begin` / `search-done`；各阶段间等待异步操作完成，临时目录须有 `.markdownx-folder-test` 标记 |
 | `activate` | 让窗口成为 key window。**会抢焦点，一般不要用** |
 | `quit` | 退出（`run.py` 会自动在末尾追加） |
 
@@ -58,6 +62,8 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 - `FDL_WINDOW_CAPTURE`：改用窗口服务器截图，截图里带系统画的红绿灯；
 - `FDL_NOBLINK`：光标不闪烁（`compare.py` 已设好）。
 - `FDL_RECORD_FPS`：录屏帧率，默认 30。
+
+窗口内截图命令目前只支持 macOS；Windows 可用原生窗口截图工具检查实际渲染。
 
 ## 使用规则
 

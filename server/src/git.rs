@@ -43,7 +43,8 @@ impl Repo {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)?;
         let repo = Self { root, name: name.into(), mail: mail.into() };
-        if !repo.root.join(".git").is_dir() {
+        let new_repo = !repo.root.join(".git").exists();
+        if new_repo {
             let out = Command::new("git").arg("init").arg("-b").arg("main").current_dir(&repo.root).output().await?;
             if !out.status.success() {
                 let out = Command::new("git").arg("init").current_dir(&repo.root).output().await?;
@@ -52,20 +53,16 @@ impl Repo {
                 }
             }
         }
-        repo.git(&["config", "user.name", name]).await?;
-        repo.git(&["config", "user.email", mail]).await?;
         let ignore = repo.root.join(".gitignore");
-        if !ignore.exists() {
+        if new_repo && !ignore.exists() {
             std::fs::write(ignore, "*.tmp\n.markdownx-*\n")?;
         }
         Ok(repo)
     }
 
     async fn git(&self, args: &[&str]) -> Result<String> {
-        let out = Command::new("git")
+        let out = self.command()
             .args(args)
-            .current_dir(&self.root)
-            .env("GIT_TERMINAL_PROMPT", "0")
             .output()
             .await
             .with_context(|| format!("git {}", args.join(" ")))?;
@@ -75,27 +72,59 @@ impl Repo {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    fn command(&self) -> Command {
+        let mut command = Command::new("git");
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x08000000);
+        command.current_dir(&self.root).env("GIT_TERMINAL_PROMPT", "0").env("GIT_LITERAL_PATHSPECS", "1").kill_on_drop(true);
+        command
+    }
+
+    async fn index_entries(&self, rel: &str) -> Result<Vec<u8>> {
+        let out = self.command().args(["ls-files", "--stage", "-z", "--", rel]).output().await?;
+        if !out.status.success() { bail!("could not inspect Git staging"); }
+        Ok(out.stdout)
+    }
+
     pub async fn commit(&self, rel: &str, message: &str, author: &str) -> Result<String, GitError> {
         safe_rel(rel).map_err(|e| GitError::Invalid(e.to_string()))?;
-        self.git(&["add", "--", rel]).await.map_err(|e| GitError::Failed(e.to_string()))?;
-        let status = Command::new("git")
-            .args(["diff", "--cached", "--quiet", "--", rel])
-            .current_dir(&self.root)
+        let status = self.command().args(["diff", "--cached", "--quiet", "--", rel])
             .status()
             .await
             .map_err(|e| GitError::Failed(e.to_string()))?;
-        if status.success() {
-            return Err(GitError::NoChanges);
+        if !status.success() {
+            return Err(GitError::Failed(if status.code() == Some(1) { "the file already has staged changes" } else { "could not inspect staged changes" }.into()));
         }
+        let before = self.index_entries(rel).await.map_err(|e| GitError::Failed(e.to_string()))?;
+        let index = TemporaryIndex::new().map_err(|e| GitError::Failed(e.to_string()))?;
+        let head = self.command().args(["rev-parse", "--verify", "-q", "HEAD"]).output().await.map_err(|e| GitError::Failed(e.to_string()))?;
+        let mut read_tree = self.command();
+        read_tree.env("GIT_INDEX_FILE", &index.path);
+        if head.status.success() { read_tree.args(["read-tree", "HEAD"]); } else { read_tree.args(["read-tree", "--empty"]); }
+        let out = read_tree.output().await.map_err(|e| GitError::Failed(e.to_string()))?;
+        if !out.status.success() { return Err(GitError::Failed(String::from_utf8_lossy(&out.stderr).trim().to_string())); }
+        let out = self.command().env("GIT_INDEX_FILE", &index.path).args(["add", "--", rel]).output().await.map_err(|e| GitError::Failed(e.to_string()))?;
+        if !out.status.success() { return Err(GitError::Failed(String::from_utf8_lossy(&out.stderr).trim().to_string())); }
+        let status = self.command().env("GIT_INDEX_FILE", &index.path).args(["diff", "--cached", "--quiet", "--", rel]).status().await.map_err(|e| GitError::Failed(e.to_string()))?;
+        if status.success() { return Err(GitError::NoChanges); }
+        if status.code() != Some(1) { return Err(GitError::Failed("could not inspect pending changes".into())); }
         let author = sanitize_author(author, &self.name, &self.mail);
-        let out = Command::new("git")
-            .args(["commit", "-m", message, "--author", &author, "--", rel])
-            .current_dir(&self.root)
+        let out = self.command()
+            .env("GIT_INDEX_FILE", &index.path)
+            .env("GIT_COMMITTER_NAME", &self.name)
+            .env("GIT_COMMITTER_EMAIL", &self.mail)
+            .args(["commit", "--only", "-m", message, "--author", &author, "--", rel])
             .output()
             .await
             .map_err(|e| GitError::Failed(e.to_string()))?;
         if !out.status.success() {
             return Err(GitError::Failed(String::from_utf8_lossy(&out.stderr).trim().to_string()));
+        }
+        if self.index_entries(rel).await.map_err(|e| GitError::Failed(e.to_string()))? == before {
+            let out = self.command().args(["reset", "-q", "HEAD", "--", rel]).output().await.map_err(|e| GitError::Failed(e.to_string()))?;
+            if !out.status.success() { return Err(GitError::Failed("commit created, but index refresh failed".into())); }
+        } else {
+            tracing::warn!("Git staging changed during commit; preserving the newer entries");
         }
         self.git(&["rev-parse", "HEAD"]).await.map(|s| s.trim().to_string()).map_err(|e| GitError::Failed(e.to_string()))
     }
@@ -169,6 +198,24 @@ impl Repo {
     }
 }
 
+struct TemporaryIndex { directory: PathBuf, path: PathBuf }
+
+impl TemporaryIndex {
+    fn new() -> std::io::Result<Self> {
+        let directory = std::env::temp_dir().join(format!("markdownx-server-index-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory)?;
+        Ok(Self { path: directory.join("index"), directory })
+    }
+}
+
+impl Drop for TemporaryIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(self.directory.join("index.lock"));
+        let _ = std::fs::remove_dir(&self.directory);
+    }
+}
+
 fn sanitize_author(author: &str, name: &str, mail: &str) -> String {
     let author = author.trim().replace(['<', '>', '\n', '\r'], "");
     if author.is_empty() { format!("{name} <{mail}>") } else { format!("{author} <{mail}>") }
@@ -217,6 +264,32 @@ mod tests {
         assert!(repo.commit("docs/a.md", "again", "Ada").await.is_err());
         let text = repo.show(&hash, "docs/a.md").await.unwrap();
         assert!(text.contains("# A"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn preserves_repository_config_and_staged_work() {
+        let root = std::env::temp_dir().join(format!("markdownx-server-staged-{}", Uuid::new_v4()));
+        let repo = Repo::open(&root, "Test", "test@example.com").await.unwrap();
+        std::fs::write(root.join("a.md"), "old a").unwrap();
+        std::fs::write(root.join("b.md"), "old b").unwrap();
+        repo.commit("a.md", "initial a", "Ada").await.unwrap();
+        repo.commit("b.md", "initial b", "Ada").await.unwrap();
+        assert!(repo.command().args(["config", "user.name", "Existing User"]).status().await.unwrap().success());
+        let config = std::fs::read(root.join(".git/config")).unwrap();
+        let repo = Repo::open(&root, "Other", "other@example.com").await.unwrap();
+        assert_eq!(std::fs::read(root.join(".git/config")).unwrap(), config);
+        std::fs::write(root.join("b.md"), "staged b").unwrap();
+        assert!(repo.command().args(["add", "--", "b.md"]).status().await.unwrap().success());
+        std::fs::write(root.join("a.md"), "new a").unwrap();
+        repo.commit("a.md", "save a", "Ada").await.unwrap();
+        assert_eq!(repo.git(&["show", ":b.md"]).await.unwrap(), "staged b");
+        std::fs::write(root.join("a.md"), "staged a").unwrap();
+        assert!(repo.command().args(["add", "--", "a.md"]).status().await.unwrap().success());
+        std::fs::write(root.join("a.md"), "unstaged a").unwrap();
+        assert!(matches!(repo.commit("a.md", "blocked", "Ada").await, Err(GitError::Failed(_))));
+        assert_eq!(repo.git(&["show", ":a.md"]).await.unwrap(), "staged a");
+        assert_eq!(repo.git(&["show", ":b.md"]).await.unwrap(), "staged b");
         let _ = std::fs::remove_dir_all(root);
     }
 }

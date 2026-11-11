@@ -244,7 +244,26 @@ impl Room {
     }
 
     async fn commit_locked(&self, st: &mut State, content: String, author: &str, origin: &str, now: u64) -> Result<SaveOutcome, SaveError> {
-        self.store.write(&self.id, &content, self.max_bytes).map_err(SaveError::Store)?;
+        match self.store.write_if_unchanged(&self.id, &st.content, &content, self.max_bytes) {
+            Ok(()) => {}
+            Err(StoreError::Changed) => {
+                let external = self.store.read(&self.id).map_err(SaveError::Store)?;
+                let (merged, _) = self.repo.merge(st.content.as_bytes(), external.as_bytes(), content.as_bytes()).await.map_err(|e| SaveError::Merge(e.to_string()))?;
+                st.content = external.clone();
+                st.rev += 1;
+                st.by = "External change".into();
+                st.at = now;
+                st.history.push_back(Revision { rev: st.rev, content: external.clone() });
+                while st.history.len() > HISTORY_LIMIT { st.history.pop_front(); }
+                let title = store::title(&external, &self.id);
+                let _ = self.tx.send(ServerMessage::Update { rev: st.rev, title: title.clone(), by: st.by.clone(), origin: None, at: now, content: external.clone() });
+                return Ok(SaveOutcome {
+                    rev: st.rev, title: title.clone(), by: st.by.clone(), at: now, changed: false, commit: None, warning: None,
+                    conflict: Some(Conflict { rev: st.rev, title, content: external, merged, by: st.by.clone() }),
+                });
+            }
+            Err(error) => return Err(SaveError::Store(error)),
+        }
         st.content = content.clone();
         st.rev += 1;
         st.by = author.to_string();
@@ -375,6 +394,22 @@ mod tests {
         let (room, root) = setup().await;
         let err = room.save(1, "x".repeat((1 << 20) + 1), "Ada", "c1").await.unwrap_err();
         assert!(matches!(err, SaveError::TooBig));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn external_edits_become_a_conflict_instead_of_being_overwritten() {
+        let (room, root) = setup().await;
+        let path = root.join("docs/note.md");
+        std::fs::write(&path, "# External\n\nfrom disk\n").unwrap();
+        let out = room.save(1, "# Local\n\nfrom browser\n".into(), "Ada", "c1").await.unwrap();
+        let conflict = out.conflict.unwrap();
+        assert_eq!(conflict.content, "# External\n\nfrom disk\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), conflict.content);
+        assert_eq!(conflict.rev, 2);
+        let resolved = room.save(conflict.rev, "# Resolved\n".into(), "Ada", "c1").await.unwrap();
+        assert!(resolved.changed);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Resolved\n");
         let _ = std::fs::remove_dir_all(root);
     }
 }
