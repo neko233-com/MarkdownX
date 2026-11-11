@@ -1,6 +1,8 @@
 name: Release
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
@@ -16,15 +18,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag }}
+  group: release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ inputs.tag }}
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
 
 jobs:
   confirm:
-    name: Verify manual confirmation and existing tag
+    name: Verify existing release tag
     runs-on: ubuntu-24.04
     outputs:
       commit: ${{ steps.tag.outputs.commit }}
@@ -37,7 +39,11 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid tag.' >&2; exit 1; }
-          [[ "$RELEASE_CONFIRMATION" == "PUBLISH $RELEASE_TAG" ]] || { echo 'Manual release confirmation did not match.' >&2; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$RELEASE_CONFIRMATION" == "PUBLISH $RELEASE_TAG" ]] || { echo 'Manual release confirmation did not match.' >&2; exit 1; }
+          else
+            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]] || { echo 'Expected a tag push.' >&2; exit 1; }
+          fi
           refs=$(git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}") || { echo 'The manually pushed tag does not exist.' >&2; exit 1; }
           commit=$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ { peeled=$1 } END { if (peeled) print peeled; else print $1 }')
           [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'Could not resolve the tag commit.' >&2; exit 1; }
@@ -169,3 +175,35 @@ jobs:
           (cd "$RUNNER_TEMP/markdownx-release-assets" && sha256sum --check "MarkdownX-$version-x64.msi.sha256" && sha256sum --check markdownx-macos-arm64-unsigned.dmg.sha256)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then echo 'Release already exists; refusing to overwrite it.' >&2; exit 1; fi
           gh release create "$RELEASE_TAG" "$RUNNER_TEMP"/markdownx-release-assets/* install.ps1 install.sh --verify-tag --prerelease --title "MarkdownX $RELEASE_TAG (test)" --notes 'Test release: Windows x86_64 MSI and macOS arm64 DMG. The macOS app uses an ad-hoc signature and is not notarized. macOS may require explicit user approval before opening it.'
+
+  verify-windows-download:
+    name: Verify public Windows installer
+    needs: publish
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Download the published installer and verify its MSI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'markdownx-public-install.ps1'
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/install.ps1"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          & pwsh -NoProfile -File $installer -DryRun
+          if ($LASTEXITCODE -ne 0) { throw 'Public Windows installer verification failed.' }
+
+  verify-macos-download:
+    name: Verify public macOS installer
+    needs: publish
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Install the published test DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/install.sh" -o "$RUNNER_TEMP/install.sh"
+          sh "$RUNNER_TEMP/install.sh" --allow-unsigned --applications-dir "$RUNNER_TEMP/Applications"
+          installed=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$RUNNER_TEMP/Applications/MarkdownX.app/Contents/Info.plist")
+          [[ "v$installed" == "$RELEASE_TAG" ]] || { echo 'The downloaded application has the wrong version.' >&2; exit 1; }

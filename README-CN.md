@@ -44,18 +44,18 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 Windows x86_64（PowerShell 7，安装到当前用户）：
 
 ```powershell
-irm https://github.com/neko233-com/MarkdownX/releases/download/v0.1.13/install.ps1 | iex
+irm https://raw.githubusercontent.com/neko233-com/MarkdownX/main/install.ps1 | iex
 ```
 
 macOS arm64（Apple Silicon）：
 
 ```sh
-curl -fsSL https://github.com/neko233-com/MarkdownX/releases/download/v0.1.13/install.sh | sh -s -- --allow-unsigned
+curl -fsSL https://raw.githubusercontent.com/neko233-com/MarkdownX/main/install.sh | sh -s -- --allow-unsigned
 ```
 
 安装脚本会校验安装包；Windows 会请求应用正常保存并退出，保留文档库及协作服务器数据。macOS 安装到 `~/Applications/MarkdownX.app`，请先关闭正在运行的旧版。未公证测试版首次启动时，macOS 可能阻止打开；确认信任后，可在「系统设置 → 隐私与安全性」中检查提示并允许打开。脚本不会修改 Gatekeeper 设置。离线安装时下载 MSI 或 DMG 与其 `.sha256`，运行 `pwsh -File ./install.ps1 -MsiPath <文件>` 或 `sh ./install.sh --package <文件> --allow-unsigned`；添加 `-DryRun` 或 `--dry-run` 可只检查。Windows Git Bash 可通过 `sh ./install.sh` 调用 PowerShell 7。
 
-发布工作流不会创建或推送标签。人工审核并手动推送版本标签后，在 **Actions → Release** 中选择已有标签，并输入 `PUBLISH vX.Y.Z` 确认；Windows 和 macOS 两个平台构建与校验均通过后才发布测试版。仅推送标签不会触发发布。
+推送版本标签后会自动触发发布：Windows 和 macOS 两个平台构建与校验均通过后发布测试版，并验证公开安装入口。工作流不会创建或推送标签；如需手动重试，可在 **Actions → Release** 中选择已有标签并输入 `PUBLISH vX.Y.Z`。
 
 ## 快速开始
 
