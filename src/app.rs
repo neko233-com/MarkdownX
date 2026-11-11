@@ -551,7 +551,7 @@ impl Workspace {
         match document.or_else(|| (!quick).then(|| ws.entries.first().map(|e| e.id.clone())).flatten()) {
             Some(id) => ws.open(&id, window, cx),
             None if quick => ws.new_doc(window, cx),
-            None => ws.view = View::Home,
+            None => { ws.view = View::Home; window.focus(&ws.focus); }
         }
         // Kept in the top bar (not just a toast): the user should notice.
         let warnings = ws.store.take_warnings();
@@ -754,6 +754,7 @@ impl Workspace {
         self.file_source = None;
         self.editor = None;
         self.view = View::Home;
+        window.focus(&self.focus);
         if let Some(path) = first {
             self.load_file(path, window, cx);
         }
@@ -922,6 +923,7 @@ impl Workspace {
                     e
                 });
                 self.bind_editor(editor.clone(), window, cx);
+                if !self.search_open { editor.read(cx).focus(window); }
                 self.editor = Some(editor);
                 self.current = None;
                 self.file = Some(path);
@@ -2168,8 +2170,19 @@ pub(crate) fn check_global_search(args: &str, cx: &mut App) {
     assert!(root.join(".markdownx-global-search-test").is_file());
     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
     handle.update(cx, |ws, window, cx| match phase {
+        "ready" => {
+            assert!(ws.editor.as_ref().is_some_and(|editor| editor.read(cx).focus.is_focused(window)), "opening a folder file must focus its editor");
+        }
+        "empty" => {
+            assert!(ws.editor.is_none() && ws.focus.is_focused(window), "an empty folder must leave workspace shortcuts available");
+        }
+        "closed" => {
+            assert!(!ws.search_open && ws.focus.is_focused(window), "closing search must restore workspace focus");
+        }
         "open" => {
-            assert!(ws.search_open && ws.global_search && ws.search.read(cx).is_focused(window));
+            assert!(ws.search_open, "global search did not open");
+            assert!(ws.global_search, "search is not in global mode");
+            assert!(ws.search.read(cx).is_focused(window), "global search input is not focused");
             assert_eq!(ws.folder.as_ref().unwrap().root.canonicalize().unwrap(), root.canonicalize().unwrap());
         }
         "results" => {

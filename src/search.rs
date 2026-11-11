@@ -267,6 +267,8 @@ impl Workspace {
         self.refresh_global_folder_hits(cx);
         if let Some(ed) = &self.editor {
             ed.read(cx).focus(window);
+        } else {
+            window.focus(&self.focus);
         }
         cx.notify();
     }
@@ -365,7 +367,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn search_row(&self, e: &Entry, ix: usize, q: &str, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn search_row(&self, e: &Entry, ix: usize, q: &str, width: f32, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let summary = snippet(&e.body, q);
         // Result indices match keyboard selection.
         let row = ix;
@@ -389,10 +391,10 @@ impl Workspace {
             }))
             .on_click(cx.listener(move |w, _, window, cx| w.pick_search(row, window, cx)))
             .child(entry_icon(e))
-            .child(result_info(e, q, summary, INFO_W, window))
+            .child(result_info(e, q, summary, width, window))
     }
 
-    fn search_file_row(&self, hit: &crate::workspace_fs::Hit, ix: usize, q: &str, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn search_file_row(&self, hit: &crate::workspace_fs::Hit, ix: usize, q: &str, width: f32, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title_hit = find_ci(&hit.rel, q);
         let summary = hit.snippet.as_ref().map(|text| (text.clone(), find_all(text, q)));
         let folder = self.folder.as_ref().map(|f| f.name.as_str()).unwrap_or("");
@@ -406,7 +408,7 @@ impl Workspace {
             .child(doc_icon())
             .child(div().flex_1().min_w_0().flex().flex_col().overflow_hidden()
                 .child(div().text_size(px(13.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).overflow_hidden().whitespace_nowrap().text_ellipsis().child(ui_text(hit.rel.clone()).hit(title_hit, Theme::link())))
-                .children(summary.map(|(text, hits)| div().text_size(px(12.)).line_height(px(20.)).child(summary_text(text, hits, INFO_W, window))))
+                .children(summary.map(|(text, hits)| div().text_size(px(12.)).line_height(px(20.)).child(summary_text(text, hits, width, window))))
                 .child(div().mt(px(2.)).text_size(px(12.)).text_color(Theme::text_caption()).truncate().child(format!("{} · {}", crate::settings::tr("文件夹", "Folder"), folder))))
     }
 
@@ -418,6 +420,8 @@ impl Workspace {
         let has_text = !self.search.read(cx).text.is_empty();
         let results = self.search_items(cx);
         let vh = f32::from(window.viewport_size().height);
+        let width = 540f32.min((f32::from(window.viewport_size().width) - 32.).max(320.));
+        let info_width = (width - (540. - INFO_W)).max(100.);
 
         let input = div()
             .flex_none()
@@ -491,8 +495,8 @@ impl Workspace {
         }
         for (i, item) in results.iter().enumerate() {
             list = match item {
-                SearchItem::Document(e) => list.child(self.search_row(e, i, &q, window, cx)),
-                SearchItem::File(hit) => list.child(self.search_file_row(hit, i, &q, window, cx)),
+                SearchItem::Document(e) => list.child(self.search_row(e, i, &q, info_width, window, cx)),
+                SearchItem::File(hit) => list.child(self.search_file_row(hit, i, &q, info_width, window, cx)),
             };
         }
 
@@ -518,7 +522,7 @@ impl Workspace {
         let modal = div()
             .id("search-dialog")
             .occlude()
-            .w(px(540.))
+            .w(px(width))
             .h(px(630f32.min(vh - 120.).max(200.)))
             .flex()
             .flex_col()
