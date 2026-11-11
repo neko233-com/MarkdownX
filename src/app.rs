@@ -754,7 +754,7 @@ impl Workspace {
         self.file_source = None;
         self.editor = None;
         self.view = View::Home;
-        window.focus(&self.focus);
+        if !self.search_open { window.focus(&self.focus); }
         if let Some(path) = first {
             self.load_file(path, window, cx);
         }

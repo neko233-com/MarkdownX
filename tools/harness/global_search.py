@@ -81,6 +81,14 @@ check-global-search closed {empty}
 key {modifier}-k
 wait 250
 check-global-search open {empty}
+type previousquery
+key {modifier}-k
+type globalsearchuniquexyz
+pick {folder}
+open-folder
+wait 1600
+check-global-search open {folder}
+check-global-search results {folder}
 quit
 ''', encoding='utf-8')
         env = dict(os.environ, MARKDOWNX_HOME=str(library), MARKDOWNX_LOG_DIR=str(temp / 'logs'), FDL_SCRIPT=str(script), FDL_SHOTS=str(temp))
