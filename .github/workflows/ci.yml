@@ -114,9 +114,13 @@ jobs:
           $wix = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
           if (!(Test-Path "$wix\candle.exe")) {
             choco install wixtoolset --version=3.14.1 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed' }
           }
+          & python scripts/clean_test_artifacts.py
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact cleanup failed' }
+          # PowerShell scripts report failures by throwing. LASTEXITCODE only
+          # reflects the last native program and can be null or stale here.
           & .\scripts\build-msi.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'MSI build failed' }
           $versionLine = Select-String -LiteralPath Cargo.toml -Pattern '^version = "(\d+\.\d+\.\d+)"' | Select-Object -First 1
           if (!$versionLine) { throw 'Package version was not found.' }
           $version = $versionLine.Matches[0].Groups[1].Value
