@@ -248,12 +248,63 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 cx.update(|cx| crate::app::check_folder_state(rest.trim(), cx)).unwrap();
                 continue;
             }
+            if cmd == "check-workspace-startup" {
+                cx.update(|cx| crate::app::check_workspace_startup(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            if cmd == "check-multi-workspace" {
+                cx.update(|cx| crate::app::check_multi_workspace(rest.trim(), cx)).unwrap();
+                continue;
+            }
             if cmd == "check-global-search" {
                 cx.update(|cx| crate::app::check_global_search(rest.trim(), cx)).unwrap();
                 continue;
             }
             if cmd == "check-folder-safety" {
                 cx.update(|cx| crate::app::check_folder_safety(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            if cmd == "check-window-close" {
+                cx.update(|cx| crate::app::check_window_close(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            if cmd == "window-native" {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if matches!(rest.trim(), "zoom-action" | "fullscreen-action" | "expect-fullscreen" | "expect-not-fullscreen") {
+                    windows_native_test::check_root().expect("isolated window test root");
+                    handle.update(cx, |_, window, _| match rest.trim() {
+                        "zoom-action" => window.zoom_window(),
+                        "fullscreen-action" => window.toggle_fullscreen(),
+                        "expect-fullscreen" => assert!(window.is_fullscreen(), "window was not fullscreen"),
+                        "expect-not-fullscreen" => assert!(!window.is_fullscreen(), "window remained fullscreen"),
+                        _ => unreachable!(),
+                    }).unwrap();
+                    eprintln!("window-native: {} PASS", rest.trim());
+                    continue;
+                }
+                let (hwnd, width, height, scale) = handle.update(cx, |_, window, _| {
+                    let RawWindowHandle::Win32(raw) = HasWindowHandle::window_handle(window).unwrap().as_raw() else { panic!("not a Windows window") };
+                    (raw.hwnd.get() as usize, f32::from(window.viewport_size().width), f32::from(window.viewport_size().height), window.scale_factor())
+                }).unwrap();
+                let action = rest.trim().to_string();
+                let task = cx.background_executor().spawn(async move { windows_native_test::run(hwnd, width, height, scale, &action) });
+                match task.await { Ok(message) => eprintln!("window-native: {message}"), Err(error) => panic!("window-native: {error:#}") }
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            if cmd == "window-client" {
+                windows_native_test::check_root().expect("isolated window test root");
+                let offset = match rest.trim() { "minimize" => 115., "maximize" => 69., "close" => 23., _ => panic!("unknown client control") };
+                handle.update(cx, |_, window, cx| {
+                    let position = point(window.viewport_size().width - px(offset), px(24.));
+                    let modifiers = Modifiers::default();
+                    window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), cx);
+                    window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position, modifiers, click_count: 1, first_mouse: false }), cx);
+                    window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position, modifiers, click_count: 1 }), cx);
+                }).unwrap();
+                eprintln!("window-client: {} PASS", rest.trim());
                 continue;
             }
             #[cfg(target_os = "macos")]
@@ -272,6 +323,67 @@ pub fn start(window: &mut Window, cx: &mut App) {
         }
     })
     .detach();
+}
+
+#[cfg(target_os = "windows")]
+mod windows_native_test {
+    use anyhow::{Result, ensure};
+    use windows::Win32::{Foundation::{HWND, LPARAM, POINT, WPARAM}, Graphics::Gdi::ClientToScreen, UI::WindowsAndMessaging::*};
+
+    fn packed(x: i32, y: i32) -> LPARAM { LPARAM((((y as u16 as u32) << 16) | x as u16 as u32) as i32 as isize) }
+
+    pub(super) fn check_root() -> Result<()> {
+        let root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_WINDOW_TEST_ROOT").ok_or_else(|| anyhow::anyhow!("missing isolated test root"))?).canonicalize()?;
+        ensure!(root.starts_with(std::env::temp_dir().canonicalize()?) && root.join(".markdownx-window-test").is_file(), "invalid isolated test root");
+        Ok(())
+    }
+
+    pub(super) fn run(raw: usize, width: f32, height: f32, scale: f32, action: &str) -> Result<String> {
+        check_root()?;
+        let hwnd = HWND(raw as *mut std::ffi::c_void);
+        let coords = |x: f32, y: f32| -> Result<(LPARAM, LPARAM)> {
+            let (x, y) = ((x * scale).round() as i32, (y * scale).round() as i32);
+            let mut screen = POINT { x, y };
+            unsafe { ClientToScreen(hwnd, &mut screen).ok()?; }
+            Ok((packed(x, y), packed(screen.x, screen.y)))
+        };
+        let send = |message, wp, lp| unsafe { SendMessageW(hwnd, message, Some(WPARAM(wp)), Some(lp)).0 };
+        match action {
+            "prepare" => { unsafe {
+                let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE.0 as isize);
+            } }
+            "probe" => {
+                let (client, _) = coords(width / 2., height / 2.)?;
+                send(WM_MOUSEMOVE, 0, client);
+                for (name, center, expected) in [("minimize", width - 115., HTMINBUTTON), ("maximize", width - 69., HTMAXBUTTON), ("close", width - 23., HTCLOSE)] {
+                    for offset in [-15., 0., 15.] {
+                        let (_, screen) = coords(center + offset, 24.)?;
+                        let hit = send(WM_NCHITTEST, 0, screen);
+                        ensure!(hit == expected as isize, "{name} hit test at offset {offset} returned {hit}, expected {expected}");
+                    }
+                }
+                let (_, top) = coords(width / 2., 1.)?;
+                let hit = send(WM_NCHITTEST, 0, top);
+                ensure!(hit == HTTOP as isize, "top resize hit test returned {hit}, expected {HTTOP}");
+            }
+            "maximize" | "restore" | "minimize" | "close" => {
+                let (x, hit) = match action { "maximize" | "restore" => (width - 69., HTMAXBUTTON), "minimize" => (width - 115., HTMINBUTTON), _ => (width - 23., HTCLOSE) };
+                let (client, screen) = coords(x, 24.)?;
+                send(WM_MOUSEMOVE, 0, client);
+                let actual = send(WM_NCHITTEST, 0, screen);
+                ensure!(actual == hit as isize, "{action} hit test returned {actual}, expected {hit}");
+                send(WM_NCLBUTTONDOWN, hit as usize, screen);
+                send(WM_NCLBUTTONUP, hit as usize, screen);
+            }
+            "expect-maximized" => ensure!(unsafe { IsZoomed(hwnd).as_bool() }, "window was not maximized"),
+            "expect-restored" => ensure!(!unsafe { IsZoomed(hwnd).as_bool() }, "window was not restored"),
+            "expect-minimized" => ensure!(unsafe { IsIconic(hwnd).as_bool() }, "window was not minimized"),
+            "show-no-activate" => { unsafe { let _ = ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE); } }
+            _ => anyhow::bail!("unknown test action {action}"),
+        }
+        Ok(format!("{action} PASS"))
+    }
 }
 
 fn nums(s: &str) -> Vec<f32> {

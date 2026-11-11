@@ -1132,11 +1132,13 @@ impl Window {
         });
         platform_window.on_hit_test_window_control({
             let mut cx = cx.to_async();
-            Box::new(move || {
+            Box::new(move |position| {
                 handle
                     .update(&mut cx, |_, window, _cx| {
-                        for (area, hitbox) in &window.rendered_frame.window_control_hitboxes {
-                            if window.mouse_hit_test.ids.contains(&hitbox.id) {
+                        // quiet.md: WM_NCHITTEST can precede the next mouse-move event.
+                        let hits = window.rendered_frame.hit_test(position);
+                        for (area, hitbox) in window.rendered_frame.window_control_hitboxes.iter().rev() {
+                            if hits.ids.contains(&hitbox.id) {
                                 return Some(*area);
                             }
                         }

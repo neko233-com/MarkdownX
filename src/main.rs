@@ -116,10 +116,15 @@ fn open_main_window(scripted: bool, cx: &mut App) {
         |window, cx| {
             devtools::start(window, cx);
             let workspace = cx.new(|cx| app::Workspace::new(window, cx));
-            if !scripted && let Some(path) = startup_target() {
+            let test_startup = cfg!(feature = "devtools") && scripted && std::env::var_os("MARKDOWNX_TEST_STARTUP_WORKSPACE").is_some();
+            if !scripted || test_startup {
                 workspace.update(cx, |w, cx| {
-                    if path.is_dir() { w.open_folder_tree_path(path, window, cx); }
-                    else { w.open_external_path(path, window, cx); }
+                    let documents = if test_startup { std::env::var_os("MARKDOWNX_TEST_DOCUMENTS_DIR").map(std::path::PathBuf::from) } else { workspace_fs::documents_dir() };
+                    w.open_initial_workspace(documents, window, cx);
+                    if let Some(path) = startup_target() {
+                        if path.is_dir() { w.open_folder_tree_path(path, window, cx); }
+                        else { w.open_external_path(path, window, cx); }
+                    }
                 });
             }
             workspace
@@ -180,6 +185,8 @@ fn main() {
     });
 }
 mod annotations_panel;
+mod workspaces;
+mod workspace_files;
 
 #[cfg(test)]
 mod startup_tests {

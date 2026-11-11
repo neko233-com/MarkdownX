@@ -424,18 +424,22 @@ pub(crate) fn header_right_inset() -> f32 {
 
 pub(crate) fn window_controls(window: &Window) -> Option<Div> {
     if !cfg!(any(target_os = "windows", target_os = "linux")) { return None; }
+    let fullscreen = window.is_fullscreen();
+    let client_controls = cfg!(target_os = "linux") || (cfg!(target_os = "windows") && fullscreen);
     let button = |id: &'static str, area: WindowControlArea, label: &'static str| {
         div().id(id).size(px(crate::app::HEADER_ACTIONS_H)).mx(px(7.)).rounded(px(8.)).flex_none().flex().items_center().justify_center().cursor_pointer()
-            .occlude().no_drag()
-            .when(cfg!(target_os = "windows"), |d| d.window_control_area(area))
-            .when(cfg!(target_os = "linux"), |d| d.on_click(move |_, window, cx| match area {
+            .occlude()
+            .when(client_controls, |d| d.no_drag())
+            .when(cfg!(target_os = "windows") && !fullscreen, |d| d.window_control_area(area))
+            .when(client_controls, |d| d.on_click(move |_, window, cx| match area {
                 WindowControlArea::Min => window.minimize_window(),
+                WindowControlArea::Max if cfg!(target_os = "windows") && fullscreen => window.toggle_fullscreen(),
                 WindowControlArea::Max => window.zoom_window(),
                 WindowControlArea::Close => window.dispatch_action(Box::new(crate::app::CloseWindow), cx),
                 WindowControlArea::Drag => {},
             })).hover(|s| s.bg(Theme::fill_hover())).active(|s| s.bg(Theme::fill_pressed())).tip(label, None)
     };
-    let maximized = window.is_maximized();
+    let maximized = window.is_maximized() || fullscreen;
     // Native hit-test areas preserve Snap Layouts and the normal WM_CLOSE save guard.
     Some(div().absolute().top_0().right_0().h(px(crate::app::HEADER_H)).flex().items_center().title_bar()
         .child(div().mx(px(12.)).w(px(1.)).h(px(18.)).bg(Theme::line_divider()))

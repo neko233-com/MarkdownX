@@ -196,6 +196,8 @@ pub enum Confirm {
     Purge(String),
     /// 回收站 → 清空回收站: every trashed page, permanently.
     EmptyTrash,
+    /// A filesystem item moves to the operating system's recycle bin.
+    TrashWorkspaceNode { root: u64, path: std::path::PathBuf, dir: bool },
     /// 隐藏引用列表 (with 不再提示) / 显示引用列表.
     Refs { show: bool, no_ask: bool },
     /// The open document could not be written before it was to be replaced
@@ -237,15 +239,21 @@ pub struct Workspace {
     file_source: Option<crate::markdown_source::Source>,
     /// File saves run off the UI thread; revisions keep edits made during a save.
     file_saving: bool,
-    file_revision: u64,
+    pub(crate) file_revision: u64,
     window_handle: AnyWindowHandle,
     pub folder: Option<crate::workspace_fs::WorkspaceDir>,
+    pub(crate) workspace_roots: Vec<crate::workspaces::WorkspaceRoot>,
+    pub(crate) active_workspace: Option<u64>,
+    pub(crate) workspace_serial: u64,
+    pub(crate) workspace_menu: Option<crate::workspaces::WorkspaceMenu>,
+    pub(crate) workspace_rename: Option<crate::workspaces::WorkspaceRename>,
+    pub(crate) workspace_busy: HashSet<std::path::PathBuf>,
     pub folder_query: Entity<TextField>,
     pub folder_content: bool,
     pub folder_hits: Vec<crate::workspace_fs::Hit>,
     pub folder_searching: bool,
     folder_search_generation: u64,
-    folder_search_task: Option<Task<()>>,
+    folder_search_pending: usize,
     pub folder_expanded: HashSet<std::path::PathBuf>,
     /// `[[wiki links]]` across the open folder, used for the backlink panel.
     pub folder_links: fdl_core::wiki::Index,
@@ -270,7 +278,7 @@ pub struct Workspace {
     pub(crate) global_folder_hits: Vec<crate::workspace_fs::Hit>,
     pub(crate) global_folder_searching: bool,
     pub(crate) global_folder_generation: u64,
-    pub(crate) global_folder_task: Option<Task<()>>,
+    pub(crate) global_folder_pending: usize,
     /// Keyboard highlight inside search results.
     pub search_sel: Option<usize>,
     pub sidebar_open: bool,
@@ -476,12 +484,18 @@ impl Workspace {
             file_revision: 0,
             window_handle: window.window_handle(),
             folder: None,
+            workspace_roots: vec![],
+            active_workspace: None,
+            workspace_serial: 0,
+            workspace_menu: None,
+            workspace_rename: None,
+            workspace_busy: HashSet::new(),
             folder_query,
             folder_content: false,
             folder_hits: vec![],
             folder_searching: false,
             folder_search_generation: 0,
-            folder_search_task: None,
+            folder_search_pending: 0,
             folder_expanded: HashSet::new(),
             folder_links: fdl_core::wiki::Index::default(),
             folder_links_generation: 0,
@@ -501,7 +515,7 @@ impl Workspace {
             global_folder_hits: vec![],
             global_folder_searching: false,
             global_folder_generation: 0,
-            global_folder_task: None,
+            global_folder_pending: 0,
             search_sel: None,
             sidebar_open: !quick,
             sidebar_width,
@@ -609,6 +623,10 @@ impl Workspace {
     }
 
     fn open_external_path_now(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let registered = self.workspace_roots.iter().find_map(|root| root.tree.as_ref().and_then(|tree| tree.files().into_iter().find(|node|
+            crate::workspaces::same_path(&node.path, &path)
+        ).map(|node| (root.id, node.path.clone()))));
+        if let Some((id, found)) = registered { self.open_workspace_file_now(id, found, window, cx); return; }
         let canonical = path.canonicalize().ok();
         let existing = self.folder.as_ref().and_then(|folder| folder.files().into_iter().find(|node|
             node.path == path || canonical.as_ref().is_some_and(|p| node.path.canonicalize().ok().as_ref() == Some(p))
@@ -627,8 +645,10 @@ impl Workspace {
                 return;
             };
             self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
-            self.folder_search_task = None;
+            self.folder_search_pending = 0;
             self.folder_searching = false;
+            let id = self.register_workspace_snapshot(dir.clone(), false, cx);
+            self.active_workspace = Some(id);
             self.folder = Some(dir);
             self.refresh_global_folder_hits(cx);
             self.folder_expanded.clear();
@@ -645,11 +665,15 @@ impl Workspace {
                 self.folder_expanded.insert(dir.to_path_buf());
                 parent = dir.parent();
             }
+            if let Some(workspace) = self.active_workspace.and_then(|id| self.workspace_roots.iter_mut().find(|r| r.id == id)) {
+                workspace.expanded_paths = self.folder_expanded.clone();
+            }
         }
         self.load_file(path, window, cx);
     }
 
     /// Create a new file without ever replacing an existing one.
+    #[cfg(feature = "devtools")]
     pub fn new_folder_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) else { return };
         let picked = crate::devtools::take_pick().and_then(|p| p.into_iter().next());
@@ -667,6 +691,7 @@ impl Workspace {
         }).detach();
     }
 
+    #[cfg(feature = "devtools")]
     fn new_folder_file_now(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let allowed = self.folder.as_ref().and_then(|f| f.root.canonicalize().ok()).zip(path.parent().and_then(|p| p.canonicalize().ok()))
             .is_some_and(|(root, parent)| parent.starts_with(root));
@@ -685,42 +710,37 @@ impl Workspace {
     /// Pick a normal folder (Typora's 打开文件夹) and show its tree.
     pub fn open_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menus();
-        let picked = crate::devtools::take_pick();
-        let prompt = picked.is_none().then(|| cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some(crate::settings::text("打开文件夹").into()),
-            extensions: None,
-        }));
-        cx.spawn_in(window, async move |this, cx| {
-            let paths = match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked };
-            let Some(path) = paths.and_then(|p| p.into_iter().next()) else { return };
-            let _ = this.update_in(cx, |w, window, cx| w.open_folder_path(path, window, cx));
-        })
-        .detach();
+        self.add_workspace(window, cx);
     }
 
+    #[cfg(feature = "devtools")]
     pub fn open_folder_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_folder_with_selection(path, true, window, cx);
+        self.open_folder_with_selection(path, true, true, window, cx);
     }
 
     /// Startup can show the tree without opening an arbitrary first document.
-    pub fn open_folder_tree_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_folder_with_selection(path, false, window, cx);
+    pub fn open_folder_tree_path(&mut self, path: std::path::PathBuf, _window: &mut Window, cx: &mut Context<Self>) {
+        let path = if path.is_absolute() { path } else { std::env::current_dir().unwrap_or_default().join(path) };
+        let id = self.register_workspace(crate::workspace_fs::WorkspaceSpec::new(path), false, false, cx);
+        self.active_workspace = Some(id);
+        if let Some(tree) = self.workspace_roots.iter().find(|r| r.id == id).and_then(|r| r.tree.clone()) { self.folder = Some(tree); self.refresh_folder_links(cx); }
     }
 
-    fn open_folder_with_selection(&mut self, path: std::path::PathBuf, select_first: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_initial_workspace(&mut self, documents: Option<std::path::PathBuf>, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_roots.is_empty() { self.restore_workspaces(documents, cx); }
+    }
+
+    #[cfg(feature = "devtools")]
+    fn open_folder_with_selection(&mut self, path: std::path::PathBuf, select_first: bool, remember: bool, window: &mut Window, cx: &mut Context<Self>) {
         let retry = path.clone();
-        if self.save_before(cx, move |w, window, cx| w.open_folder_path_now(retry, select_first, window, cx)) {
-            self.open_folder_path_now(path, select_first, window, cx);
+        if self.save_before(cx, move |w, window, cx| w.open_folder_path_now(retry, select_first, remember, window, cx)) {
+            self.open_folder_path_now(path, select_first, remember, window, cx);
         }
     }
 
-    fn open_folder_path_now(&mut self, path: std::path::PathBuf, select_first: bool, window: &mut Window, cx: &mut Context<Self>) {
-        // A team's workspace is the Git repository, not whatever nested
-        // folder happened to be picked in the dialog.
-        let path = crate::git_workspace::repo_root(&path).unwrap_or(path);
+    #[cfg(feature = "devtools")]
+    fn open_folder_path_now(&mut self, path: std::path::PathBuf, select_first: bool, remember: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let path = if path.is_absolute() { path } else { std::env::current_dir().unwrap_or_default().join(path) };
         let dir = match crate::workspace_fs::WorkspaceDir::scan(path) {
             Ok(d) => d,
             Err(e) => {
@@ -729,6 +749,9 @@ impl Workspace {
             }
         };
         let first = select_first.then(|| dir.files().first().map(|f| f.path.clone())).flatten();
+        let id = self.register_workspace_snapshot(dir.clone(), remember, cx);
+        self.active_workspace = Some(id);
+        if remember { self.save_workspaces(cx); }
         let mut expanded = HashSet::new();
         let mut parent = first.as_deref().and_then(std::path::Path::parent);
         while let Some(path) = parent {
@@ -738,7 +761,7 @@ impl Workspace {
             parent = path.parent();
         }
         self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
-        self.folder_search_task = None;
+        self.folder_search_pending = 0;
         self.folder_searching = false;
         self.folder = Some(dir);
         self.refresh_global_folder_hits(cx);
@@ -763,17 +786,18 @@ impl Workspace {
     }
 
     /// Close the folder tree and go back to the document library.
+    #[cfg(feature = "devtools")]
     pub fn close_folder(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.save_before(cx, |w, _, cx| w.close_folder_now(cx)) {
             self.close_folder_now(cx);
         }
     }
 
-    fn close_folder_now(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_folder_now(&mut self, cx: &mut Context<Self>) {
         self.folder = None;
         self.refresh_global_folder_hits(cx);
         self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
-        self.folder_search_task = None;
+        self.folder_search_pending = 0;
         self.folder_searching = false;
         self.folder_links_generation = self.folder_links_generation.wrapping_add(1);
         self.folder_links_loading = false;
@@ -793,29 +817,36 @@ impl Workspace {
         let generation = self.folder_search_generation;
         let query = self.folder_query.read(cx).text.clone();
         self.folder_hits.clear();
-        self.folder_search_task = None;
-        let Some(folder) = self.folder.clone().filter(|_| !query.trim().is_empty()) else {
-            self.folder_searching = false;
-            cx.notify();
-            return;
-        };
+        let folders = self.workspace_roots.iter().filter(|r| r.error.is_none()).filter_map(|r| r.tree.clone()).collect::<Vec<_>>();
+        self.folder_search_pending = if query.trim().is_empty() { 0 } else { folders.len() };
+        self.folder_searching = self.folder_search_pending != 0;
+        if !self.folder_searching { cx.notify(); return; }
         let content = self.folder_content;
-        self.folder_searching = true;
-        self.folder_search_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(150)).await;
-            let task = cx.background_executor().spawn(async move { folder.search(&query, content) });
-            let hits = task.await;
-            let _ = this.update(cx, |w, cx| if w.folder_search_generation == generation {
-                w.folder_hits = hits;
-                w.folder_searching = false;
-                cx.notify();
-            });
-        }));
+        for folder in folders {
+            let query = query.clone();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_millis(150)).await;
+                if !this.update(cx, |w, _| w.folder_search_generation == generation).unwrap_or(false) { return; }
+                let task = cx.background_executor().spawn(async move { folder.search(&query, content) });
+                let hits = task.await;
+                let _ = this.update(cx, |w, cx| if w.folder_search_generation == generation {
+                    w.folder_hits.extend(hits);
+                    w.folder_hits.sort_by(|a, b| b.score.cmp(&a.score).then(a.root.cmp(&b.root)).then(a.rel.cmp(&b.rel)));
+                    w.folder_search_pending = w.folder_search_pending.saturating_sub(1);
+                    w.folder_searching = w.folder_search_pending != 0;
+                    cx.notify();
+                });
+            }).detach();
+        }
         cx.notify();
     }
 
     /// Re-scan without replacing the open editor or losing expanded folders.
     pub fn refresh_folder(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace_roots.is_empty() {
+            self.refresh_workspaces(cx);
+            return;
+        }
         let Some(root) = self.folder.as_ref().map(|f| f.root.clone()) else { return };
         match crate::workspace_fs::WorkspaceDir::scan(root) {
             Ok(folder) => {
@@ -896,6 +927,7 @@ impl Workspace {
     /// Open one file from the folder tree. Markdown is edited in place;
     /// `.mdxb` goes through the library so its chapters keep their page tree.
     pub fn open_file_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_path_busy(&path) { self.workspace_busy_notice(cx); return; }
         match crate::workspace_fs::DocKind::of(&path) {
             Some(crate::workspace_fs::DocKind::Book) => {
                 if let Ok(id) = self.import_book(&path) {
@@ -1254,6 +1286,7 @@ impl Workspace {
         self.rename = Some(Rename { id: id.to_string(), field, _subs: subs });
         // From 主页 the row may be hidden: show it in the sidebar.
         self.sidebar_open = true;
+        self.list_scroll.set_offset(point(px(0.), px(0.)));
         self.reveal_in_tree(id);
         self.row_menu = None;
         cx.notify();
@@ -1900,6 +1933,7 @@ impl Render for Workspace {
         self.native_sidebar.sync(if self.sidebar_open { self.sidebar_w(window) } else { 0. }, window);
         let sidebar = if self.sidebar_open { Some(if matches!(self.view, View::Settings | View::Trash) { self.render_settings_sidebar(window, cx) } else { self.render_sidebar(window, cx) }) } else { None };
         let row_menu = self.render_row_menu(window, cx);
+        let workspace_menu = self.render_workspace_menu(cx);
         let resize = self.sidebar_open.then(|| self.render_resize_handle(window, cx));
         let resize_overlay = self.render_resize_overlay(cx);
         let search = self.render_search(window, cx);
@@ -2044,7 +2078,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|w, _: &FocusSearch, window, cx| {
-                if w.folder.is_some() {
+                if !w.workspace_roots.is_empty() {
                     w.sidebar_open = true;
                     let fh = w.folder_query.read(cx).focus_handle(cx);
                     window.focus(&fh);
@@ -2066,6 +2100,7 @@ impl Render for Workspace {
             .children(resize)
             .children(crate::ui::window_controls(window))
             .children(row_menu)
+            .children(workspace_menu)
             .children(doc_menu)
             .children(mode_menu)
             .children(doc_info)
@@ -2171,19 +2206,19 @@ pub(crate) fn check_global_search(args: &str, cx: &mut App) {
     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
     handle.update(cx, |ws, window, cx| match phase {
         "ready" => {
-            assert!(ws.editor.as_ref().is_some_and(|editor| editor.read(cx).focus.is_focused(window)), "opening a folder file must focus its editor");
+            assert!(ws.workspace_roots.iter().any(|r| r.spec.path == root && r.tree.is_some()), "folder tree must load");
         }
         "empty" => {
-            assert!(ws.editor.is_none() && ws.focus.is_focused(window), "an empty folder must leave workspace shortcuts available");
+            assert!(ws.workspace_roots.iter().any(|r| r.spec.path == root && r.tree.is_some()), "empty folder must remain available alongside the others");
         }
         "closed" => {
-            assert!(!ws.search_open && ws.focus.is_focused(window), "closing search must restore workspace focus");
+            assert!(!ws.search_open && (ws.focus.is_focused(window) || ws.editor.as_ref().is_some_and(|e| e.read(cx).focus.is_focused(window))), "closing search must restore focus");
         }
         "open" => {
             assert!(ws.search_open, "global search did not open");
             assert!(ws.global_search, "search is not in global mode");
             assert!(ws.search.read(cx).is_focused(window), "global search input is not focused");
-            assert_eq!(ws.folder.as_ref().unwrap().root.canonicalize().unwrap(), root.canonicalize().unwrap());
+            assert!(ws.workspace_roots.iter().any(|r| r.spec.path == root && r.tree.is_some()));
         }
         "results" => {
             assert!(ws.search_open && ws.global_search && !ws.global_folder_searching);
@@ -2203,6 +2238,175 @@ pub(crate) fn check_global_search(args: &str, cx: &mut App) {
         _ => panic!("unknown global search check"),
     }).unwrap();
     eprintln!("global-search: {phase} PASS");
+}
+
+/// Validate startup and folder selection only within an explicitly marked test root.
+#[cfg(feature = "devtools")]
+pub(crate) fn check_workspace_startup(args: &str, cx: &mut App) {
+    let (phase, root) = args.split_once(' ').expect("phase and temporary folder");
+    let root = std::path::PathBuf::from(root);
+    let test_root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_TEST_WORKSPACE_ROOT").expect("test workspace root"));
+    let canonical_test_root = test_root.canonicalize().unwrap();
+    assert!(canonical_test_root.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(test_root.join(".markdownx-workspace-test").is_file());
+    assert!(root.is_absolute() && root.parent().unwrap().canonicalize().unwrap().starts_with(&canonical_test_root));
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, _, _| {
+        assert!(ws.sidebar_open);
+        if phase == "empty" { assert!(ws.workspace_roots.is_empty()); return; }
+        let registered = ws.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &root)).expect("registered workspace");
+        match phase {
+            "default" => { assert!(registered.tree.is_some() && registered.error.is_none()); assert!(ws.file.is_none()); }
+            "selected" => {
+                assert!(registered.tree.is_some() && registered.persistent);
+                assert!(ws.workspace_roots.iter().any(|r| r.spec.path == test_root.join("documents/MarkDown-Demo") && r.tree.is_some()));
+                assert!(ws.workspace_roots.iter().any(|r| r.spec.path == test_root.join("unavailable-folder") && r.error.is_some()));
+                assert_eq!(ws.workspace_roots.iter().filter(|r| crate::workspaces::same_path(&r.spec.path, &root)).count(), 1);
+                assert!(ws.file.is_none(), "adding a folder must not open an arbitrary file");
+            }
+            "restored" => {
+                assert!(registered.tree.is_some() && registered.persistent);
+                assert_eq!(registered.spec.label.as_deref(), Some("新的工作区"));
+                assert!(ws.workspace_roots.iter().any(|r| r.error.is_some()));
+            }
+            "override" => { assert!(registered.tree.is_some() && !registered.persistent); }
+            _ => panic!("unknown workspace test phase"),
+        }
+    }).unwrap();
+    eprintln!("workspace-startup: {phase} PASS");
+}
+
+/// End-to-end multi-root actions in a marked, disposable test workspace.
+#[cfg(feature = "devtools")]
+pub(crate) fn check_multi_workspace(phase: &str, cx: &mut App) {
+    use crate::workspaces::WorkspaceMenuTarget;
+    let test_root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_TEST_WORKSPACE_ROOT").unwrap());
+    assert!(test_root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(test_root.join(".markdownx-workspace-test").is_file());
+    let first_root = test_root.join("documents/MarkDown-Demo");
+    let second_root = test_root.join("repository/所选目录");
+    let replacement = test_root.join("replacement");
+    let first = first_root.join("alpha.md");
+    let second = second_root.join("note.md");
+    let renamed = second_root.join("renamed.md");
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, window, cx| {
+        let root_id = |ws: &Workspace, path: &std::path::Path| ws.workspace_roots.iter().find(|r| r.spec.path == path).expect("test root registered").id;
+        match phase {
+            "library-rename-start" => {
+                let doc = crate::model::Document { title: crate::model::RichText::plain("Temporary rename"), ..Default::default() };
+                let id = ws.store.create_from(&doc).unwrap();
+                ws.entries = ws.store.list();
+                ws.show_view(View::Home, cx);
+                ws.start_rename(&id, window, cx);
+                assert!(ws.rename.is_some() && ws.sidebar_open);
+            }
+            "library-rename-done" => {
+                assert!(ws.rename.is_none());
+                assert!(ws.entries.iter().any(|entry| entry.title == "Renamed from Home"));
+            }
+            "prepare" => {
+                std::fs::write(&first, "# First\n\nmultiworkspacesearch\n").unwrap();
+                ws.scan_workspace(root_id(ws, &first_root), false, cx);
+            }
+            "switch-start" => {
+                ws.open_workspace_file_now(root_id(ws, &first_root), first.clone(), window, cx);
+                let text = "# SavedAcross\n\nmultiworkspacesearch\n";
+                let (doc, _) = crate::markdown_source::parse(&first, text);
+                ws.editor.as_ref().unwrap().update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc), cx));
+                ws.file_revision += 1; ws.unsaved = true;
+                ws.open_workspace_file(root_id(ws, &second_root), second.clone(), window, cx);
+                assert_eq!(ws.file.as_deref(), Some(first.as_path()));
+                assert!(ws.file_saving && ws.after_save.is_some());
+            }
+            "switch-done" => {
+                assert_eq!(ws.file.as_deref(), Some(second.as_path()));
+                assert!(std::fs::read_to_string(&first).unwrap().contains("SavedAcross"));
+                assert!(!ws.unsaved && !ws.file_saving);
+            }
+            "search" => {
+                assert!(ws.search_open && ws.global_search && !ws.global_folder_searching);
+                assert!(ws.global_folder_hits.iter().any(|h| h.path == first));
+                assert!(ws.global_folder_hits.iter().any(|h| h.path == second));
+                let index = ws.global_folder_hits.iter().position(|h| h.path == first).unwrap();
+                ws.pick_search(index, window, cx);
+                assert_eq!(ws.file.as_deref(), Some(first.as_path()));
+            }
+            "legacy" => assert!(ws.folder_query.read(cx).is_focused(window)),
+            "new-file" => ws.prompt_workspace_new(root_id(ws, &second_root), None, false, window, cx),
+            "new-file-done" => {
+                assert!(second_root.join("draft.md").is_file());
+                assert_eq!(ws.file.as_deref(), Some(second_root.join("draft.md").as_path()));
+            }
+            "new-dir" => ws.prompt_workspace_new(root_id(ws, &second_root), None, true, window, cx),
+            "new-dir-done" => assert!(second_root.join("nested").is_dir()),
+            "rename-file" => {
+                let id = root_id(ws, &second_root);
+                ws.open_workspace_file_now(id, second.clone(), window, cx);
+                ws.start_workspace_rename(WorkspaceMenuTarget::Node { root: id, path: second.clone(), dir: false }, window, cx);
+            }
+            "rename-done" => {
+                assert!(!second.exists() && renamed.is_file());
+                assert_eq!(ws.file.as_deref(), Some(renamed.as_path()));
+                let id = root_id(ws, &second_root);
+                ws.ask_trash_workspace_node(id, second_root.join("draft.md"), false, cx);
+                assert!(matches!(ws.confirm, Some(Confirm::TrashWorkspaceNode { .. })));
+                ws.confirm = None;
+            }
+            "remove" => {
+                let (doc, _) = crate::markdown_source::parse(&renamed, "# BeforeRemoval\n\ntext\n");
+                ws.editor.as_ref().unwrap().update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc), cx));
+                ws.file_revision += 1; ws.unsaved = true;
+                ws.remove_workspace(root_id(ws, &second_root), window, cx);
+            }
+            "removed" => {
+                assert!(!ws.workspace_roots.iter().any(|r| r.spec.path == second_root));
+                assert!(std::fs::read_to_string(&renamed).unwrap().contains("BeforeRemoval"));
+                assert!(second_root.join("draft.md").exists() && second_root.join("nested").is_dir());
+            }
+            "replace" => ws.replace_workspace(root_id(ws, &first_root), window, cx),
+            "replaced" => {
+                assert!(ws.workspace_roots.iter().any(|r| r.spec.path == replacement && r.tree.is_some()));
+                assert!(first.is_file(), "replacing a workspace must preserve its files");
+            }
+            "label" => ws.start_workspace_rename(WorkspaceMenuTarget::Root(root_id(ws, &replacement)), window, cx),
+            "label-done" => assert_eq!(ws.workspace_roots.iter().find(|r| r.spec.path == replacement).unwrap().spec.label.as_deref(), Some("新的工作区")),
+            _ => panic!("unknown multi-workspace phase"),
+        }
+    }).unwrap();
+    eprintln!("multi-workspace: {phase} PASS");
+}
+
+/// Exercise the native window close guard against disposable filesystem documents.
+#[cfg(all(feature = "devtools", target_os = "windows"))]
+pub(crate) fn check_window_close(phase: &str, cx: &mut App) {
+    let root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_WINDOW_TEST_ROOT").expect("isolated test root"));
+    let canonical = root.canonicalize().unwrap();
+    assert!(canonical.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(root.join(".markdownx-window-test").is_file());
+    let file = root.join("note.md");
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, window, cx| match phase {
+        "prepare-success" | "prepare-conflict" => {
+            ws.open_folder_path(root.clone(), window, cx);
+            assert_eq!(ws.file.as_deref(), Some(file.as_path()));
+            let (doc, _) = crate::markdown_source::parse(&file, "# Saved on close\n\nTemporary content.\n");
+            ws.editor.as_ref().unwrap().update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc), cx));
+            ws.file_revision += 1;
+            ws.unsaved = true;
+            if phase == "prepare-conflict" { std::fs::write(&file, "# External change\n").unwrap(); }
+        }
+        "resolve-conflict" => {
+            assert!(ws.unsaved && matches!(ws.confirm, Some(Confirm::SaveFailed)), "conflicting changes must block native close");
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "# External change\n");
+            ws.confirm = None;
+            ws.after_save = None;
+            ws.resolve_save_failed(false, window, cx);
+            assert!(!ws.unsaved);
+        }
+        _ => panic!("unknown native window close test phase"),
+    }).unwrap();
+    eprintln!("window-close: {phase} PASS");
 }
 
 /// Exercise switching, refresh and conflict recovery in a marked temporary folder.

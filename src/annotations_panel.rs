@@ -63,7 +63,8 @@ impl Workspace {
             }
         };
         if self.annotations.doc != key {
-            self.annotations = AnnotationStore::load_or_new(&path, key);
+            self.annotations = AnnotationStore::load_or_new(&path, &key);
+            self.annotations.doc = key;
             self.annotations_open = false;
             self.annotation_selected.clear();
             self.annotation_editing = None;

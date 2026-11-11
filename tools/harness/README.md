@@ -27,6 +27,8 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 - 比较时光标不闪烁（`FDL_NOBLINK`）。脚本开头要先把指针移到空白处，否则真实鼠标的位置会以 hover 的形式出现在截图里。
 - 旧版二进制可以这样编：`git worktree add /tmp/old <提交>`，在那里用 `CARGO_TARGET_DIR=<本仓库>/target cargo build --release --features devtools`，再把二进制复制出来。
 - `python3 tools/harness/global_search.py` 用临时文档库和目录，验证全局搜索的键盘打开、正文匹配、结果选择以及链接和旧搜索快捷键。
+- `python3 tools/harness/workspace_startup.py` 用隔离目录验证多目录并存、重启恢复、跨目录搜索、保存和文件管理，以及不可用目录的保护；不会读取真实文档目录。
+- Windows 上运行 `python tools/harness/window_controls.py`，在隔离窗口和临时文档库中验证标题栏命中、最小化、最大化/还原、全屏控件、关闭时保存和外部修改冲突保护。
 
 ## 脚本命令
 
@@ -51,6 +53,9 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 | `open-folder` | 触发打开文件夹操作，配合 `pick` 使用 |
 | `open-file` / `new-folder-file` | 触发打开文件 / 在目录中新建文件，配合 `pick` 使用 |
 | `check-folder-state <目录>` | 只读检查已打开的目录、侧栏和首个文件 |
+| `check-workspace-startup <阶段> <目录>` | 检查临时目录中的默认、选择、恢复和启动参数覆盖行为 |
+| `check-multi-workspace <阶段>` | 在带标记的临时目录中检查多目录、保存、搜索和文件管理 |
+| `window-native <动作>` / `window-client <动作>` / `check-window-close <阶段>` | Windows 隔离窗口专用：验证原生及全屏标题栏消息和关闭时的保存保护 |
 | `check-global-search <阶段> <临时目录>` | 在带 `.markdownx-global-search-test` 标记的临时目录中检查全局搜索、键盘选择、链接快捷键和原有搜索 |
 | `check-folder-safety <阶段> <临时目录>` | 依次检查后台保存、切换、外部冲突及恢复；包含 `begin` / `conflict` / `recover` / `finish`、`empty-begin` / `empty-done`、`picker` / `duplicate` / `picked` 和 `search-begin` / `search-done`；各阶段间等待异步操作完成，临时目录须有 `.markdownx-folder-test` 标记 |
 | `activate` | 让窗口成为 key window。**会抢焦点，一般不要用** |

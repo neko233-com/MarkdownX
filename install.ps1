@@ -100,7 +100,7 @@ function Build-WorkspacePackage([string]$Root, [string]$Version) {
     try {
         & python $cleaner
         if ($LASTEXITCODE -ne 0) { throw 'Test-artifact cleanup failed.' }
-        & cargo build --release --locked --jobs 1 -p markdownx -p markdownx-server
+        & cargo build --release --locked -p markdownx -p markdownx-server
         if ($LASTEXITCODE -ne 0) { throw 'The MarkdownX release build failed.' }
         & (Get-Process -Id $PID).Path -NoProfile -File $builder
         if ($LASTEXITCODE -ne 0) { throw 'The MSI build failed.' }

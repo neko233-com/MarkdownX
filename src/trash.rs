@@ -309,6 +309,12 @@ impl Workspace {
                 true,
             ),
             Confirm::Purge(_) => (crate::settings::text("确认彻底删除？").to_string(), crate::settings::text("彻底删除后，该页面及其子页面将无法恢复").to_string(), crate::settings::text("删除"), true),
+            Confirm::TrashWorkspaceNode { path, dir, .. } => (
+                crate::localized_format!("将{}移入回收站？", "Move {} to the recycle bin?", if *dir { crate::settings::tr("文件夹", "folder") } else { crate::settings::tr("文件", "file") }),
+                if *dir { crate::localized_format!("{}\n文件夹及其中所有内容（包括未显示的文件）将移入系统回收站。", "{}\nThe folder and all its contents, including hidden files, will be moved to the system recycle bin.", path.display()) }
+                else { crate::localized_format!("{}\n文件将移入系统回收站。", "{}\nThe file will be moved to the system recycle bin.", path.display()) },
+                crate::settings::tr("移入回收站", "Move to recycle bin"), true,
+            ),
             Confirm::Refs { show: false, .. } => (
                 crate::settings::text("是否隐藏引用列表？").to_string(),
                 crate::settings::text("选择隐藏后，协作者将无法查看本文的引用列表。如需重新显示，可点击文档右上角的更多按钮“...”，打开“显示引用列表”开关。").to_string(),
@@ -386,6 +392,7 @@ impl Workspace {
                             Confirm::Restore(id) => w.restore_doc(&id, cx),
                             Confirm::Purge(id) => w.purge_doc(&id, cx),
                             Confirm::EmptyTrash => w.empty_trash(cx),
+                            Confirm::TrashWorkspaceNode { root, path, dir } => w.trash_workspace_node(root, path, dir, window, cx),
                             Confirm::Refs { show, no_ask } => {
                                 if no_ask {
                                     let mut s = w.store.settings();

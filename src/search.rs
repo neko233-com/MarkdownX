@@ -24,13 +24,13 @@ const SUMMARY_SEP: &str = "\u{a0}\u{a0}\u{a0}";
 const INFO_W: f32 = 472.;
 
 #[derive(Clone, PartialEq, Eq)]
-enum SearchTarget { Document(String), File(std::path::PathBuf) }
+enum SearchTarget { Document(String), File(std::path::PathBuf, std::path::PathBuf) }
 
 #[derive(Clone, Copy)]
 enum SearchItem<'a> { Document(&'a Entry), File(&'a crate::workspace_fs::Hit) }
 impl SearchItem<'_> {
     fn target(&self) -> SearchTarget {
-        match self { Self::Document(e) => SearchTarget::Document(e.id.clone()), Self::File(h) => SearchTarget::File(h.path.clone()) }
+        match self { Self::Document(e) => SearchTarget::Document(e.id.clone()), Self::File(h) => SearchTarget::File(h.root.clone(), h.path.clone()) }
     }
 }
 
@@ -281,7 +281,14 @@ impl Workspace {
     pub(crate) fn pick_search(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = self.search_items(cx).get(row).map(SearchItem::target) else { return };
         self.close_search(window, cx);
-        match target { SearchTarget::Document(id) => self.open(&id, window, cx), SearchTarget::File(path) => self.load_file(path, window, cx) }
+        match target {
+            SearchTarget::Document(id) => self.open(&id, window, cx),
+            SearchTarget::File(root, path) => {
+                if let Some(id) = self.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &root)).map(|r| r.id) {
+                    self.open_workspace_file(id, path, window, cx);
+                } else { self.load_file(path, window, cx); }
+            }
+        }
         if let Some(ed) = &self.editor {
             ed.read(cx).focus(window);
         }
@@ -340,30 +347,33 @@ impl Workspace {
         let previous = self.search_sel.and_then(|i| self.search_items(cx).get(i).map(SearchItem::target));
         self.global_folder_generation = self.global_folder_generation.wrapping_add(1);
         let generation = self.global_folder_generation;
-        self.global_folder_task = None;
         self.global_folder_hits.clear();
         let targets = self.search_items(cx).iter().map(SearchItem::target).collect::<Vec<_>>();
         self.search_sel = selection_after_update(previous.as_ref(), &targets);
         let query = self.search.read(cx).text.clone();
-        let Some(folder) = self.folder.clone().filter(|_| self.search_open && self.global_search && !query.trim().is_empty()) else {
-            self.global_folder_searching = false;
-            cx.notify();
-            return;
-        };
-        self.global_folder_searching = true;
-        self.global_folder_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(150)).await;
-            let task = cx.background_executor().spawn(async move { folder.search(&query, true) });
-            let hits = task.await;
-            let _ = this.update(cx, |w, cx| if w.global_folder_generation == generation {
-                let previous = w.search_sel.and_then(|i| w.search_items(cx).get(i).map(SearchItem::target));
-                w.global_folder_hits = hits;
-                w.global_folder_searching = false;
-                let targets = w.search_items(cx).iter().map(SearchItem::target).collect::<Vec<_>>();
-                w.search_sel = selection_after_update(previous.as_ref(), &targets);
-                cx.notify();
-            });
-        }));
+        let folders = self.workspace_roots.iter().filter(|r| r.error.is_none()).filter_map(|r| r.tree.clone()).collect::<Vec<_>>();
+        self.global_folder_pending = if self.search_open && self.global_search && !query.trim().is_empty() { folders.len() } else { 0 };
+        self.global_folder_searching = self.global_folder_pending != 0;
+        if !self.global_folder_searching { cx.notify(); return; }
+        for folder in folders {
+            let query = query.clone();
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_millis(150)).await;
+                if !this.update(cx, |w, _| w.global_folder_generation == generation).unwrap_or(false) { return; }
+                let task = cx.background_executor().spawn(async move { folder.search(&query, true) });
+                let hits = task.await;
+                let _ = this.update(cx, |w, cx| if w.global_folder_generation == generation {
+                    let previous = w.search_sel.and_then(|i| w.search_items(cx).get(i).map(SearchItem::target));
+                    w.global_folder_hits.extend(hits);
+                    w.global_folder_hits.sort_by(|a, b| b.score.cmp(&a.score).then(a.root.cmp(&b.root)).then(a.rel.cmp(&b.rel)));
+                    w.global_folder_pending = w.global_folder_pending.saturating_sub(1);
+                    w.global_folder_searching = w.global_folder_pending != 0;
+                    let targets = w.search_items(cx).iter().map(SearchItem::target).collect::<Vec<_>>();
+                    w.search_sel = selection_after_update(previous.as_ref(), &targets);
+                    cx.notify();
+                });
+            }).detach();
+        }
         cx.notify();
     }
 
@@ -397,7 +407,7 @@ impl Workspace {
     fn search_file_row(&self, hit: &crate::workspace_fs::Hit, ix: usize, q: &str, width: f32, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title_hit = find_ci(&hit.rel, q);
         let summary = hit.snippet.as_ref().map(|text| (text.clone(), find_all(text, q)));
-        let folder = self.folder.as_ref().map(|f| f.name.as_str()).unwrap_or("");
+        let folder = self.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &hit.root)).map(|r| r.spec.name()).unwrap_or_else(|| hit.root.display().to_string());
         div().id(("search-hit", ix)).flex_none().pt(px(8.)).pr(px(8.)).pb(px(8.)).pl(px(12.))
             .flex().items_center().rounded(px(ROW_RADIUS)).cursor_pointer()
             .when(self.search_sel == Some(ix), |d| d.bg(Theme::fill_hover()))
@@ -562,7 +572,7 @@ mod tests {
     #[test]
     fn selection_stays_on_the_same_result_when_folder_hits_arrive() {
         let doc = SearchTarget::Document("page".into());
-        let file = SearchTarget::File("folder/note.md".into());
+        let file = SearchTarget::File("folder".into(), "folder/note.md".into());
         assert_eq!(selection_after_update(Some(&doc), &[file.clone(), doc.clone()]), Some(1));
         assert_eq!(selection_after_update(None, &[file.clone(), doc.clone()]), Some(0));
         assert_eq!(selection_after_update(Some(&file), &[doc]), Some(0));

@@ -870,10 +870,28 @@ impl WindowsWindowInner {
             return None;
         }
 
+        // quiet.md: hit test the point in this message, not the last mouse move.
+        let mut cursor_point = POINT {
+            x: lparam.signed_loword().into(),
+            y: lparam.signed_hiword().into(),
+        };
+        unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
         let mut lock = self.state.borrow_mut();
+        // quiet.md: preserve the top resize frame before testing the draggable title bar.
+        if self.hide_title_bar && !lock.is_maximized() {
+            let dpi = unsafe { GetDpiForWindow(handle) };
+            let frame_y = unsafe { GetSystemMetricsForDpi(SM_CYFRAME, dpi) };
+            if cursor_point.y >= 0 && cursor_point.y <= frame_y {
+                drop(lock);
+                let hit = unsafe { DefWindowProcW(handle, msg, wparam, lparam) };
+                if matches!(hit.0 as u32, HTTOPLEFT | HTTOPRIGHT | HTLEFT | HTRIGHT) { return Some(hit.0); }
+                return Some(HTTOP as _);
+            }
+        }
+        let position = logical_point(cursor_point.x as f32, cursor_point.y as f32, lock.scale_factor);
         if let Some(mut callback) = lock.callbacks.hit_test_window_control.take() {
             drop(lock);
-            let area = callback();
+            let area = callback(position);
             self.state.borrow_mut().callbacks.hit_test_window_control = Some(callback);
             if let Some(area) = area {
                 return match area {
@@ -911,18 +929,6 @@ impl WindowsWindowInner {
 
         if self.state.borrow().is_fullscreen() {
             return Some(HTCLIENT as _);
-        }
-
-        let dpi = unsafe { GetDpiForWindow(handle) };
-        let frame_y = unsafe { GetSystemMetricsForDpi(SM_CYFRAME, dpi) };
-
-        let mut cursor_point = POINT {
-            x: lparam.signed_loword().into(),
-            y: lparam.signed_hiword().into(),
-        };
-        unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
-        if !self.state.borrow().is_maximized() && cursor_point.y >= 0 && cursor_point.y <= frame_y {
-            return Some(HTTOP as _);
         }
 
         Some(HTCLIENT as _)

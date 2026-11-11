@@ -7,6 +7,46 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
+
+pub const DEFAULT_WORKSPACE_DIR: &str = "MarkDown-Demo";
+
+fn initially_expanded() -> bool { true }
+
+/// A registered folder; its label never changes the underlying directory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceSpec {
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default = "initially_expanded")]
+    pub expanded: bool,
+}
+
+impl WorkspaceSpec {
+    pub fn new(path: PathBuf) -> Self { Self { path, label: None, expanded: true } }
+    pub fn name(&self) -> String {
+        self.label.as_ref().filter(|s| !s.trim().is_empty()).cloned().unwrap_or_else(|| self.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| self.path.display().to_string()))
+    }
+}
+
+/// The platform's Documents folder, including known-folder redirection.
+pub fn documents_dir() -> Option<PathBuf> {
+    dirs::document_dir().or_else(|| dirs::home_dir().map(|home| home.join("Documents")))
+}
+
+/// Restore an explicit folder as-is; only create the default when none was chosen.
+pub fn initial_workspace(saved: Option<PathBuf>, documents: Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    if let Some(path) = saved {
+        anyhow::ensure!(path.is_absolute(), "workspace path must be absolute");
+        return Ok(path);
+    }
+    let documents = documents.ok_or_else(|| anyhow::anyhow!("system Documents folder is unavailable"))?;
+    anyhow::ensure!(documents.is_absolute(), "Documents path must be absolute");
+    let root = documents.join(DEFAULT_WORKSPACE_DIR);
+    fs::create_dir_all(&root)?;
+    Ok(root)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileNode {
@@ -241,6 +281,7 @@ fn collect_files<'a>(nodes: &'a [FileNode], out: &mut Vec<&'a FileNode>) {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hit {
+    pub root: PathBuf,
     pub path: PathBuf,
     pub rel: String,
     pub score: i64,
@@ -270,9 +311,9 @@ impl WorkspaceDir {
                 }
             }
             if let Some(s) = path_score {
-                hits.push(Hit { path: file.path.clone(), rel: rel.clone(), score: s + 20, snippet: body_match });
+                hits.push(Hit { root: self.root.clone(), path: file.path.clone(), rel: rel.clone(), score: s + 20, snippet: body_match });
             } else if let Some(sn) = body_match {
-                hits.push(Hit { path: file.path.clone(), rel, score: 1, snippet: Some(sn) });
+                hits.push(Hit { root: self.root.clone(), path: file.path.clone(), rel, score: 1, snippet: Some(sn) });
             }
         }
         hits.sort_by(|a, b| b.score.cmp(&a.score).then(a.rel.cmp(&b.rel)));
@@ -347,6 +388,23 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn initial_workspace_creates_only_the_default_and_preserves_custom_paths() {
+        let dir = temp("initial");
+        let documents = dir.join("文档");
+        fs::create_dir_all(&documents).unwrap();
+        let default = documents.join(DEFAULT_WORKSPACE_DIR);
+        assert!(!default.exists());
+        assert_eq!(initial_workspace(None, Some(documents.clone())).unwrap(), default);
+        assert!(default.is_dir());
+        let custom = dir.join("其他目录");
+        assert_eq!(initial_workspace(Some(custom.clone()), Some(documents)).unwrap(), custom);
+        assert!(!custom.exists(), "an unavailable chosen folder must not be recreated");
+        assert!(initial_workspace(None, None).is_err());
+        assert!(initial_workspace(Some(PathBuf::from("relative")), None).is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

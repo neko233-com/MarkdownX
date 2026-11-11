@@ -15,6 +15,11 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.14", &[
+        ("同时打开多个工作目录，管理文件和文件夹，并在所有目录中搜索", "Open multiple workspaces, manage files and folders, and search across them"),
+        ("默认打开文档目录下的 MarkDown-Demo，支持添加和切换目录", "Open MarkDown-Demo in Documents by default, and add or switch folders"),
+        ("修复 Windows 窗口的最小化、最大化、还原和关闭操作", "Fix Windows window minimize, maximize, restore and close controls"),
+    ]),
     ("0.1.13", &[
         ("Ctrl+K / ⌘K 全局搜索文档库与当前文件夹，支持路径和正文", "Use Ctrl+K / ⌘K to search the library and open folder by path or text"),
         ("新增 Windows 与 macOS 一键安装入口和发布包校验", "Add Windows and macOS one-command installers with package verification"),

@@ -109,6 +109,7 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `guides.rs` | 文档库是空的时放入内置的「开始指南」（只放一次） |
 | `app.rs` | `Workspace`：两栏窗口、打开 / 新建 / 保存 / 删除、保存状态、提醒调度、文件夹工作区 |
 | `workspace_fs.rs` | 文件夹扫描、目录树、模糊/内容搜索（不依赖文档库） |
+| `workspaces.rs` / `workspace_files.rs` | 多工作区持久化、后台扫描，以及防覆盖的文件管理和系统回收站 |
 | `git_workspace.rs` | 找 `.git` 根、按文件提交、补本地身份；桌面文件保存后的自动提交 |
 | `annotations_panel.rs` | 右侧批注面板：作者、输入、列表、解决/编辑/删除、批量操作 |
 | `html.rs` / `printing.rs` / `transfer.rs` | 导出 HTML / PDF、打印、导入导出（含 `.mdxb` 的树打包、Markdown 文件夹导出、文件夹打包与导入） |
@@ -168,9 +169,9 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 文件夹工作区与批注
 
-`workspace_fs.rs` 扫描文件系统并输出 `WorkspaceDir` / `FileNode` / `Hit`，也负责带外部修改检查的原子文件写入。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示目录模式；打开目录时先用 `git_workspace::repo_root` 找到 `.git` 根，所以选子目录也会得到整个仓库。刷新和窗口重新获得焦点时重扫目录、双链与搜索结果，保留展开状态和打开的编辑器。`flush` 在文件模式下先比较最近读取或保存的文件内容，再将文档重新导出为 Markdown，保留 BOM 和主要换行风格并写回；检测到外部修改、标题或正文往返丢失、资源缺失或同名资源内容不同时保留未保存内容；资源先检查并复制，不覆盖已有不同内容的文件；检查不能证明所有 Markdown 语义都能保留，比较和替换之间也不提供跨进程锁。成功写回后，对该文件（及复制出的资源）提交一次 `edit: <relative>`；提交失败只记录日志，不回滚已完成的保存。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
+`workspace_fs.rs` 扫描文件系统并输出 `WorkspaceDir` / `FileNode` / `Hit`，也负责带外部修改检查的原子文件写入。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示当前编辑文件所属目录；`workspace_roots` 保存同时显示的多个目录及各自的加载、展开和错误状态。默认目录是系统文档目录下的 `MarkDown-Demo`，用户添加的目录保存在文档库的 `preferences.json` 中；启动参数只为本次窗口添加临时目录。目录选择保持用户所选路径，不因位于 Git 仓库内而扩大目录树；直接打开文件仍可找到其所属的 Git 根。选过的目录不可用时保留原选择，不创建它或静默切换。每个目录在后台独立扫描，不可用的目录保留错误提示；刷新和窗口重新获得焦点时重扫目录、双链与搜索结果，保留展开状态和打开的编辑器。工作区移除只修改列表；文件操作检查工作区边界和受保护目录，创建与重命名不覆盖已有文件，删除经确认后交给系统回收站。`flush` 在文件模式下先比较最近读取或保存的文件内容，再将文档重新导出为 Markdown，保留 BOM 和主要换行风格并写回；检测到外部修改、标题或正文往返丢失、资源缺失或同名资源内容不同时保留未保存内容；资源先检查并复制，不覆盖已有不同内容的文件；检查不能证明所有 Markdown 语义都能保留，比较和替换之间也不提供跨进程锁。成功写回后，对该文件（及复制出的资源）提交一次 `edit: <relative>`；提交失败只记录日志，不回滚已完成的保存。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
 
-`Ctrl+K` / `⌘K` 打开全局搜索：合并文档库与当前文件夹的路径和正文结果。文件夹正文搜索在后台执行，按查询代次丢弃过期结果，并在新结果到达时保持键盘选中的目标；`Ctrl+J` / `⌘J` 保留原有搜索入口。
+`Ctrl+K` / `⌘K` 打开全局搜索：合并文档库与所有工作目录的路径和正文结果。各目录的正文搜索在后台独立执行、逐步返回，按查询代次丢弃过期结果，并在新结果到达时保持键盘选中的目标；`Ctrl+J` / `⌘J` 保留原有搜索入口。
 
 批注不写进正文：core 的 `annotations.rs` 管理 JSON sidecar，`annotations_panel.rs` 渲染右侧面板。锚点是从根开始的 block 索引路径，不是 `BlockId`（DocxXML 不保存 BlockId）。多用户离线修改通过 `tools/agent/mdxb.py merge-annotations` 按 `updated` 合并。
 

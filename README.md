@@ -23,7 +23,7 @@ MarkdownX is a writing and reading environment for **dynamic books**: documents 
 - **Bilingual by design.** Interface, book metadata and chapter text can carry Chinese and English side by side.
 - **A reader that fits the screen.** The web reader is a build-free, responsive page: a single column on a phone, a table of contents and a comfortable measure on a desktop.
 - **Local first.** No account, no cloud, no telemetry. The desktop library is a folder you own.
-- **A Git repository is a workspace.** Open any folder and MarkdownX widens it to the `.git` root, edits `.md` files in place, and commits each save for the touched file. The sidebar is a directory tree with fuzzy path search and optional full-text search.
+- **Your folders are your workspace.** Keep multiple folder trees open together and edit their `.md` files in place. Search across them; use each folder’s menu to manage its files and folders. Git-backed saves can create commits for touched files.
 - **Built for team workflows.** Game design, product, film and editorial starter templates live in `templates/`; the collaboration server exposes them to the browser. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Notes live beside the text.** Temporary comments are stored in `.annotations.json` sidecars, so reviewers can hide, resolve, batch-edit and merge them without touching the prose.
 - **Follows your computer.** The first launch follows the system language (Chinese or English) and the setting can pin either one. The app checks the GitHub releases page after launch and every 12 hours, and announces a newer version with its download page.
@@ -76,15 +76,17 @@ pwsh -File scripts/install-windows.ps1
 
 No administrator rights are needed. The local MSI is preferred. The app goes to `%LOCALAPPDATA%\Programs\MarkdownX`; the server token and workspace remain in `%LOCALAPPDATA%\MarkdownX\server`. The installation is registered in **Apps & features**. The helper refuses to force-close a running installed app or server.
 
-Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-0.1.13-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
+Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-0.1.14-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
 
-The desktop app creates its library at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`). Use **文件 → 打开文件夹…** / **File → Open Folder…** for a Typora-style directory workspace, and **文件 → 打包成电子书…** / **File → Package as E-book…** (`⌘⇧E`) to turn the current folder, or the open Markdown file, into one `.mdxb`. **下载为 → MarkdownX 书 (.mdxb)** exports a library page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
+**My documents** shows `MarkDown-Demo` inside the system Documents folder by default; on Windows this is normally `C:\Users\<user>\Documents\MarkDown-Demo`. The app creates the default folder if it is missing. Use the **+** beside My documents, **Settings → Documents**, or **File → Open Folder…** to add folders. Their trees stay visible together and are restored on the next launch. Each root’s **…** menu can change its display name or folder, refresh it, or remove it from the list without deleting files. An unavailable folder remains listed without blocking the others. A folder passed on the command line is temporary.
 
-Passing a folder path as the first argument opens its tree without selecting a file. Opening a folder from the menu shows directories and supported files, opens the first file and expands its parent folders. Use **Refresh** after external changes; returning focus to the window also refreshes the tree. Dot-prefixed entries, symlinks, `target`, `node_modules` and `__pycache__` are excluded. Unchanged Markdown source is preserved where possible; unsupported edited constructs may still change; UTF-8 BOM and predominant CRLF line endings are retained. If another program changed the file, or an export would lose detected text, references a missing asset, or conflicts with a different existing asset, MarkdownX keeps the pending edit instead of replacing the source.
+The separate MarkdownX library remains at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`); its documents remain available from Home and search, while the sidebar focuses on workspace folders. Changing folders does not move or overwrite the library. Use **File → Package as E-book…** (`⌘⇧E`) to turn the current folder, or the open Markdown file, into one `.mdxb`. **下载为 → MarkdownX 书 (.mdxb)** exports a library page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
 
-**File → Open File…** (`Ctrl+O` on Windows) and a file path argument open Markdown or text files in place, with their folder tree. Use the plus button beside the folder name to create a new Markdown file. Folder saves and link indexing run in the background; switching or closing waits for pending edits to finish. Existing staged changes to the same file prevent Git auto-commit and are reported without undoing the file save.
+Passing a folder path as the first argument opens its tree without selecting a file. Adding a folder shows its directories and supported files without opening an arbitrary file. Use **Refresh** after external changes; returning focus to the window also refreshes the tree. Dot-prefixed entries, symlinks, `target`, `node_modules` and `__pycache__` are excluded. Unchanged Markdown source is preserved where possible; unsupported edited constructs may still change; UTF-8 BOM and predominant CRLF line endings are retained. If another program changed the file, or an export would lose detected text, references a missing asset, or conflicts with a different existing asset, MarkdownX keeps the pending edit instead of replacing the source.
 
-Press `Ctrl+K` (`⌘K` on macOS) to search library documents and the open folder by name, path and text. Use ↑/↓ and Enter to open a result, or Esc to close search. The previous `Ctrl+J` / `⌘J` shortcut remains available; insert a link with `Ctrl+Shift+K` / `⌘⇧K`.
+**File → Open File…** (`Ctrl+O` on Windows) and a file path argument open Markdown or text files in place, with their folder tree. Use **+** beside a folder to create a Markdown file; its **…** menu also creates folders. The **…** menu on a file or folder renames it or asks before moving it to the system recycle bin. Existing paths are never overwritten by these actions. Folder saves and link indexing run in the background; switching or closing waits for pending edits to finish. Existing staged changes to the same file prevent Git auto-commit and are reported without undoing the file save.
+
+Press `Ctrl+K` (`⌘K` on macOS) to search library documents and all open folders by name, path and text. Use ↑/↓ and Enter to open a result, or Esc to close search. The previous `Ctrl+J` / `⌘J` shortcut remains available; insert a link with `Ctrl+Shift+K` / `⌘⇧K`.
 
 To read a book in the browser, use the hosted reader at **https://neko233-com.github.io/MarkdownX/web/**, or run it locally:
 
@@ -217,7 +219,7 @@ cargo clippy -p markdownx-server --all-targets -- -D warnings
 
 ## Status
 
-This is an early public snapshot. Working today: the desktop editor and library, a folder workspace with a Typora-style tree and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. On Windows it falls back to WARP when a hardware D3D11 device is unavailable, so the installed app opens even on VMs and RDP sessions; the fallback is covered by a captured window smoke test. The Windows MSI registers `.mdxb` and starts the collaboration server at sign-in; macOS Info.plist and the Linux MIME package register `.mdxb`, while double-click behavior on macOS/Linux still needs a real desktop check. Mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
+This is an early public snapshot. Working today: the desktop editor and library, multiple folder workspaces with directory trees and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. On Windows it falls back to WARP when a hardware D3D11 device is unavailable, so the installed app opens even on VMs and RDP sessions; the fallback is covered by a captured window smoke test. The Windows MSI registers `.mdxb` and starts the collaboration server at sign-in; macOS Info.plist and the Linux MIME package register `.mdxb`, while double-click behavior on macOS/Linux still needs a real desktop check. Mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
 
 ## License
 
@@ -241,7 +243,7 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 - **原生中英双语。** 界面、书名和章节正文都可以同时带中文和英文。
 - **为屏幕而生的阅读器。** 手机单列，桌面目录 + 正文；无构建步骤，Chrome 直接打开。
 - **本地优先。** 不登录、不上传、不统计；桌面文档库就是你自己的文件夹。
-- **Git 仓库就是工作区。** 打开任意目录，MarkdownX 会向上找到 `.git` 根，目录树直接编辑 `.md`，每次保存只为改动的文件生成一次提交；同一个树里也能放 `.mdxb`。支持模糊路径搜索、内容搜索、`[[双链]]` 和行内批注。
+- **选择自己的文件夹。** 目录树直接编辑所选目录里的 `.md`；文件属于 Git 仓库时，保存可为改动的文件生成提交。同一个树里也能放 `.mdxb`，支持模糊路径搜索、内容搜索、`[[双链]]` 和行内批注。
 - **团队工作流开箱即用。** `templates/` 里有游戏策划、产品 PRD、影视 treatment、内容选题等模板；浏览器协作端会直接列出这些模板。见 [docs/WORKFLOWS.md](docs/WORKFLOWS.md)。
 - **跟着你的电脑走。** 首次启动跟随系统语言（中文/English），也可以在设置里固定一种；应用启动后和每 12 小时检查 GitHub 发布页，发现新版本会提示下载地址。
 
@@ -277,19 +279,19 @@ pwsh -File scripts/install-windows.ps1
 
 不需要管理员权限。优先使用当前构建的 MSI；应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和工作区保留在 `%LOCALAPPDATA%\MarkdownX\server`，并在「应用和功能」中管理。安装脚本不会强制结束运行中的安装版应用或服务器。
 
-release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.13-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.14-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
 
 ```sh
 cargo run --release
 ```
 
-桌面端默认把文档库放在 `~/Documents/MarkdownX`，可用 `MARKDOWNX_HOME` 改。用「下载为 → MarkdownX 书 (.mdxb)」导出当前页及其子页。
+「我的文档」默认显示系统文档目录下的 `MarkDown-Demo`；目录不存在时自动创建。使用「我的文档」旁的加号、设置或「文件 → 打开文件夹…」添加多个目录，各目录树同时显示并在重启后恢复。目录旁的「…」可更改显示名称或目录、刷新、移除工作区；移除只影响列表，不删除磁盘文件。不可用的目录会保留提示，不影响其他目录。启动参数指定的文件夹仅本次生效。独立的 MarkdownX 文档库仍放在 `~/Documents/MarkdownX`（可用 `MARKDOWNX_HOME` 改）；侧栏以工作目录为主，已有库文档可从主页和搜索访问，切换文件夹不会移动或覆盖它。
 
-启动 MarkdownX 时传入文件夹路径会直接显示目录树，不会自动打开文件。「文件 → 打开文件夹…」会在侧栏显示目录和支持的文件，打开首个文件并展开其上级目录。外部增删文件后可点「刷新」，窗口重新获得焦点时也会刷新。名称以点开头的项、符号链接、`target`、`node_modules` 和 `__pycache__` 不显示。保存时 Markdown 会重新导出，原有排版和未支持的语法可能变化；UTF-8 BOM 和主要的 CRLF 换行会保留。检测到文件已被其他程序修改、导出会丢失标题或正文、资源无法导出或同名资源内容不同时，未保存内容会保留，源文件不会被替换。
+启动 MarkdownX 时传入文件夹路径会直接显示目录树，不会自动打开文件。「文件 → 打开文件夹…」会将目录和支持的文件加入侧栏，不会自动打开任意文件。外部增删文件后可点「刷新」，窗口重新获得焦点时也会刷新。名称以点开头的项、符号链接、`target`、`node_modules` 和 `__pycache__` 不显示。保存时 Markdown 会重新导出，原有排版和未支持的语法可能变化；UTF-8 BOM 和主要的 CRLF 换行会保留。检测到文件已被其他程序修改、导出会丢失标题或正文、资源无法导出或同名资源内容不同时，未保存内容会保留，源文件不会被替换。
 
-「文件 → 打开文件…」（Windows 为 `Ctrl+O`）或启动参数可直接编辑 Markdown 和文本文件，并显示所在目录树；侧栏目录名旁的加号可新建 Markdown 文件。文件保存与双链索引在后台进行，切换或关闭前会等待最新修改保存。若同一文件已有 Git 暂存内容，自动提交会跳过并提示，文件保存结果仍保留。
+「文件 → 打开文件…」（Windows 为 `Ctrl+O`）或启动参数可直接编辑 Markdown 和文本文件，并显示所在目录树；侧栏目录名旁的加号可新建 Markdown 文件，目录和文件旁的「…」提供其他文件管理操作。文件保存与双链索引在后台进行，切换或关闭前会等待最新修改保存。若同一文件已有 Git 暂存内容，自动提交会跳过并提示，文件保存结果仍保留。
 
-按 `Ctrl+K`（macOS 为 `⌘K`）可全局搜索文档库和当前文件夹的名称、路径与正文；用 ↑/↓ 和 Enter 打开结果，Esc 关闭搜索。原来的 `Ctrl+J` / `⌘J` 仍可使用；插入链接改为 `Ctrl+Shift+K` / `⌘⇧K`。
+按 `Ctrl+K`（macOS 为 `⌘K`）可全局搜索文档库和全部工作目录的名称、路径与正文；用 ↑/↓ 和 Enter 打开结果，Esc 关闭搜索。原来的 `Ctrl+J` / `⌘J` 仍可使用；插入链接改为 `Ctrl+Shift+K` / `⌘⇧K`。
 
 浏览器阅读：
 

@@ -45,10 +45,16 @@ pub struct Preferences {
     pub appearance: String,
     /// The last version that opened this library (changelog.rs).
     pub seen_version: String,
+    /// The user's chosen Markdown folder; None uses the Documents default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<std::path::PathBuf>,
+    /// None means first launch; Some(empty) means the user removed every root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspaces: Option<Vec<crate::workspace_fs::WorkspaceSpec>>,
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new() } }
+    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), workspace_dir: None, workspaces: None } }
 }
 
 impl Preferences {
@@ -744,12 +750,16 @@ impl Workspace {
         let location = if cfg!(target_os = "windows") { root.display().to_string() } else {
             dirs::home_dir().and_then(|h| root.strip_prefix(h).ok().map(|r| format!("~/{}", r.display()))).unwrap_or_else(|| root.display().to_string())
         };
+        let workspace_location = if self.workspace_roots.is_empty() { tr("尚未添加工作目录", "No workspace folders added").to_string() }
+            else { self.workspace_roots.iter().map(|r| r.spec.path.display().to_string()).collect::<Vec<_>>().join(" · ") };
         let reveal = if cfg!(target_os = "macos") { tr("在访达中显示", "Show in Finder") } else if cfg!(target_os = "windows") {
             tr("在文件资源管理器中显示", "Show in File Explorer")
         } else { tr("在文件管理器中显示", "Show in File Manager") };
         div().w_full().flex().flex_col().gap(px(8.))
             .child(group(None, vec![
-                row(tr("文档库文件夹", "Documents folder"), Some(location.into()),
+                row(tr("工作目录", "Workspace folders"), Some(workspace_location.into()),
+                    button("change-workspace", tr("添加目录", "Add folder")).on_click(cx.listener(|w, _, window, cx| w.open_folder(window, cx)))).into_any_element(),
+                row(tr("MarkdownX 文档库", "MarkdownX library"), Some(location.into()),
                     button("reveal-library", reveal).on_click(|_, _, cx| cx.reveal_path(&crate::store::Store::root_dir()))).into_any_element(),
                 row(tr("回收站", "Trash"), Some(if english() { format!("Deleted documents are kept for {} days.", crate::store::TRASH_DAYS) } else { format!("删除的文档保留 {} 天后自动清除。", crate::store::TRASH_DAYS) }.into()),
                     button("open-trash", tr("打开", "Open")).on_click(cx.listener(|w, _, _, cx| w.show_view(View::Trash, cx)))).into_any_element(),

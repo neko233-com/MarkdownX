@@ -63,10 +63,6 @@ impl<'a> Tree<'a> {
         }
     }
 
-    pub fn has_children(&self, id: &str) -> bool {
-        !self.children(Some(id)).is_empty()
-    }
-
     /// Pre-order rows with their depth, descending into pages `open` says yes to.
     pub fn rows(&self, open: impl Fn(&str) -> bool) -> Vec<(&'a Entry, usize)> {
         let mut out = vec![];

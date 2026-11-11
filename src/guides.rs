@@ -10,17 +10,9 @@ pub(crate) fn seeded(root: &Path) -> std::io::Result<bool> {
     Ok(!root.join(".guides-pending").exists() && fs::read_dir(root)?.any(|e| e.map_or(true, |e| e.file_name() != ".lock")))
 }
 
-/// Mac-only passages of the guides and what Windows reads instead; key
-/// combinations go through `shortcuts::windows_keys` afterwards.
-const WINDOWS_TEXT: &[(&str, &str)] = &[
-    ("on your Mac", "on your computer"),
-    ("Back up the whole folder with Time Machine or copy it to another Mac.", "Back up the whole folder with your backup tool or copy it to another computer."),
-];
-
-/// A guide document as the Windows build seeds it: Ctrl / Alt keys, no Mac-only steps.
+/// A guide document as the Windows build seeds it: Ctrl / Alt keys.
 pub fn for_windows(xml: &str) -> String {
-    let text = WINDOWS_TEXT.iter().fold(xml.to_string(), |s, (mac, win)| s.replace(mac, win));
-    crate::shortcuts::windows_keys(&text)
+    crate::shortcuts::windows_keys(xml)
 }
 
 pub fn initialize(root: &Path) -> anyhow::Result<()> {
@@ -78,13 +70,13 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// Every Mac-only passage still exists, and the Windows guides keep no Mac key.
+    /// Windows guides use Windows keys without retaining Mac-only passages.
     #[test]
     fn windows_guides_use_windows_keys() {
         let docs: Vec<&str> = super::FILES.iter().filter(|(n, _)| n.starts_with("docs/") && n.ends_with(".xml")).map(|(_, b)| std::str::from_utf8(b).unwrap()).collect();
-        for (mac, _) in super::WINDOWS_TEXT { assert!(docs.iter().any(|d| d.contains(mac)), "stale WINDOWS_TEXT entry: {mac}"); }
         let all: String = docs.iter().map(|d| super::for_windows(d)).collect();
-        assert!(all.contains("<code>Ctrl+B</code>") && all.contains("<code>Ctrl+Alt+1</code>") && all.contains("<code>Ctrl+Shift+C</code>"));
+        assert!(all.contains("<code>Ctrl+B</code>") && all.contains("<code>Ctrl+K</code>") && all.contains("<code>Ctrl+Alt+1</code>") && all.contains("<code>Ctrl+Shift+C</code>"));
+        assert!(!all.contains("on your Mac") && !all.contains("Time Machine"));
         let mac = |l: &&str| l.contains(['⌘', '⌥', '⇧', '⌃']);
         assert!(!all.lines().any(|l| mac(&l)), "{}", all.lines().find(mac).unwrap_or_default());
     }

@@ -108,6 +108,40 @@ class MacInstallerTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'nt' and shutil.which('pwsh'), 'PowerShell 7 and Windows Installer required')
 class WindowsInstallerTests(unittest.TestCase):
+    def test_workspace_build_respects_configured_parallelism(self):
+        with tempfile.TemporaryDirectory(prefix='markdownx parallel build ') as tmp:
+            root = Path(tmp)
+            scripts = root / 'scripts'
+            scripts.mkdir()
+            (scripts / 'clean_test_artifacts.py').write_text('# isolated test\n', encoding='utf-8')
+            (scripts / 'build-msi.ps1').write_text('''$root = Split-Path -Parent $PSScriptRoot
+New-Item -ItemType Directory -Force -Path (Join-Path $root 'dist') | Out-Null
+[IO.File]::WriteAllText((Join-Path $root 'dist/MarkdownX-0.1.13-x64.msi'), 'test')
+''', encoding='utf-8')
+            ps = lambda p: "'" + str(p).replace("'", "''") + "'"
+            script = root / 'check.ps1'
+            script.write_text(f'''$ErrorActionPreference = 'Stop'
+$ast = [System.Management.Automation.Language.Parser]::ParseFile({ps(ROOT / 'install.ps1')}, [ref]$null, [ref]$null)
+$fn = $ast.Find({{ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Build-WorkspacePackage' }}, $true)
+. ([scriptblock]::Create($fn.Extent.Text))
+$DryRun = $false
+function python {{ $global:LASTEXITCODE = 0 }}
+function cargo {{
+    $effective = $env:CARGO_BUILD_JOBS
+    for ($i = 0; $i -lt $args.Count; $i++) {{
+        if ($args[$i] -in @('--jobs', '-j')) {{ $i++; $effective = $args[$i] }}
+        elseif ($args[$i] -match '^(?:--jobs=|-j)([0-9]+)$') {{ $effective = $Matches[1] }}
+    }}
+    if ($effective -ne '4') {{ throw "Cargo parallelism was unexpectedly changed to $effective" }}
+    $global:LASTEXITCODE = 0
+}}
+$result = Build-WorkspacePackage {ps(root)} '0.1.13'
+if (-not (Test-Path -LiteralPath $result.Path -PathType Leaf)) {{ throw 'The isolated package was not produced.' }}
+''', encoding='utf-8')
+            result = subprocess.run(['pwsh', '-NoProfile', '-File', str(script)], env={**os.environ, 'CARGO_BUILD_JOBS': '4'},
+                                    text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_restarted_gui_process_outlives_launcher_and_keeps_arguments(self):
         pythonw = Path(sys.executable).with_name('pythonw.exe')
         if not pythonw.exists():

@@ -162,29 +162,45 @@ impl Workspace {
         );
 
         let mut list = div().flex().flex_col().px(px(SB_X)).pb(px(8.));
-        if let Some(folder) = self.folder.clone() {
-            list = list.child(self.folder_head(&folder, cx)).child(self.folder_search_row(cx));
+        list = list.child(self.workspaces_head(cx));
+        if let Some(rename) = &self.rename && let Some(entry) = entries.iter().find(|e| e.id == rename.id) {
+            list = list.child(self.doc_row(entry, "rename", 0, false, cx));
+        }
+        if !self.workspace_roots.is_empty() {
+            list = list.child(self.folder_search_row(cx));
             if let Some(file) = self.file.clone() {
                 list = list.child(self.folder_links_section(&file, cx));
             }
             if self.folder_query.read(cx).text.trim().is_empty() {
-                let rows = self.folder_nodes(&folder.children, 0, cx);
-                list = list.children(rows);
-                if folder.children.is_empty() {
-                    list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::text("这个目录里没有 Markdown 或 .mdxb 文件")));
+                for root in &self.workspace_roots {
+                    list = list.child(self.workspace_root_row(root, cx));
+                    if !root.spec.expanded { continue }
+                    list = list.children(self.workspace_new_row(root.id, &root.spec.path, 0));
+                    if root.loading && root.tree.is_none() {
+                        list = list.child(div().pl(px(28.)).py(px(5.)).text_size(px(11.)).text_color(Theme::text_caption()).child(crate::settings::tr("正在加载…", "Loading…")));
+                    } else if let Some(error) = &root.error {
+                        list = list.child(div().pl(px(28.)).pr(px(8.)).py(px(5.)).text_size(px(11.)).text_color(Theme::danger()).child(format!("{}: {error}", crate::settings::tr("无法读取", "Unavailable"))));
+                    } else if let Some(folder) = &root.tree {
+                        list = list.children(self.folder_nodes(root.id, &folder.children, 0, cx));
+                        if folder.children.is_empty() {
+                            list = list.child(div().pl(px(28.)).py(px(5.)).text_size(px(11.)).text_color(Theme::text_caption()).child(crate::settings::tr("空目录", "Empty folder")));
+                        }
+                    }
                 }
-            } else if self.folder_searching {
-                list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::tr("正在搜索…", "Searching…")));
-            } else if self.folder_hits.is_empty() {
-                list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::text("没有匹配的文件")));
             } else {
-                for hit in self.folder_hits.clone() {
-                    list = list.child(self.folder_hit_row(&hit, cx));
+                for hit in self.folder_hits.clone() { list = list.child(self.folder_hit_row(&hit, cx)); }
+                if self.folder_searching {
+                    list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::tr("正在搜索…", "Searching…")));
+                } else if self.folder_hits.is_empty() {
+                    list = list.child(div().px(px(8.)).py(px(10.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::text("没有匹配的文件")));
                 }
             }
         } else {
-            // Pinned docs are shortcuts: they stay in 我的文档 too.
-            let pinned: Vec<&Entry> = entries.iter().filter(|e| e.meta.pinned).collect();
+            list = list.child(div().px(px(8.)).py(px(8.)).text_size(px(12.)).text_color(Theme::text_caption()).child(crate::settings::tr("点击 + 添加工作目录", "Use + to add a workspace folder")));
+        }
+        if self.folder_query.read(cx).text.trim().is_empty() {
+            // Explicitly pinned pages can still be reached from the sidebar.
+            let pinned: Vec<&Entry> = entries.iter().filter(|e| e.meta.pinned && self.rename.as_ref().is_none_or(|r| r.id != e.id)).collect();
             if !pinned.is_empty() {
                 list = list.child(self.section(0, crate::settings::text("置顶"), cx));
                 if !self.folded[0] {
@@ -193,13 +209,6 @@ impl Workspace {
                     }
                 }
                 list = list.child(div().h(px(GROUP_GAP - SECTION_TOP)));
-            }
-            list = list.child(self.section(1, crate::settings::text("我的文档"), cx));
-            if !self.folded[1] {
-                let tree = crate::tree::Tree::new(&entries);
-                for (e, depth) in tree.rows(|id| self.expanded.contains(id)) {
-                    list = list.child(self.doc_row(e, "doc", depth, tree.has_children(&e.id), cx));
-                }
             }
         }
 
@@ -267,58 +276,89 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn folder_head(&self, folder: &crate::workspace_fs::WorkspaceDir, cx: &mut Context<Self>) -> Div {
-        div()
-            .flex_none()
-            .pt(px(6.))
-            .pb(px(6.))
-            .child(
-                div()
-                    .h(px(30.))
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .rounded(px(ROW_R))
-                    .hover(|s| s.bg(Theme::sidebar_hover()))
-                    .child(icon("folder-open", ROW_ICON, Theme::icon()))
-                    .child(div().flex_1().min_w_0().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text()).truncate().child(folder.name.clone()))
-                    .child(
-                        div().id("folder-new-file").flex_none().size(px(22.)).flex().items_center().justify_center()
-                            .rounded(px(6.)).cursor_pointer().hover(|s| s.bg(Theme::sidebar_selected()))
-                            .child(icon("plus", 14., Theme::text_caption()))
-                            .tip(crate::settings::tr("新建 Markdown 文件", "New Markdown file"), None)
-                            .on_click(cx.listener(|w, _, window, cx| w.new_folder_file(window, cx))),
-                    )
-                    .child(
-                        div()
-                            .id("folder-refresh")
-                            .flex_none()
-                            .px(px(4.))
-                            .h(px(22.))
-                            .flex().items_center().justify_center()
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(Theme::sidebar_selected()))
-                            .text_size(px(11.))
-                            .text_color(Theme::text_caption())
-                            .child(crate::settings::tr("刷新", "Refresh"))
-                            .on_click(cx.listener(|w, _, _, cx| w.refresh_folder(cx))),
-                    )
-                    .child(
-                        div()
-                            .id("folder-close")
-                            .flex_none()
-                            .size(px(22.))
-                            .flex().items_center().justify_center()
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(Theme::sidebar_selected()))
-                            .child(icon("x", 14., Theme::text_caption()))
-                            .on_click(cx.listener(|w, _, window, cx| w.close_folder(window, cx))),
-                    ),
-            )
-            .child(div().px(px(8.)).pb(px(6.)).text_size(px(10.)).line_height(px(14.)).text_color(Theme::text_placeholder()).truncate().child(folder.root.to_string_lossy().to_string()))
+    fn workspaces_head(&self, cx: &mut Context<Self>) -> Div {
+        div().h(px(30.)).px(px(8.)).flex().items_center().gap(px(6.))
+            .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::text_caption()).truncate().child(crate::settings::text("我的文档")))
+            .child(div().id("workspace-add").size(px(24.)).flex().items_center().justify_center().rounded(px(6.)).cursor_pointer()
+                .hover(|s| s.bg(Theme::sidebar_selected())).child(icon("plus", 16., Theme::text_caption()))
+                .tip(crate::settings::tr("添加工作目录", "Add workspace folder"), None)
+                .on_click(cx.listener(|w, _, window, cx| w.open_folder(window, cx))))
+    }
+
+    fn workspace_root_row(&self, root: &crate::workspaces::WorkspaceRoot, cx: &mut Context<Self>) -> Stateful<Div> {
+        use crate::workspaces::{WorkspaceMenu, WorkspaceMenuTarget};
+        let id = root.id;
+        let name = self.workspace_rename.as_ref().filter(|r| matches!(&r.target, WorkspaceMenuTarget::Root(n) if *n == id)).map(|r| r.field.clone());
+        div().id(("workspace-root", id)).h(px(30.)).px(px(7.)).flex().items_center().gap(px(5.)).rounded(px(ROW_R))
+            .cursor_pointer().hover(|s| s.bg(Theme::sidebar_hover()))
+            .child(icon(if root.spec.expanded { "chevron-down" } else { "chevron-right" }, 12., Theme::text_caption()))
+            .child(icon("folder", 15., Theme::icon()))
+            .child(div().id(("workspace-name", id)).flex_1().min_w_0().text_size(px(12.)).text_color(Theme::text()).truncate()
+                .tip(&root.spec.path.display().to_string(), None)
+                .children(name.clone()).when(name.is_none(), |d| d.child(root.spec.name())))
+            .child(div().id(("workspace-new", id)).size(px(22.)).flex().items_center().justify_center().rounded(px(6.)).cursor_pointer()
+                .hover(|s| s.bg(Theme::sidebar_selected())).child(icon("plus", 14., Theme::text_caption()))
+                .tip(crate::settings::tr("新建文件", "New file"), None)
+                .on_mouse_down(MouseButton::Left, cx.listener(move |w, _, window, cx| { cx.stop_propagation(); w.prompt_workspace_new(id, None, false, window, cx); })))
+            .child(div().id(("workspace-menu", id)).size(px(22.)).flex().items_center().justify_center().rounded(px(6.)).cursor_pointer()
+                .hover(|s| s.bg(Theme::sidebar_selected())).child(icon("ellipsis", 14., Theme::text_caption()))
+                .tip(crate::settings::tr("工作区操作", "Workspace actions"), None)
+                .on_mouse_down(MouseButton::Left, cx.listener(move |w, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation(); w.workspace_menu = Some(WorkspaceMenu { target: WorkspaceMenuTarget::Root(id), pos: ev.position }); cx.notify();
+                })))
+            .on_click(cx.listener(move |w, _, _, cx| {
+                if w.workspace_rename.as_ref().is_some_and(|r| matches!(&r.target, WorkspaceMenuTarget::Root(n) if *n == id)) { return; }
+                if let Some(root) = w.workspace_roots.iter_mut().find(|r| r.id == id) { root.spec.expanded = !root.spec.expanded; }
+                w.save_workspaces(cx); cx.notify();
+            }))
+    }
+
+    fn workspace_new_row(&self, root_id: u64, parent: &std::path::Path, depth: usize) -> Option<Stateful<Div>> {
+        let rename = self.workspace_rename.as_ref()?;
+        let crate::workspaces::WorkspaceMenuTarget::New { root, parent: selected, dir } = &rename.target else { return None };
+        if *root != root_id || selected != parent { return None }
+        Some(div().id(SharedString::from(format!("workspace-new-input-{root_id}-{}", parent.display())))
+            .h(px(28.)).pl(px(22. + depth as f32 * 12.)).pr(px(6.)).flex().items_center().gap(px(6.))
+            .child(icon(if *dir { "folder" } else { "file-text" }, 14., Theme::icon()))
+            .child(div().flex_1().min_w_0().child(rename.field.clone())))
+    }
+
+    pub(crate) fn render_workspace_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::workspaces::WorkspaceMenuTarget;
+        let menu = self.workspace_menu.clone()?;
+        let item = |id: &'static str, glyph: &'static str, label: &'static str| {
+            let group = SharedString::from(id);
+            crate::ui::menu_row(id, group.clone())
+                .child(icon(glyph, 15., Theme::text_code()).group_hover(group.clone(), |s| s.text_color(gpui::white())))
+                .child(crate::ui::menu_label(label, group, gpui::white()))
+        };
+        let mut panel = popover().id("workspace-actions").occlude().w(px(190.)).py(px(crate::ui::MENU_PAD_Y))
+            .on_mouse_down_out(cx.listener(|w, _, _, cx| { w.workspace_menu = None; cx.notify(); }));
+        match menu.target {
+            WorkspaceMenuTarget::Root(id) => {
+                panel = panel
+                    .child(item("ws-new-file", "file-text", crate::settings::tr("新建文件", "New file")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(id, None, false, window, cx))))
+                    .child(item("ws-new-dir", "folder", crate::settings::tr("新建文件夹", "New folder")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(id, None, true, window, cx))))
+                    .child(item("ws-label", "square-pen", crate::settings::tr("更改显示名称", "Change display name")).on_click(cx.listener(move |w, _, window, cx| w.start_workspace_rename(WorkspaceMenuTarget::Root(id), window, cx))))
+                    .child(item("ws-replace", "folder-input", crate::settings::tr("更换目录", "Change folder")).on_click(cx.listener(move |w, _, window, cx| { w.workspace_menu = None; w.replace_workspace(id, window, cx); })))
+                    .child(item("ws-refresh", "restore", crate::settings::tr("刷新目录", "Refresh folder")).on_click(cx.listener(move |w, _, _, cx| { w.workspace_menu = None; w.scan_workspace(id, false, cx); })))
+                    .child(item("ws-remove", "bin", crate::settings::tr("移除工作区", "Remove workspace")).on_click(cx.listener(move |w, _, window, cx| w.remove_workspace(id, window, cx))));
+            }
+            WorkspaceMenuTarget::Node { root, path, dir } => {
+                if dir {
+                    let file_parent = path.clone(); let dir_parent = path.clone();
+                    panel = panel
+                        .child(item("node-new-file", "file-text", crate::settings::tr("新建文件", "New file")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(root, Some(file_parent.clone()), false, window, cx))))
+                        .child(item("node-new-dir", "folder", crate::settings::tr("新建文件夹", "New folder")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(root, Some(dir_parent.clone()), true, window, cx))));
+                }
+                let rename_path = path.clone();
+                panel = panel
+                    .child(item("node-rename", "square-pen", crate::settings::tr("重命名", "Rename")).on_click(cx.listener(move |w, _, window, cx| w.start_workspace_rename(WorkspaceMenuTarget::Node { root, path: rename_path.clone(), dir }, window, cx))))
+                    .child(item("node-delete", "bin", crate::settings::tr("移入回收站", "Move to recycle bin")).on_click(cx.listener(move |w, _, _, cx| w.ask_trash_workspace_node(root, path.clone(), dir, cx))));
+            }
+            WorkspaceMenuTarget::New { .. } => return None,
+        }
+        Some(deferred(anchored().anchor(Corner::TopLeft).position(menu.pos).snap_to_window_with_margin(px(8.)).child(panel)).with_priority(2).into_any_element())
     }
 
     fn folder_search_row(&self, cx: &mut Context<Self>) -> Div {
@@ -441,13 +481,22 @@ impl Workspace {
         out
     }
 
-    fn folder_nodes(&mut self, nodes: &[crate::workspace_fs::FileNode], depth: usize, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+    fn folder_nodes(&self, root_id: u64, nodes: &[crate::workspace_fs::FileNode], depth: usize, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+        use crate::workspaces::{WorkspaceMenu, WorkspaceMenuTarget};
         let mut out = vec![];
         let mut pending: Vec<_> = nodes.iter().rev().map(|n| (n, depth)).collect();
         while let Some((n, depth)) = pending.pop() {
-            let id = SharedString::from(format!("fd-{}", n.path.to_string_lossy()));
+            let id = SharedString::from(format!("fd-{root_id}-{}", n.path.to_string_lossy()));
+            let rename = self.workspace_rename.as_ref().filter(|r| matches!(&r.target, WorkspaceMenuTarget::Node { root, path, .. } if *root == root_id && path == &n.path)).map(|r| r.field.clone());
+            let menu_path = n.path.clone();
+            let menu = div().id(SharedString::from(format!("fd-menu-{root_id}-{}", n.path.to_string_lossy())))
+                .size(px(20.)).flex_none().flex().items_center().justify_center().rounded(px(5.)).cursor_pointer()
+                .hover(|s| s.bg(Theme::sidebar_selected())).child(icon("ellipsis", 13., Theme::text_caption()))
+                .on_mouse_down(MouseButton::Left, cx.listener({ let dir = n.dir; move |w, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation(); w.workspace_menu = Some(WorkspaceMenu { target: WorkspaceMenuTarget::Node { root: root_id, path: menu_path.clone(), dir }, pos: ev.position }); cx.notify();
+                }}));
             if n.dir {
-                let open = self.folder_expanded.contains(&n.path);
+                let open = self.workspace_roots.iter().find(|r| r.id == root_id).is_some_and(|r| r.expanded_paths.contains(&n.path));
                 let path = n.path.clone();
                 out.push(
                     div()
@@ -462,15 +511,18 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(Theme::sidebar_hover()))
                         .child(icon(if open { "chevron-down" } else { "chevron-right" }, 12., Theme::text_caption()))
-                        .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().child(n.name.clone()))
+                        .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate()
+                            .children(rename.clone()).when(rename.is_none(), |d| d.child(n.name.clone())))
+                        .child(menu)
                         .on_click(cx.listener(move |w, _, _, cx| {
-                            if !w.folder_expanded.remove(&path) {
-                                w.folder_expanded.insert(path.clone());
-                            }
+                            if w.workspace_rename.as_ref().is_some_and(|r| matches!(&r.target, WorkspaceMenuTarget::Node { root, path: p, .. } if *root == root_id && p == &path)) { return; }
+                            if let Some(root) = w.workspace_roots.iter_mut().find(|r| r.id == root_id)
+                                && !root.expanded_paths.remove(&path) { root.expanded_paths.insert(path.clone()); }
                             cx.notify();
                         })),
                 );
                 if open {
+                    if let Some(row) = self.workspace_new_row(root_id, &n.path, depth + 1) { out.push(row); }
                     pending.extend(n.children.iter().rev().map(|child| (child, depth + 1)));
                 }
             } else {
@@ -490,9 +542,13 @@ impl Workspace {
                         .cursor_pointer()
                         .when(selected, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
                         .when(!selected, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
-                        .child(icon(if book { "book-open" } else { "file-text" }, 15., Theme::icon()))
-                        .child(div().flex_1().min_w_0().text_size(px(12.)).truncate().child(n.name.clone()))
-                        .on_click(cx.listener(move |w, _, window, cx| w.load_file(path.clone(), window, cx))),
+                        .child(icon(if book { "library" } else { "file-text" }, 15., Theme::icon()))
+                        .child(div().flex_1().min_w_0().text_size(px(12.)).truncate()
+                            .children(rename.clone()).when(rename.is_none(), |d| d.child(n.name.clone())))
+                        .child(menu)
+                        .on_click(cx.listener(move |w, _, window, cx| {
+                            if !w.workspace_rename.as_ref().is_some_and(|r| matches!(&r.target, WorkspaceMenuTarget::Node { root, path: p, .. } if *root == root_id && p == &path)) { w.open_workspace_file(root_id, path.clone(), window, cx); }
+                        })),
                 );
             }
         }
@@ -501,10 +557,12 @@ impl Workspace {
 
     fn folder_hit_row(&self, hit: &crate::workspace_fs::Hit, cx: &mut Context<Self>) -> Stateful<Div> {
         let path = hit.path.clone();
-        let name = hit.rel.clone();
+        let root = self.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &hit.root));
+        let id = root.map(|r| r.id);
+        let name = root.map_or_else(|| hit.rel.clone(), |r| format!("{} / {}", r.spec.name(), hit.rel));
         let snippet = hit.snippet.clone();
         div()
-            .id(SharedString::from(format!("fh-{}", hit.path.to_string_lossy())))
+            .id(SharedString::from(format!("fh-{}-{}", hit.root.display(), hit.path.to_string_lossy())))
             .flex_none()
             .px(px(8.))
             .py(px(5.))
@@ -515,7 +573,7 @@ impl Workspace {
             .hover(|s| s.bg(Theme::sidebar_hover()))
             .child(div().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().child(name))
             .when_some(snippet, |d, s| d.child(div().mt(px(1.)).text_size(px(10.)).line_height(px(14.)).text_color(Theme::text_caption()).truncate().child(s)))
-            .on_click(cx.listener(move |w, _, window, cx| w.load_file(path.clone(), window, cx)))
+            .on_click(cx.listener(move |w, _, window, cx| if let Some(id) = id { w.open_workspace_file(id, path.clone(), window, cx) } else { w.load_file(path.clone(), window, cx) }))
     }
 
     /// Width handle: a 15px hit strip straddling the sidebar edge (6px inside,
