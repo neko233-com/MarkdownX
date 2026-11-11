@@ -215,7 +215,7 @@ pub fn basic_tip(kind: SlashKind) -> (Option<&'static str>, Option<&'static str>
         SlashKind::Code => turn("代码块"),
         SlashKind::Quote => turn("引用"),
         SlashKind::Divider => Some((Some(crate::shortcuts::hint("editor::InsertDivider", "⌘ + ⌥ + S")), Some("---"))),
-        SlashKind::Link => Some((Some(crate::shortcuts::hint("editor::Link", "⌘ + K")), None)),
+        SlashKind::Link => Some((Some(crate::shortcuts::hint("editor::Link", "⌘ + Shift + K")), None)),
         _ => None,
     }
     .unwrap_or((None, None))

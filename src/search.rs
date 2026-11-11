@@ -11,6 +11,7 @@ use crate::trash::scrim;
 use crate::ui::{ROW_RADIUS, format_visit, icon, ui_runs, ui_text};
 use gpui::{prelude::FluentBuilder, *};
 use std::ops::Range;
+use std::time::Duration;
 
 /// How many documents 最近浏览 lists.
 const RECENT: usize = 20;
@@ -21,6 +22,21 @@ const SUMMARY_SEP: &str = "\u{a0}\u{a0}\u{a0}";
 /// Text column of a row: 540 − list padding 4 / 4 + 6 (scrollbar gutter)
 /// − row padding 12 / 8 − icon 24 + 10.
 const INFO_W: f32 = 472.;
+
+#[derive(Clone, PartialEq, Eq)]
+enum SearchTarget { Document(String), File(std::path::PathBuf) }
+
+#[derive(Clone, Copy)]
+enum SearchItem<'a> { Document(&'a Entry), File(&'a crate::workspace_fs::Hit) }
+impl SearchItem<'_> {
+    fn target(&self) -> SearchTarget {
+        match self { Self::Document(e) => SearchTarget::Document(e.id.clone()), Self::File(h) => SearchTarget::File(h.path.clone()) }
+    }
+}
+
+fn selection_after_update(previous: Option<&SearchTarget>, targets: &[SearchTarget]) -> Option<usize> {
+    previous.and_then(|target| targets.iter().position(|item| item == target)).or_else(|| (!targets.is_empty()).then_some(0))
+}
 
 /// Case-insensitive match position in `hay`, in `hay`'s own byte offsets.
 pub(crate) fn find_ci(hay: &str, needle_lower: &str) -> Option<Range<usize>> {
@@ -206,7 +222,25 @@ pub(crate) fn result_info(e: &Entry, q: &str, summary: Option<(String, Vec<Range
 
 impl Workspace {
     pub(crate) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_search(false, window, cx);
+    }
+
+    pub(crate) fn open_global_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search_open {
+            self.global_search = true;
+            self.search.update(cx, |s, cx| { s.set_placeholder(crate::settings::tr("搜索文档和文件…", "Search documents and files…"), cx); s.select_all_text(cx); });
+            self.refresh_global_folder_hits(cx);
+            self.search_sel = self.default_search_sel(cx);
+            window.focus(&self.search.focus_handle(cx));
+        } else {
+            self.start_search(true, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn start_search(&mut self, global: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.search_open = true;
+        self.global_search = global;
         self.search_sel = Some(0);
         self.row_menu = None;
         self.doc_menu = false;
@@ -216,8 +250,10 @@ impl Workspace {
             // The dialog's query reads at body size, above the 13pt rows.
             s.size = 15.;
             s.line_height = 22.;
+            s.set_placeholder(if global { crate::settings::tr("搜索文档和文件…", "Search documents and files…") } else { crate::settings::text("搜索") }, cx);
             s.set_text("", cx)
         });
+        self.refresh_global_folder_hits(cx);
         window.focus(&search.focus_handle(cx));
         self.search_scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
@@ -228,6 +264,7 @@ impl Workspace {
             return;
         }
         self.search_open = false;
+        self.refresh_global_folder_hits(cx);
         if let Some(ed) = &self.editor {
             ed.read(cx).focus(window);
         }
@@ -236,20 +273,20 @@ impl Workspace {
 
     /// First result is selected; an empty result list has no selection.
     pub(crate) fn default_search_sel(&self, cx: &App) -> Option<usize> {
-        (!self.search_results(cx).is_empty()).then_some(0)
+        (!self.search_items(cx).is_empty()).then_some(0)
     }
 
     pub(crate) fn pick_search(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.search_results(cx).get(row).map(|e| e.id.clone()) else { return };
+        let Some(target) = self.search_items(cx).get(row).map(SearchItem::target) else { return };
         self.close_search(window, cx);
-        self.open(&id, window, cx);
+        match target { SearchTarget::Document(id) => self.open(&id, window, cx), SearchTarget::File(path) => self.load_file(path, window, cx) }
         if let Some(ed) = &self.editor {
             ed.read(cx).focus(window);
         }
     }
 
     pub(crate) fn move_search_sel(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let n = self.search_results(cx).len();
+        let n = self.search_items(cx).len();
         if n == 0 { self.search_sel = None; return; }
         let next = match self.search_sel {
             Some(i) => (i as isize + delta).rem_euclid(n as isize) as usize,
@@ -288,6 +325,46 @@ impl Workspace {
         hits.into_iter().map(|(_, e)| e).collect()
     }
 
+    fn search_items<'a>(&'a self, cx: &App) -> Vec<SearchItem<'a>> {
+        let mut items = if self.global_search && !self.query(cx).is_empty() {
+            self.global_folder_hits.iter().map(SearchItem::File).collect::<Vec<_>>()
+        } else { vec![] };
+        items.extend(self.search_results(cx).into_iter().map(SearchItem::Document));
+        items
+    }
+
+    /// File contents can be large; keep the dialog responsive and discard stale queries.
+    pub(crate) fn refresh_global_folder_hits(&mut self, cx: &mut Context<Self>) {
+        let previous = self.search_sel.and_then(|i| self.search_items(cx).get(i).map(SearchItem::target));
+        self.global_folder_generation = self.global_folder_generation.wrapping_add(1);
+        let generation = self.global_folder_generation;
+        self.global_folder_task = None;
+        self.global_folder_hits.clear();
+        let targets = self.search_items(cx).iter().map(SearchItem::target).collect::<Vec<_>>();
+        self.search_sel = selection_after_update(previous.as_ref(), &targets);
+        let query = self.search.read(cx).text.clone();
+        let Some(folder) = self.folder.clone().filter(|_| self.search_open && self.global_search && !query.trim().is_empty()) else {
+            self.global_folder_searching = false;
+            cx.notify();
+            return;
+        };
+        self.global_folder_searching = true;
+        self.global_folder_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            let task = cx.background_executor().spawn(async move { folder.search(&query, true) });
+            let hits = task.await;
+            let _ = this.update(cx, |w, cx| if w.global_folder_generation == generation {
+                let previous = w.search_sel.and_then(|i| w.search_items(cx).get(i).map(SearchItem::target));
+                w.global_folder_hits = hits;
+                w.global_folder_searching = false;
+                let targets = w.search_items(cx).iter().map(SearchItem::target).collect::<Vec<_>>();
+                w.search_sel = selection_after_update(previous.as_ref(), &targets);
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
     fn search_row(&self, e: &Entry, ix: usize, q: &str, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let summary = snippet(&e.body, q);
         // Result indices match keyboard selection.
@@ -315,13 +392,31 @@ impl Workspace {
             .child(result_info(e, q, summary, INFO_W, window))
     }
 
+    fn search_file_row(&self, hit: &crate::workspace_fs::Hit, ix: usize, q: &str, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title_hit = find_ci(&hit.rel, q);
+        let summary = hit.snippet.as_ref().map(|text| (text.clone(), find_all(text, q)));
+        let folder = self.folder.as_ref().map(|f| f.name.as_str()).unwrap_or("");
+        div().id(("search-hit", ix)).flex_none().pt(px(8.)).pr(px(8.)).pb(px(8.)).pl(px(12.))
+            .flex().items_center().rounded(px(ROW_RADIUS)).cursor_pointer()
+            .when(self.search_sel == Some(ix), |d| d.bg(Theme::fill_hover()))
+            .on_hover(cx.listener(move |w, hovered: &bool, _, cx| {
+                if *hovered && w.search_sel != Some(ix) { w.search_sel = Some(ix); cx.notify(); }
+            }))
+            .on_click(cx.listener(move |w, _, window, cx| w.pick_search(ix, window, cx)))
+            .child(doc_icon())
+            .child(div().flex_1().min_w_0().flex().flex_col().overflow_hidden()
+                .child(div().text_size(px(13.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).overflow_hidden().whitespace_nowrap().text_ellipsis().child(ui_text(hit.rel.clone()).hit(title_hit, Theme::link())))
+                .children(summary.map(|(text, hits)| div().text_size(px(12.)).line_height(px(20.)).child(summary_text(text, hits, INFO_W, window))))
+                .child(div().mt(px(2.)).text_size(px(12.)).text_color(Theme::text_caption()).truncate().child(format!("{} · {}", crate::settings::tr("文件夹", "Folder"), folder))))
+    }
+
     pub(crate) fn render_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.search_open {
             return None;
         }
         let q = self.query(cx);
         let has_text = !self.search.read(cx).text.is_empty();
-        let results: Vec<Entry> = self.search_results(cx).into_iter().cloned().collect();
+        let results = self.search_items(cx);
         let vh = f32::from(window.viewport_size().height);
 
         let input = div()
@@ -346,6 +441,7 @@ impl Workspace {
                 d.child(input_button("search-clear", "search-clear", 18., Theme::text_disabled()).ml(px(8.)).on_click(cx.listener(
                     |w, _, window, cx| {
                         w.search.update(cx, |s, cx| s.set_text("", cx));
+                        w.refresh_global_folder_hits(cx);
                         window.focus(&w.search.focus_handle(cx));
                         w.search_sel = Some(0);
                         w.search_scroll.set_offset(point(px(0.), px(0.)));
@@ -390,11 +486,14 @@ impl Workspace {
                     .text_size(px(12.))
                     .line_height(px(18.))
                     .text_color(Theme::text_caption())
-                    .child(crate::settings::text("没有找到匹配的结果，尝试其他关键词进行搜索")),
+                    .child(if self.global_folder_searching { crate::settings::tr("正在搜索文件夹…", "Searching folder…") } else { crate::settings::text("没有找到匹配的结果，尝试其他关键词进行搜索") }),
             );
         }
-        for (i, e) in results.iter().enumerate() {
-            list = list.child(self.search_row(e, i, &q, window, cx));
+        for (i, item) in results.iter().enumerate() {
+            list = match item {
+                SearchItem::Document(e) => list.child(self.search_row(e, i, &q, window, cx)),
+                SearchItem::File(hit) => list.child(self.search_file_row(hit, i, &q, window, cx)),
+            };
         }
 
         let footer = div()
@@ -454,7 +553,17 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::snippet;
+    use super::{SearchTarget, selection_after_update, snippet};
+
+    #[test]
+    fn selection_stays_on_the_same_result_when_folder_hits_arrive() {
+        let doc = SearchTarget::Document("page".into());
+        let file = SearchTarget::File("folder/note.md".into());
+        assert_eq!(selection_after_update(Some(&doc), &[file.clone(), doc.clone()]), Some(1));
+        assert_eq!(selection_after_update(None, &[file.clone(), doc.clone()]), Some(0));
+        assert_eq!(selection_after_update(Some(&file), &[doc]), Some(0));
+        assert_eq!(selection_after_update(None, &[]), None);
+    }
 
     #[test]
     fn snippet_context() {

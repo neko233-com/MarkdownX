@@ -248,6 +248,10 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 cx.update(|cx| crate::app::check_folder_state(rest.trim(), cx)).unwrap();
                 continue;
             }
+            if cmd == "check-global-search" {
+                cx.update(|cx| crate::app::check_global_search(rest.trim(), cx)).unwrap();
+                continue;
+            }
             if cmd == "check-folder-safety" {
                 cx.update(|cx| crate::app::check_folder_safety(rest.trim(), cx)).unwrap();
                 continue;

@@ -93,8 +93,8 @@ impl Workspace {
             .on_click(cx.listener(|w, _, _, cx| { w.trash_menu = None; w.confirm = Some(Confirm::EmptyTrash); cx.notify(); })));
         let header = page_header(self, "回收站", 26., cx).children(empty).child(
             crate::ui::header_icon("trash-search", "search")
-                .tip_label(crate::shortcuts::keys(crate::settings::text("搜索(⌘ + J)")).into(), crate::ui::TipSide::Below)
-                .on_click(cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(crate::app::FocusSearch), cx))),
+                .tip(crate::settings::tr("全局搜索", "Search everywhere"), Some(crate::shortcuts::hint("workspace::GlobalSearch", "⌘ + K")))
+                .on_click(cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(crate::app::GlobalSearch), cx))),
         );
         let mut page = div().flex_1().min_w_0().h_full().flex().flex_col().child(header);
         if self.trash.is_empty() {

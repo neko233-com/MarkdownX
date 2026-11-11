@@ -10,7 +10,7 @@ use crate::settings::display_title;
 use crate::store::Entry;
 use crate::shared_store::SharedStore;
 use crate::theme::{self, Theme, craft};
-use crate::ui::{TipExt, TipSide, TitleBarExt, ToastKind, icon, ui_text};
+use crate::ui::{TipExt, TitleBarExt, ToastKind, icon, ui_text};
 use gpui::{prelude::FluentBuilder, *};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const SAVE_MAX_DELAY: Duration = Duration::from_secs(2);
 
-actions!(workspace, [NewDoc, ImportDoc, OpenFolder, OpenFile, PackageBook, ToggleSidebar, FocusSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
+actions!(workspace, [NewDoc, ImportDoc, OpenFolder, OpenFile, PackageBook, ToggleSidebar, FocusSearch, GlobalSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
     HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
 /// The menu bar, in the interface language.
@@ -102,6 +102,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-]", ToggleSidebar, None),
         KeyBinding::new("cmd-\\", ToggleSidebar, None),
         KeyBinding::new("cmd-j", FocusSearch, None),
+        KeyBinding::new("cmd-k", GlobalSearch, None),
         KeyBinding::new("cmd-f", FindInDoc, None),
         KeyBinding::new("cmd-shift-h", ReplaceInDoc, None),
         KeyBinding::new("cmd-q", Quit, None),
@@ -264,6 +265,12 @@ pub struct Workspace {
     pub annotation_editing: Option<String>,
     pub editor: Option<Entity<Editor>>,
     pub search: Entity<TextField>,
+    /// Global search includes the open folder as well as library documents.
+    pub(crate) global_search: bool,
+    pub(crate) global_folder_hits: Vec<crate::workspace_fs::Hit>,
+    pub(crate) global_folder_searching: bool,
+    pub(crate) global_folder_generation: u64,
+    pub(crate) global_folder_task: Option<Task<()>>,
     /// Keyboard highlight inside search results.
     pub search_sel: Option<usize>,
     pub sidebar_open: bool,
@@ -391,6 +398,7 @@ impl Workspace {
             cx.subscribe_in(&search, window, |this, _, ev: &TextFieldEvent, window, cx| {
                 match ev {
                     TextFieldEvent::Changed => {
+                        this.refresh_global_folder_hits(cx);
                         this.search_sel = this.default_search_sel(cx);
                         this.search_scroll.set_offset(point(px(0.), px(0.)));
                     }
@@ -489,6 +497,11 @@ impl Workspace {
             annotation_editing: None,
             editor: None,
             search,
+            global_search: false,
+            global_folder_hits: vec![],
+            global_folder_searching: false,
+            global_folder_generation: 0,
+            global_folder_task: None,
             search_sel: None,
             sidebar_open: !quick,
             sidebar_width,
@@ -617,6 +630,7 @@ impl Workspace {
             self.folder_search_task = None;
             self.folder_searching = false;
             self.folder = Some(dir);
+            self.refresh_global_folder_hits(cx);
             self.folder_expanded.clear();
             self.folder_hits.clear();
             self.folder_query.update(cx, |q, cx| q.set_text("", cx));
@@ -727,6 +741,7 @@ impl Workspace {
         self.folder_search_task = None;
         self.folder_searching = false;
         self.folder = Some(dir);
+        self.refresh_global_folder_hits(cx);
         self.refresh_folder_links(cx);
         self.folder_expanded = expanded;
         self.folder_hits.clear();
@@ -755,6 +770,7 @@ impl Workspace {
 
     fn close_folder_now(&mut self, cx: &mut Context<Self>) {
         self.folder = None;
+        self.refresh_global_folder_hits(cx);
         self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
         self.folder_search_task = None;
         self.folder_searching = false;
@@ -811,6 +827,7 @@ impl Workspace {
                 self.folder = Some(folder);
                 self.refresh_folder_links(cx);
                 self.refresh_folder_hits(cx);
+                self.refresh_global_folder_hits(cx);
                 self.show_folder_warnings(cx);
             }
             Err(e) => self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法刷新文件夹：{}", "Could not refresh folder: {}", crate::settings::diagnostic(&e.to_string())), cx),
@@ -944,6 +961,7 @@ impl Workspace {
             EditorEvent::Search(q) => {
                 this.open_search(window, cx);
                 this.search.update(cx, |s, cx| s.set_text(q, cx));
+                this.refresh_global_folder_hits(cx);
                 this.search_sel = this.default_search_sel(cx);
             }
             EditorEvent::OpenWiki(target) => this.open_wiki(target, window, cx),
@@ -1648,10 +1666,10 @@ impl Workspace {
             .rounded(px(9.)).bg(Theme::fill_hover())
             .cursor_pointer().hover(|s| s.bg(Theme::fill_hover_strong()))
             .child(icon("search", 15., Theme::text_caption()))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(Theme::text_caption()).child(if self.folder.is_some() { crate::settings::tr("搜索文件夹…", "Search folder…") } else { crate::settings::tr("搜索文档…", "Search documents…") }))
-            .when(width >= 200., |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_placeholder()).child(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J").replace(" + ", " "))))
-            .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
-            .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx))))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(Theme::text_caption()).child(crate::settings::tr("全局搜索…", "Search everywhere…")))
+            .when(width >= 200., |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_placeholder()).child(crate::shortcuts::hint("workspace::GlobalSearch", "⌘ + K").replace(" + ", " "))))
+            .tip(crate::settings::tr("全局搜索", "Search everywhere"), Some(crate::shortcuts::hint("workspace::GlobalSearch", "⌘ + K")))
+            .on_click(cx.listener(|w, _, window, cx| w.open_global_search(window, cx))))
     }
 
     fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1823,8 +1841,8 @@ impl Workspace {
                     })
                     .child(
                         seg("doc-search", "search")
-                            .tip_label(crate::shortcuts::keys(crate::settings::text("搜索(⌘ + J)")).into(), TipSide::Below)
-                            .on_click(cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(FocusSearch), cx))),
+                            .tip(crate::settings::tr("全局搜索", "Search everywhere"), Some(crate::shortcuts::hint("workspace::GlobalSearch", "⌘ + K")))
+                            .on_click(cx.listener(|_, _, window, cx| window.dispatch_action(Box::new(GlobalSearch), cx))),
                     )
                     .child(
                         seg("doc-annotations", "message-square")
@@ -2036,6 +2054,10 @@ impl Render for Workspace {
                 }
                 cx.stop_propagation();
             }))
+            .on_action(cx.listener(|w, _: &GlobalSearch, window, cx| {
+                w.open_global_search(window, cx);
+                cx.stop_propagation();
+            }))
             .children(sidebar)
             .child(note)
             .children(annotations)
@@ -2135,6 +2157,39 @@ pub(crate) fn check_folder_state(root: &str, cx: &mut App) {
         assert!(folder.warnings.is_empty(), "workspace scan had warnings");
         eprintln!("folder-state: PASS; {} root entries, {} supported files", folder.children.len(), folder.files().len());
     }).unwrap();
+}
+
+/// Check global search through real key dispatch in a marked temporary folder.
+#[cfg(feature = "devtools")]
+pub(crate) fn check_global_search(args: &str, cx: &mut App) {
+    let (phase, root) = args.split_once(' ').expect("phase and temporary folder");
+    let root = std::path::PathBuf::from(root);
+    assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(root.join(".markdownx-global-search-test").is_file());
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, window, cx| match phase {
+        "open" => {
+            assert!(ws.search_open && ws.global_search && ws.search.read(cx).is_focused(window));
+            assert_eq!(ws.folder.as_ref().unwrap().root.canonicalize().unwrap(), root.canonicalize().unwrap());
+        }
+        "results" => {
+            assert!(ws.search_open && ws.global_search && !ws.global_folder_searching);
+            assert_eq!(ws.search.read(cx).text, "globalsearchuniquexyz");
+            assert_eq!(ws.global_folder_hits.len(), 2);
+            assert!(ws.global_folder_hits.iter().all(|h| h.snippet.as_ref().is_some_and(|s| s.contains("globalsearchuniquexyz"))));
+            assert_eq!(ws.search_results(cx).len(), 1, "library and folder results must both be searchable");
+            assert_eq!(ws.search_sel, Some(2), "the previously selected library result must not move when folder results arrive");
+        }
+        "moved" => assert_eq!(ws.search_sel, Some(1)),
+        "picked" => {
+            assert!(!ws.search_open);
+            assert_eq!(ws.file.as_deref(), Some(root.join("notes/b.md").as_path()));
+        }
+        "link" => assert!(matches!(ws.editor.as_ref().unwrap().read(cx).menu.as_ref(), Some(crate::editor::view::Menu::Link { .. }))),
+        "legacy" => assert!(!ws.search_open && ws.folder_query.read(cx).is_focused(window)),
+        _ => panic!("unknown global search check"),
+    }).unwrap();
+    eprintln!("global-search: {phase} PASS");
 }
 
 /// Exercise switching, refresh and conflict recovery in a marked temporary folder.

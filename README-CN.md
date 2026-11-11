@@ -81,6 +81,8 @@ release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\Markdo
 
 「文件 → 打开文件…」（Windows 为 `Ctrl+O`）或启动参数可直接编辑 Markdown 和文本文件，并显示所在目录树；侧栏目录名旁的加号可新建 Markdown 文件。文件保存与双链索引在后台进行，切换或关闭前会等待最新修改保存。若同一文件已有 Git 暂存内容，自动提交会跳过并提示，文件保存结果仍保留。
 
+按 `Ctrl+K`（macOS 为 `⌘K`）可全局搜索文档库和当前文件夹的名称、路径与正文；用 ↑/↓ 和 Enter 打开结果，Esc 关闭搜索。原来的 `Ctrl+J` / `⌘J` 仍可使用；插入链接改为 `Ctrl+Shift+K` / `⌘⇧K`。
+
 浏览器阅读：直接用托管版 **https://neko233-com.github.io/MarkdownX/web/**，或在本地运行：
 
 ```sh

@@ -1404,7 +1404,7 @@ impl Editor {
             .child(
                 btn("tb-link")
                     .w(px(24.))
-                    .tip_above(crate::settings::text("链接"), Some(crate::shortcuts::hint("editor::Link", "⌘ + K")))
+                    .tip_above(crate::settings::text("链接"), Some(crate::shortcuts::hint("editor::Link", "⌘ + Shift + K")))
                     .child(icon("link", 18., Theme::text_code()))
                     .on_mouse_down(
                         MouseButton::Left,

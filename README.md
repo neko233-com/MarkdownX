@@ -84,6 +84,8 @@ Passing a folder path as the first argument opens its tree without selecting a f
 
 **File → Open File…** (`Ctrl+O` on Windows) and a file path argument open Markdown or text files in place, with their folder tree. Use the plus button beside the folder name to create a new Markdown file. Folder saves and link indexing run in the background; switching or closing waits for pending edits to finish. Existing staged changes to the same file prevent Git auto-commit and are reported without undoing the file save.
 
+Press `Ctrl+K` (`⌘K` on macOS) to search library documents and the open folder by name, path and text. Use ↑/↓ and Enter to open a result, or Esc to close search. The previous `Ctrl+J` / `⌘J` shortcut remains available; insert a link with `Ctrl+Shift+K` / `⌘⇧K`.
+
 To read a book in the browser, use the hosted reader at **https://neko233-com.github.io/MarkdownX/web/**, or run it locally:
 
 ```sh
@@ -286,6 +288,8 @@ cargo run --release
 启动 MarkdownX 时传入文件夹路径会直接显示目录树，不会自动打开文件。「文件 → 打开文件夹…」会在侧栏显示目录和支持的文件，打开首个文件并展开其上级目录。外部增删文件后可点「刷新」，窗口重新获得焦点时也会刷新。名称以点开头的项、符号链接、`target`、`node_modules` 和 `__pycache__` 不显示。保存时 Markdown 会重新导出，原有排版和未支持的语法可能变化；UTF-8 BOM 和主要的 CRLF 换行会保留。检测到文件已被其他程序修改、导出会丢失标题或正文、资源无法导出或同名资源内容不同时，未保存内容会保留，源文件不会被替换。
 
 「文件 → 打开文件…」（Windows 为 `Ctrl+O`）或启动参数可直接编辑 Markdown 和文本文件，并显示所在目录树；侧栏目录名旁的加号可新建 Markdown 文件。文件保存与双链索引在后台进行，切换或关闭前会等待最新修改保存。若同一文件已有 Git 暂存内容，自动提交会跳过并提示，文件保存结果仍保留。
+
+按 `Ctrl+K`（macOS 为 `⌘K`）可全局搜索文档库和当前文件夹的名称、路径与正文；用 ↑/↓ 和 Enter 打开结果，Esc 关闭搜索。原来的 `Ctrl+J` / `⌘J` 仍可使用；插入链接改为 `Ctrl+Shift+K` / `⌘⇧K`。
 
 浏览器阅读：
 

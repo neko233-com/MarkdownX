@@ -16,6 +16,7 @@ const RADIUS: f32 = 12.;
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
     ("0.1.13", &[
+        ("Ctrl+K / ⌘K 全局搜索文档库与当前文件夹，支持路径和正文", "Use Ctrl+K / ⌘K to search the library and open folder by path or text"),
         ("新增 Windows 与 macOS 一键安装入口和发布包校验", "Add Windows and macOS one-command installers with package verification"),
     ]),
     ("0.1.12", &[

@@ -399,7 +399,7 @@ fn sample_page(t: &themes::Theme, s: f32) -> Div {
         .child(cell(a, head).border_r_1().border_color(line_c)).child(cell(b, head));
     let table = div().w_full().rounded(sc(st.num("table.radius"))).border_1().border_color(line_c).overflow_hidden()
         .text_size(sc(st.num("table.size"))).line_height(sc(st.num("table.line-height")))
-        .child(row(tr("按键", "Keys"), tr("作用", "Does"), true, false)).child(row(crate::shortcuts::keys("⌘ N"), tr("新建文档", "New document"), false, false)).child(row(crate::shortcuts::keys("⌘ J"), tr("搜索所有文档", "Search documents"), false, true));
+        .child(row(tr("按键", "Keys"), tr("作用", "Does"), true, false)).child(row(crate::shortcuts::keys("⌘ N"), tr("新建文档", "New document"), false, false)).child(row(crate::shortcuts::hint("workspace::GlobalSearch", "⌘ + K"), tr("全局搜索", "Search everywhere"), false, true));
     let (hr_c, hr_w) = (st.color("hr.color").unwrap_or_else(|| st.token("separator_dots")), (st.num("hr.width") * s).max(0.6));
     // Painted to the column's width: a row of fixed-size dots would set the
     // column's minimum width and squeeze its neighbour.

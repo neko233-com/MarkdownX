@@ -64,6 +64,18 @@ mod tests {
         assert_eq!(code.keystrokes().iter().map(|k| k.unparse()).collect::<Vec<_>>(), ["ctrl-shift-c"]);
         assert_ne!(copy.keystrokes(), code.keystrokes());
     }
+    #[test]
+    fn global_search_and_link_have_distinct_pc_shortcuts() {
+        use crate::app::{FocusSearch, GlobalSearch};
+        use crate::editor::keymap::Link;
+        let global = pc_binding(KeyBinding::new("cmd-k", GlobalSearch, None)).unwrap();
+        let legacy = pc_binding(KeyBinding::new("cmd-j", FocusSearch, None)).unwrap();
+        let link = pc_binding(KeyBinding::new("cmd-shift-k", Link, Some("Editor"))).unwrap();
+        assert_eq!(global.keystrokes()[0].unparse(), "ctrl-k");
+        assert_eq!(legacy.keystrokes()[0].unparse(), "ctrl-j");
+        assert_eq!(link.keystrokes()[0].unparse(), "ctrl-shift-k");
+        assert_ne!(global.keystrokes(), link.keystrokes());
+    }
 }
 /// Mac key notation (⌘ ⌥ ⇧ ⌃, "⌘ + Shift + 7") as Windows writes it, the way
 /// `pc_binding` maps the keys: ⌘ is Ctrl, ⌘ ⌃ C (inline code) is
@@ -179,6 +191,7 @@ fn info(name: &str) -> Option<(usize, &'static str, &'static str)> {
         "GoHome" => (0, "返回主页", "Go to Home"),
         "ToggleSidebar" => (0, "展开 / 收起侧栏", "Show / hide sidebar"),
         "FocusSearch" => (0, "搜索文档", "Search documents"),
+        "GlobalSearch" => (0, "全局搜索", "Search everywhere"),
         "ToggleShortcuts" => (0, "查看快捷键", "Show shortcuts"),
         "ImportDoc" => (1, "导入文档", "Import documents"),
         "OpenFolder" => (1, "打开文件夹", "Open folder"),

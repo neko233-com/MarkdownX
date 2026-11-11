@@ -170,6 +170,8 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 `workspace_fs.rs` 扫描文件系统并输出 `WorkspaceDir` / `FileNode` / `Hit`，也负责带外部修改检查的原子文件写入。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示目录模式；打开目录时先用 `git_workspace::repo_root` 找到 `.git` 根，所以选子目录也会得到整个仓库。刷新和窗口重新获得焦点时重扫目录、双链与搜索结果，保留展开状态和打开的编辑器。`flush` 在文件模式下先比较最近读取或保存的文件内容，再将文档重新导出为 Markdown，保留 BOM 和主要换行风格并写回；检测到外部修改、标题或正文往返丢失、资源缺失或同名资源内容不同时保留未保存内容；资源先检查并复制，不覆盖已有不同内容的文件；检查不能证明所有 Markdown 语义都能保留，比较和替换之间也不提供跨进程锁。成功写回后，对该文件（及复制出的资源）提交一次 `edit: <relative>`；提交失败只记录日志，不回滚已完成的保存。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
 
+`Ctrl+K` / `⌘K` 打开全局搜索：合并文档库与当前文件夹的路径和正文结果。文件夹正文搜索在后台执行，按查询代次丢弃过期结果，并在新结果到达时保持键盘选中的目标；`Ctrl+J` / `⌘J` 保留原有搜索入口。
+
 批注不写进正文：core 的 `annotations.rs` 管理 JSON sidecar，`annotations_panel.rs` 渲染右侧面板。锚点是从根开始的 block 索引路径，不是 `BlockId`（DocxXML 不保存 BlockId）。多用户离线修改通过 `tools/agent/mdxb.py merge-annotations` 按 `updated` 合并。
 
 双链与协作：

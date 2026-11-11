@@ -145,7 +145,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-u", Underline, c),
         KeyBinding::new("cmd-shift-x", Strike, c),
         KeyBinding::new("cmd-ctrl-c", InlineCode, c),
-        KeyBinding::new("cmd-k", Link, c),
+        KeyBinding::new("cmd-shift-k", Link, c),
         KeyBinding::new("cmd-alt-h", ApplyLastColor, c),
         KeyBinding::new("cmd-alt-w", InsertReminder, c),
         KeyBinding::new("cmd-alt-0", TurnText, c),
