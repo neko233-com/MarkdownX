@@ -1,5 +1,6 @@
 """Exercise installer decisions using isolated packages and mocked macOS tools."""
 import hashlib
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -115,7 +116,7 @@ class WindowsInstallerTests(unittest.TestCase):
             folder = Path(tmp)
             worker = folder / 'worker with spaces.py'
             result = folder / 'result with spaces.txt'
-            worker.write_text("import pathlib,sys,time\ntime.sleep(1)\npathlib.Path(sys.argv[1]).write_text(sys.argv[2])\n")
+            worker.write_text("import os,pathlib,sys,time\ntime.sleep(1)\np=pathlib.Path(sys.argv[1]); pending=p.with_suffix('.pending')\npending.write_text(str(os.getpid()) + '\\n' + sys.argv[2]); os.replace(pending,p)\n")
             ps = lambda p: "'" + str(p).replace("'", "''") + "'"
             launcher = folder / 'launcher.ps1'
             launcher.write_text(f'''$ErrorActionPreference = 'Stop'
@@ -129,10 +130,32 @@ Start-InstalledApp @({ps(worker)}, {ps(result)}, 'argument with spaces')
             launched = subprocess.run(['pwsh', '-NoProfile', '-File', str(launcher)], text=True, capture_output=True)
             self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
             deadline = time.monotonic() + 10
-            while not result.exists() and time.monotonic() < deadline:
+            payload = ''
+            while time.monotonic() < deadline:
+                try:
+                    payload = result.read_text()
+                except OSError:
+                    pass
+                if '\n' in payload:
+                    break
                 time.sleep(0.1)
-            self.assertTrue(result.exists(), 'the restarted GUI process did not survive its launcher')
-            self.assertEqual(result.read_text(), 'argument with spaces')
+            self.assertIn('\n', payload, 'the restarted GUI process did not survive its launcher')
+            pid, argument = payload.split('\n', 1)
+            self.assertEqual(argument, 'argument with spaces')
+            kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+            kernel.WaitForSingleObject.restype = ctypes.c_uint32
+            kernel.CloseHandle.argtypes = (ctypes.c_void_p,)
+            handle = kernel.OpenProcess(0x00100000, False, int(pid))
+            if handle:
+                try:
+                    self.assertEqual(kernel.WaitForSingleObject(handle, 10000), 0, 'the test process did not exit')
+                finally:
+                    kernel.CloseHandle(handle)
+            else:
+                self.assertEqual(ctypes.get_last_error(), 87, 'could not inspect the test process')
 
     def test_local_release_and_hash_failures_are_read_only(self):
         packages = sorted((ROOT / 'dist').glob('MarkdownX-*-x64.msi'))
