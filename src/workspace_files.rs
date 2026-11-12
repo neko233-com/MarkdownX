@@ -51,7 +51,9 @@ pub(crate) fn validate_external_open(root: &Path, path: &Path) -> Result<()> {
 }
 
 pub(crate) fn create(root: &Path, parent: &Path, name: &str, dir: bool, protected: &[PathBuf]) -> Result<PathBuf> {
-    create_content(root, parent, name, dir, protected, &[])
+    let xlsx = !dir && Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xlsx"));
+    let content = if xlsx { include_bytes!("../assets/empty-workbook.xlsx").as_slice() } else { &[] };
+    create_content(root, parent, name, dir, protected, content)
 }
 
 pub(crate) fn create_content(root: &Path, parent: &Path, name: &str, dir: bool, protected: &[PathBuf], content: &[u8]) -> Result<PathBuf> {
@@ -66,12 +68,29 @@ pub(crate) fn create_content(root: &Path, parent: &Path, name: &str, dir: bool, 
     let path = parent.join(name);
     if dir { fs::create_dir(&path)?; }
     else {
-        ensure!(matches!(crate::workspace_fs::DocKind::of(&path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml)), "choose a Markdown, DocxXML or text filename");
-        ensure!(!fdl_core::annotations::sidecar(&path).exists(), "an annotation sidecar already exists for this name");
-        ensure!(!feishu_sidecar(&path).exists(), "a Feishu source sidecar already exists for this name");
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
-        file.write_all(content)?;
-        file.sync_all()?;
+        let spreadsheet = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xlsx"));
+        ensure!(spreadsheet || matches!(crate::workspace_fs::DocKind::of(&path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml)), "choose a Markdown, DocxXML, text or XLSX filename");
+        if spreadsheet {
+            fdl_core::spreadsheet::read_xlsx_snapshot(content).context("invalid new workbook")?;
+            let staging = parent.join(format!(".markdownx-new-{}.tmp", uuid::Uuid::new_v4()));
+            let mut created = false;
+            let result = (|| -> std::io::Result<()> {
+                let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&staging)?;
+                created = true;
+                file.write_all(content)?;
+                file.sync_all()?;
+                drop(file);
+                renamore::rename_exclusive(&staging, &path)
+            })();
+            if result.is_err() && created { let _ = fs::remove_file(&staging); }
+            result?;
+        } else {
+            ensure!(!fdl_core::annotations::sidecar(&path).exists(), "an annotation sidecar already exists for this name");
+            ensure!(!feishu_sidecar(&path).exists(), "a Feishu source sidecar already exists for this name");
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+            file.write_all(content)?;
+            file.sync_all()?;
+        }
     }
     Ok(path)
 }
@@ -115,7 +134,12 @@ pub(crate) fn rename(root: &Path, path: &Path, name: &str, dir: bool, protected:
     ensure!(if dir { meta.is_dir() } else { meta.is_file() }, "file type changed");
     let dest = path.parent().context("missing parent")?.join(leaf(name)?);
     if path == dest { return Ok(dest); }
-    if !dir { ensure!(crate::workspace_fs::DocKind::of(&dest) == crate::workspace_fs::DocKind::of(path), "the document type cannot be changed by renaming"); }
+    if !dir {
+        ensure!(crate::workspace_fs::DocKind::of(&dest) == crate::workspace_fs::DocKind::of(path), "the document type cannot be changed by renaming");
+        if crate::spreadsheet_ui::is_spreadsheet(path) || crate::spreadsheet_ui::is_spreadsheet(&dest) {
+            ensure!(path.extension().and_then(|s| s.to_str()).zip(dest.extension().and_then(|s| s.to_str())).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b)), "the document type cannot be changed by renaming");
+        }
+    }
     let editable = !dir && matches!(crate::workspace_fs::DocKind::of(path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml));
     let sidecar = if editable { owned_sidecar(path)? } else { None };
     let dest_sidecar = editable.then(|| fdl_core::annotations::sidecar(&dest));
@@ -183,6 +207,28 @@ fn send_to_trash(paths: Vec<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn creates_xlsx_exclusively_and_keeps_workbook_type_on_rename() {
+        let root = std::env::temp_dir().join(format!("markdownx-new-xlsx-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let path = create(&root, &root, "数值.xlsx", false, &[]).unwrap();
+        let workbook = fdl_core::spreadsheet::read(&path).unwrap();
+        assert_eq!(workbook.sheets.len(), 1);
+        assert!(workbook.sheets[0].cells.is_empty());
+        let mut document = crate::spreadsheet_save::SpreadsheetDocument::open(path.clone()).unwrap();
+        document.session.set(fdl_core::spreadsheet_edit::Address { sheet: 0, row: 0, column: 0 }, fdl_core::spreadsheet_edit::CellInput::Number(123.0)).unwrap();
+        document.save().unwrap();
+        assert!(fdl_core::spreadsheet::read(&path).unwrap().sheets[0].cells.iter().any(|cell| cell.value == 123.0));
+        let before = fs::read(&path).unwrap();
+        assert!(create(&root, &root, "数值.xlsx", false, &[]).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(rename(&root, &path, "数值.xlsm", false, &[]).is_err());
+        let renamed = rename(&root, &path, "策划.xlsx", false, &[]).unwrap();
+        assert_eq!(fs::read(&renamed).unwrap(), before);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn external_open_checks_workspace_membership_and_regular_files() {
         let base = std::env::temp_dir().join(format!("markdownx-open-{}", uuid::Uuid::new_v4()));

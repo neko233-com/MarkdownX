@@ -76,11 +76,17 @@ pwsh -File scripts/install-windows.ps1
 
 No administrator rights are needed. The local MSI is preferred. The app goes to `%LOCALAPPDATA%\Programs\MarkdownX`; the server token and workspace remain in `%LOCALAPPDATA%\MarkdownX\server`. The installation is registered in **Apps & features**. The helper refuses to force-close a running installed app or server.
 
-Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-0.1.17-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
+Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-<version>-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
 
-**My documents** shows `MarkDown-Demo` inside the system Documents folder by default; on Windows this is normally `C:\Users\<user>\Documents\MarkDown-Demo`. The app creates the default folder if it is missing. Use the **+** beside My documents, **Settings → Documents**, or **File → Open Folder…** to add folders. Their trees stay visible together and are restored on the next launch. Each root’s **…** menu can change its display name or folder, refresh it, or remove it from the list without deleting files. An unavailable folder remains listed without blocking the others. A folder passed on the command line is temporary.
+**My documents** shows `MarkdownX-Demo` inside the system Documents folder by default; on Windows this is normally `C:\Users\<user>\Documents\MarkdownX-Demo`. The app creates the default folder if it is missing. Use the **+** beside My documents, **Settings → Documents**, or **File → Open Folder…** to add folders. Their trees stay visible together and are restored on the next launch. Each root’s **…** menu can change its display name or folder, refresh it, or remove it from the list without deleting files. An unavailable folder remains listed without blocking the others. A folder passed on the command line is temporary.
 
 On first launch, an empty default folder receives an editable sample in the interface language, and the same file opens in the editor and appears in the folder tree. The library guides use that language too. Existing files are never replaced; opening an explicit file or folder takes priority. Changing the interface language does not translate or overwrite documents you already have. The last opened file in a saved workspace is restored when it is still available.
+
+Settings → **Extensions** lists built-in formats and installed external extensions. A plugin is a folder with `plugin.json` under the app data `markdownx/plugins` directory (override with `MARKDOWNX_PLUGIN_DIR`); its executable stays inside that folder. A matching file starts the plugin, asks it for Markdown, and shows the result as a read-only preview, so the original format is never rewritten. **Install extension…** copies a selected folder into that directory, and plugins can be switched off individually; a manifest that conflicts with a built-in or another plugin is skipped as a whole. The repository's `MarkdownX-Demo` folder contains Markdown and Excel samples plus a reference plugin.
+
+Images (including animated GIFs), audio, video and 3D models open in a preview: images zoom, audio shows a decoded waveform and duration, video shows the shell thumbnail plus metadata, and OBJ/STL/glTF/GLB models can be rotated and zoomed. Audio and video also offer **Open with system app**. These are built-in providers in the same suffix registry as extensions, so a plugin cannot silently take over their suffixes.
+
+Workspace `.xlsx`, `.xlsm`, and `.xlam` files open in the spreadsheet editor; create a new `.xlsx` from a workspace folder. You can edit cells, use local formula calculation where supported, undo and redo, copy and fill ranges, manage worksheets, and search the current sheet or replace text, formula source, and values separately. Replacement can match case or the entire cell. Value replacement uses the underlying number (for example, 50% is `0.5`); dates use `YYYY-MM-DD`. For selection arithmetic, enter a number or percentage and choose +, −, ×, or ÷; text, booleans, and calendar dates are skipped. Formulas are optional: when included, selected formulas and their selected input cells are both changed. The grid displays common workbook colors, font emphasis, alignment and borders, plus supported conditional colors and number formats. Large conditional-format ranges are skipped with a notice; dashed and double borders are approximated. Selection number formats include integer, decimal, grouped, percentage, scientific and date formats, with undo and redo. Protected worksheets allow cells known to be unlocked; locked or ambiguous cells cannot be saved. Protected hidden formulas are omitted from the editor and formula search; copy their calculated results using Copy values. Worksheet protection does not encrypt the file. This support is still in development: some structures cannot be edited safely, and local formula calculation is unavailable for workbooks using the 1904 date system.
 
 The separate MarkdownX library remains at `~/Documents/MarkdownX` (override with `MARKDOWNX_HOME`); its documents remain available from Home and search, while the sidebar focuses on workspace folders. Changing folders does not move or overwrite the library. Use **File → Package as E-book…** (`⌘⇧E`) to turn the current folder, or the open Markdown file, into one `.mdxb`. **下载为 → MarkdownX 书 (.mdxb)** exports a library page and its sub-pages. On Windows the installer registers `.mdxb`, so double-clicking a book opens and imports it.
 
@@ -287,13 +293,21 @@ pwsh -File scripts/install-windows.ps1
 
 不需要管理员权限。优先使用当前构建的 MSI；应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和工作区保留在 `%LOCALAPPDATA%\MarkdownX\server`，并在「应用和功能」中管理。安装脚本不会强制结束运行中的安装版应用或服务器。
 
-release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.17-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-<version>-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
 
 ```sh
 cargo run --release
 ```
 
-「我的文档」默认显示系统文档目录下的 `MarkDown-Demo`；目录不存在时自动创建。使用「我的文档」旁的加号、设置或「文件 → 打开文件夹…」添加多个目录，各目录树同时显示并在重启后恢复。目录旁的「…」可更改显示名称或目录、刷新、移除工作区；移除只影响列表，不删除磁盘文件。不可用的目录会保留提示，不影响其他目录。启动参数指定的文件夹仅本次生效。独立的 MarkdownX 文档库仍放在 `~/Documents/MarkdownX`（可用 `MARKDOWNX_HOME` 改）；侧栏以工作目录为主，已有库文档可从主页和搜索访问，切换文件夹不会移动或覆盖它。
+「我的文档」默认显示系统文档目录下的 `MarkdownX-Demo`；目录不存在时自动创建。使用「我的文档」旁的加号、设置或「文件 → 打开文件夹…」添加多个目录，各目录树同时显示并在重启后恢复。目录旁的「…」可更改显示名称或目录、刷新、移除工作区；移除只影响列表，不删除磁盘文件。不可用的目录会保留提示，不影响其他目录。启动参数指定的文件夹仅本次生效。
+
+设置 › **扩展** 会列出内置格式和已安装的外部扩展。扩展是应用数据目录 `markdownx/plugins` 下带 `plugin.json` 的文件夹（可用 `MARKDOWNX_PLUGIN_DIR` 覆盖），程序必须位于该文件夹内。打开匹配后缀的文件时，应用启动扩展并索取 Markdown，以只读预览显示，不会改写原格式。「安装扩展…」会把选中的文件夹复制到该目录，可逐个关闭扩展；与内置格式或其他扩展冲突的清单会整体跳过。仓库中的 `MarkdownX-Demo` 目录包含 Markdown、Excel 示例和一个参考扩展。
+
+图片（含动态 GIF）、音频、视频和 3D 模型可直接预览：图片可缩放，音频显示解码后的波形与时长，视频显示系统缩略图和元数据，OBJ/STL/glTF/GLB 可拖动旋转和缩放。音频和视频还可选择「使用系统应用打开」。它们和外部扩展共用同一套后缀注册表，插件不能静默占用这些后缀。
+
+工作目录中的 `.xlsx`、`.xlsm` 和 `.xlam` 可在表格编辑器中打开，也可从工作目录新建 `.xlsx`。目前支持单元格编辑、可用公式的本地试算、撤销重做、区域复制填充、工作表管理，以及在当前工作表中查找，并分别替换文本、公式原文和数值；替换可选择区分大小写或匹配整个单元格。数值替换使用原值（例如 50% 输入 `0.5`），日期使用 `YYYY-MM-DD`。选区运算可输入数值或百分比后选择加、减、乘、除；文本、布尔值和日历日期会跳过。公式可选择参与：若公式和它引用的单元格同时位于选区，两者都会改变。表格可显示常见的单元格颜色、字体强调、对齐和边框，以及部分条件颜色和数字格式。过大的条件格式区域会提示并跳过；虚线和双线边框以近似实线显示。选区可设置整数、小数、千位分隔、百分比、科学计数及日期格式，并支持撤销重做。受保护工作表可编辑明确未锁定的单元格，锁定或状态不明确的单元格不能保存；隐藏公式不会显示在编辑栏或公式搜索中，可使用“复制值”复制其计算结果。工作表保护不会加密文件。表格支持仍在完善：部分结构暂不能安全编辑，使用 1904 日期系统的工作簿暂不提供本地公式计算。
+
+独立的 MarkdownX 文档库仍放在 `~/Documents/MarkdownX`（可用 `MARKDOWNX_HOME` 改）；侧栏以工作目录为主，已有库文档可从主页和搜索访问，切换文件夹不会移动或覆盖它。
 
 首次启动时，空的默认目录会生成与界面语言一致、可直接编辑的示例，并同时在编辑区和目录树中显示；文档库指南也使用相同语言。已有文件不会被覆盖，启动参数指定的文件或目录优先打开。切换界面语言不会翻译或覆盖已有文档；已保存工作区中最后打开的文件仍然可用时会在重启后恢复。
 

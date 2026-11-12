@@ -15,6 +15,12 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.18", &[
+        ("工作区可直接打开和编辑 .xlsx、.xlsm、.xlam 表格，支持公式试算、格式、查找替换和工作表管理", "Open and edit .xlsx, .xlsm and .xlam workbooks with formulas, formats, find and replace, and worksheet management"),
+        ("新增按后缀匹配的外部扩展，设置 › 扩展可逐个启停，匹配文件以只读 Markdown 预览打开", "Add suffix-matched external extensions with per-plugin switches in Settings › Extensions and read-only Markdown previews"),
+        ("图片/GIF、音频、视频和 3D 模型可直接预览，共用后缀注册表", "Preview images/GIFs, audio, video and 3D models through the same suffix registry"),
+        ("默认演示目录改为 MarkdownX-Demo，首次打开时附带 Markdown、Excel 和媒体示例", "Rename the default demo folder to MarkdownX-Demo and include Markdown, Excel and media samples on first launch"),
+    ]),
     ("0.1.16", &[
         ("首次打开时按界面语言展示可编辑示例和入门指南", "Start with an editable sample and guides in your interface language"),
         ("目录和文件按类型显示彩色图标，搜索结果可打开其他文件", "See color-coded folders and file types, and open other files from search"),
@@ -28,7 +34,7 @@ const NOTES: &[(&str, &[(&str, &str)])] = &[
     ]),
     ("0.1.14", &[
         ("同时打开多个工作目录，管理文件和文件夹，并在所有目录中搜索", "Open multiple workspaces, manage files and folders, and search across them"),
-        ("默认打开文档目录下的 MarkDown-Demo，支持添加和切换目录", "Open MarkDown-Demo in Documents by default, and add or switch folders"),
+        ("默认打开文档目录下的 MarkdownX-Demo，支持添加和切换目录", "Open MarkdownX-Demo in Documents by default, and add or switch folders"),
         ("修复 Windows 窗口的最小化、最大化、还原和关闭操作", "Fix Windows window minimize, maximize, restore and close controls"),
     ]),
     ("0.1.13", &[

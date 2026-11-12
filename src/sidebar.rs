@@ -319,11 +319,11 @@ impl Workspace {
 
     fn workspace_new_row(&self, root_id: u64, parent: &std::path::Path, depth: usize) -> Option<Stateful<Div>> {
         let rename = self.workspace_rename.as_ref()?;
-        let crate::workspaces::WorkspaceMenuTarget::New { root, parent: selected, dir } = &rename.target else { return None };
+        let crate::workspaces::WorkspaceMenuTarget::New { root, parent: selected, dir, spreadsheet } = &rename.target else { return None };
         if *root != root_id || selected != parent { return None }
         Some(div().id(SharedString::from(format!("workspace-new-input-{root_id}-{}", parent.display())))
             .h(px(28.)).pl(px(25. + (depth as f32 * 12.).min(120.))).pr(px(6.)).flex().items_center().gap(px(5.))
-            .child(if *dir { crate::workspace_icons::folder("", false, 16.) } else { crate::workspace_icons::file(std::path::Path::new("new.md"), 16.) })
+            .child(if *dir { crate::workspace_icons::folder("", false, 16.) } else { crate::workspace_icons::file(std::path::Path::new(if *spreadsheet { "new.xlsx" } else { "new.md" }), 16.) })
             .child(div().flex_1().min_w_0().child(rename.field.clone())))
     }
 
@@ -342,6 +342,7 @@ impl Workspace {
             WorkspaceMenuTarget::Root(id) => {
                 panel = panel
                     .child(item("ws-new-file", "file-text", crate::settings::tr("新建文件", "New file")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(id, None, false, window, cx))))
+                    .child(item("ws-new-xlsx", "file-text", crate::settings::tr("新建表格", "New spreadsheet")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_spreadsheet(id, None, window, cx))))
                     .child(item("ws-new-dir", "folder", crate::settings::tr("新建文件夹", "New folder")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(id, None, true, window, cx))))
                     .child(item("ws-label", "square-pen", crate::settings::tr("更改显示名称", "Change display name")).on_click(cx.listener(move |w, _, window, cx| w.start_workspace_rename(WorkspaceMenuTarget::Root(id), window, cx))))
                     .child(item("ws-replace", "folder-input", crate::settings::tr("更换目录", "Change folder")).on_click(cx.listener(move |w, _, window, cx| { w.workspace_menu = None; w.replace_workspace(id, window, cx); })))
@@ -350,9 +351,10 @@ impl Workspace {
             }
             WorkspaceMenuTarget::Node { root, path, dir } => {
                 if dir {
-                    let file_parent = path.clone(); let dir_parent = path.clone();
+                    let file_parent = path.clone(); let dir_parent = path.clone(); let spreadsheet_parent = path.clone();
                     panel = panel
                         .child(item("node-new-file", "file-text", crate::settings::tr("新建文件", "New file")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(root, Some(file_parent.clone()), false, window, cx))))
+                        .child(item("node-new-xlsx", "file-text", crate::settings::tr("新建表格", "New spreadsheet")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_spreadsheet(root, Some(spreadsheet_parent.clone()), window, cx))))
                         .child(item("node-new-dir", "folder", crate::settings::tr("新建文件夹", "New folder")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(root, Some(dir_parent.clone()), true, window, cx))));
                 }
                 if !dir && crate::workspace_fs::DocKind::of(&path).is_none() {

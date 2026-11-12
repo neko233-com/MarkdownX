@@ -23,7 +23,7 @@ def main():
         (temp / '.markdownx-workspace-test').touch()
         documents = temp / 'documents'
         documents.mkdir()
-        default = documents / 'MarkDown-Demo'
+        default = documents / 'MarkdownX-Demo'
         repo = temp / 'repository'
         (repo / '.git').mkdir(parents=True)
         chosen = repo / '所选目录'

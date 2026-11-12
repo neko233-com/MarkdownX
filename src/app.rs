@@ -236,8 +236,8 @@ pub struct Workspace {
     /// A file opened from a folder workspace; `current` stays None then.
     pub file: Option<std::path::PathBuf>,
     /// Bytes last read or saved, used to detect changes made by another app.
-    file_snapshot: Option<String>,
-    file_source: Option<FolderSource>,
+    pub(crate) file_snapshot: Option<String>,
+    pub(crate) file_source: Option<FolderSource>,
     /// File saves run off the UI thread; revisions keep edits made during a save.
     file_saving: bool,
     pub(crate) file_revision: u64,
@@ -322,6 +322,12 @@ pub struct Workspace {
     /// 导出 Markdown 设置.
     pub export_md: Option<crate::transfer::ExportMd>,
     pub(crate) feishu_import: Option<crate::feishu_ui::FeishuDialog>,
+    pub(crate) spreadsheet_preview: Option<crate::spreadsheet_ui::SpreadsheetPreview>,
+    /// A built-in image, audio, video or model preview.
+    pub(crate) media_preview: Option<crate::media_ui::MediaPreview>,
+    pub(crate) media_serial: u64,
+    /// The open document came from an external extension and is read-only.
+    pub(crate) plugin_preview: bool,
     /// 编辑 / 阅读 dropdown, and the mode button's last-frame bounds.
     pub mode_menu: bool,
     pub mode_btn_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -336,7 +342,7 @@ pub struct Workspace {
     dirty_since: Option<Instant>,
     /// The open document has changes not yet on disk (cleared only by a
     /// successful save or by 放弃修改).
-    unsaved: bool,
+    pub(crate) unsaved: bool,
     /// Held back by a failed save: runs after 重试 succeeds or 放弃修改.
     pub(crate) after_save: Option<AfterSave>,
     editor_sub: Option<Subscription>,
@@ -547,6 +553,10 @@ impl Workspace {
             move_dlg: None,
             export_md: None,
             feishu_import: None,
+            spreadsheet_preview: None,
+            media_preview: None,
+            media_serial: 0,
+            plugin_preview: false,
             focus: cx.focus_handle(),
             save_task: None,
             dirty_since: None,
@@ -591,11 +601,20 @@ impl Workspace {
     pub fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menus();
         let picked = crate::devtools::take_pick();
-        let prompt = picked.is_none().then(|| cx.prompt_for_paths(PathPromptOptions {
-            files: true, directories: false, multiple: false,
-            prompt: Some(crate::settings::tr("打开文件", "Open file").into()),
-            extensions: Some(["md", "markdown", "mark", "txt", "docxxml", "mdxb"].into_iter().map(SharedString::from).collect()),
-        }));
+        let prompt = picked.is_none().then(|| {
+            let mut extensions = ["md", "markdown", "mark", "txt", "docxxml", "mdxb", "xlsx", "xlsm", "xlam"].map(str::to_owned).to_vec();
+            for (_, editor, suffixes) in fdl_core::extensions::BUILTINS {
+                if matches!(editor, fdl_core::extensions::BuiltinEditor::Image | fdl_core::extensions::BuiltinEditor::Audio | fdl_core::extensions::BuiltinEditor::Video | fdl_core::extensions::BuiltinEditor::Model) {
+                    extensions.extend(suffixes.iter().map(|suffix| suffix.trim_start_matches('.').to_owned()));
+                }
+            }
+            extensions.extend(crate::extensions::suffixes().into_iter().map(|suffix| suffix.trim_start_matches('.').to_owned()));
+            cx.prompt_for_paths(PathPromptOptions {
+                files: true, directories: false, multiple: false,
+                prompt: Some(crate::settings::tr("打开文件", "Open file").into()),
+                extensions: Some(extensions.into_iter().map(SharedString::from).collect()),
+            })
+        });
         cx.spawn_in(window, async move |this, cx| {
             let paths = match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked };
             let Some(path) = paths.and_then(|p| p.into_iter().next()) else { return };
@@ -605,6 +624,19 @@ impl Workspace {
 
     pub fn open_external_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let path = if path.is_absolute() { path } else { std::env::current_dir().unwrap_or_default().join(path) };
+        if crate::media_ui::is_media(&path) && path.is_file() {
+            self.open_media_preview(path, window, cx);
+            return;
+        }
+        if crate::extensions::is_external(&path) && path.is_file() {
+            self.open_extension_path(path, window, cx);
+            return;
+        }
+        self.media_preview = None;
+        if crate::spreadsheet_ui::is_spreadsheet(&path) && path.is_file() {
+            self.open_spreadsheet_preview(path, window, cx);
+            return;
+        }
         if crate::workspace_fs::DocKind::of(&path) == Some(crate::workspace_fs::DocKind::Book) {
             self.open_book_path(path, window, cx);
             return;
@@ -989,6 +1021,9 @@ impl Workspace {
     /// `.mdxb` goes through the library so its chapters keep their page tree.
     pub fn open_file_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace_path_busy(&path) { self.workspace_busy_notice(cx); return; }
+        if crate::media_ui::is_media(&path) { self.open_media_preview(path, window, cx); return; }
+        if crate::extensions::is_external(&path) { self.open_extension_path(path, window, cx); return; }
+        self.media_preview = None;
         match crate::workspace_fs::DocKind::of(&path) {
             Some(crate::workspace_fs::DocKind::Book) => {
                 if let Ok(id) = self.import_book(&path) {
@@ -1022,6 +1057,7 @@ impl Workspace {
                 if !self.search_open { editor.read(cx).focus(window); }
                 self.editor = Some(editor);
                 self.current = None;
+                self.plugin_preview = false;
                 let remembered = (!self.quick_note && self.workspace_roots.iter().any(|root| root.persistent && path.starts_with(&root.spec.path))).then(|| path.clone());
                 self.file = Some(path);
                 self.file_snapshot = Some(text);
@@ -1038,7 +1074,7 @@ impl Workspace {
         }
     }
 
-    fn bind_editor(&mut self, editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn bind_editor(&mut self, editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) {
         self.editor_sub = Some(cx.subscribe_in(&editor, window, |this, _, ev: &EditorEvent, window, cx| match ev {
             EditorEvent::Changed => {
                 // 阅读模式 put the document back: nothing to save.
@@ -1087,6 +1123,7 @@ impl Workspace {
     /// Show `id`; false when it could not be opened (or the open document
     /// could not be saved first, see [`Self::save_before`]).
     pub fn try_open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.media_preview = None;
         // The constructor opens an initial library page before restoring a
         // workspace file. Only a later, explicit library choice clears it.
         let explicit = self.current.is_some() || self.file.is_some() || self.view != View::Doc;
@@ -1146,6 +1183,7 @@ impl Workspace {
         self.file = None;
         self.file_snapshot = None;
         self.file_source = None;
+        self.plugin_preview = false;
         if explicit && !self.quick_note && crate::settings::prefs().last_workspace_file.is_some() { self.set_pref(|p| p.last_workspace_file = None, cx); }
         crate::quick_note::used(id, cx);
         self.reveal_in_tree(id);
@@ -1468,6 +1506,11 @@ impl Workspace {
     /// the top bar shows the error.
     pub fn flush(&mut self, cx: &mut Context<Self>) -> bool {
         self.save_task = None;
+        // An extension preview is in-memory only: saving never rewrites its source.
+        if self.plugin_preview {
+            self.unsaved = false;
+            return true;
+        }
         if !self.unsaved {
             return true;
         }
@@ -1578,6 +1621,10 @@ impl Workspace {
     /// fails nothing is replaced: the 保存失败 dialog offers 重试 / 放弃修改
     /// and runs `then` after either.
     pub fn save_before(&mut self, cx: &mut Context<Self>, then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static) -> bool {
+        if self.spreadsheet_has_pending(cx) {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("工作簿仍有未保存的修改，请先保存或在工作簿窗口中处理", "The workbook has unsaved changes; save or resolve them before continuing"), cx);
+            return false;
+        }
         if self.flush(cx) {
             return true;
         }
@@ -1973,7 +2020,7 @@ impl Workspace {
 }
 
 #[derive(Clone)]
-enum FolderSource { Markdown(crate::markdown_source::Source), DocxXml }
+pub(crate) enum FolderSource { Markdown(crate::markdown_source::Source), DocxXml }
 
 struct FolderSaveOutcome { text: String, source: FolderSource, modified: u64, git_warning: Option<String> }
 
@@ -2013,7 +2060,7 @@ fn save_folder_document(path: &std::path::Path, snapshot: &str, doc: &crate::mod
     Ok(FolderSaveOutcome { text, source: next_source, modified: file_modified(path), git_warning })
 }
 
-fn file_modified(path: &std::path::Path) -> u64 {
+pub(crate) fn file_modified(path: &std::path::Path) -> u64 {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or_else(crate::time::now)
 }
 
@@ -2078,6 +2125,8 @@ impl Render for Workspace {
         let move_dlg = self.render_move_dialog(cx);
         let export_md = self.render_export_md(cx);
         let feishu_import = self.render_feishu_import(cx);
+        let spreadsheet_preview = self.render_spreadsheet_preview(window, cx);
+        let media_preview = self.render_media_preview(window, cx);
         // Only the note stands out: a white plane flush with the window's top,
         // right and bottom edges. The sidebar sits sunken on the window
         // surface beside it; the change of value is the only line between
@@ -2125,10 +2174,14 @@ impl Render for Workspace {
                 w.sidebar_open = !w.sidebar_open;
                 cx.notify();
             }))
-            .on_action(cx.listener(|w, _: &FindInDoc, window, cx| w.find_in_doc(false, window, cx)))
+            .on_action(cx.listener(|w, _: &FindInDoc, window, cx| {
+                if !w.focus_spreadsheet_find(window, cx) { w.find_in_doc(false, window, cx); }
+            }))
             .on_action(cx.listener(|w, _: &ReplaceInDoc, window, cx| {
-                let replace = !w.reading();
-                w.find_in_doc(replace, window, cx)
+                if !w.focus_spreadsheet_find(window, cx) {
+                    let replace = !w.reading();
+                    w.find_in_doc(replace, window, cx);
+                }
             }))
             .on_action(cx.listener(|w, _: &crate::modes::EditMode, window, cx| w.set_mode(false, window, cx)))
             .on_action(cx.listener(|w, _: &crate::modes::ReadMode, window, cx| w.set_mode(true, window, cx)))
@@ -2214,6 +2267,8 @@ impl Render for Workspace {
             .children(move_dlg)
             .children(export_md)
             .children(feishu_import)
+            .children(media_preview)
+            .children(spreadsheet_preview)
             .children(search)
             .children(resize_overlay)
             .children(toast)
@@ -2363,7 +2418,7 @@ pub(crate) fn check_onboarding(phase: &str, cx: &mut App) {
     let test_root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_TEST_WORKSPACE_ROOT").expect("test root"));
     assert!(test_root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
     assert!(test_root.join(".markdownx-workspace-test").is_file());
-    let root = test_root.join("documents/MarkDown-Demo");
+    let root = test_root.join("documents/MarkdownX-Demo");
     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
     handle.update(cx, |ws, window, cx| {
         #[cfg(target_os = "windows")]
@@ -2449,7 +2504,7 @@ pub(crate) fn check_workspace_startup(args: &str, cx: &mut App) {
             "default" => { assert!(registered.tree.is_some() && registered.error.is_none()); assert!(ws.file.is_none()); }
             "selected" => {
                 assert!(registered.tree.is_some() && registered.persistent);
-                assert!(ws.workspace_roots.iter().any(|r| r.spec.path == test_root.join("documents/MarkDown-Demo") && r.tree.is_some()));
+                assert!(ws.workspace_roots.iter().any(|r| r.spec.path == test_root.join("documents/MarkdownX-Demo") && r.tree.is_some()));
                 assert!(ws.workspace_roots.iter().any(|r| r.spec.path == test_root.join("unavailable-folder") && r.error.is_some()));
                 assert_eq!(ws.workspace_roots.iter().filter(|r| crate::workspaces::same_path(&r.spec.path, &root)).count(), 1);
                 assert!(ws.file.is_none(), "adding a folder must not open an arbitrary file");
@@ -2473,7 +2528,7 @@ pub(crate) fn check_multi_workspace(phase: &str, cx: &mut App) {
     let test_root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_TEST_WORKSPACE_ROOT").unwrap());
     assert!(test_root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
     assert!(test_root.join(".markdownx-workspace-test").is_file());
-    let first_root = test_root.join("documents/MarkDown-Demo");
+    let first_root = test_root.join("documents/MarkdownX-Demo");
     let second_root = test_root.join("repository/所选目录");
     let replacement = test_root.join("replacement");
     let first = first_root.join("alpha.md");

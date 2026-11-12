@@ -10,7 +10,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 
 ## Rust 依赖
 
-由 `cargo metadata` 生成，共 764 个包。许可逐项列于下表，其中也包含 MPL-2.0；本表记录依赖声明，不替代各组件的许可文本。
+由 `cargo metadata` 生成，共 805 个包。许可逐项列于下表，其中也包含 MPL-2.0；本表记录依赖声明，不替代各组件的许可文本。
 
 要重新生成这张表：`scripts/licences.sh`（从 `cargo metadata` 取全部依赖）。
 
@@ -22,7 +22,9 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | aho-corasick | 1.1.5 | Unlicense OR MIT |
 | aligned | 0.4.3 | MIT OR Apache-2.0 |
 | aligned-vec | 0.6.4 | MIT |
+| android_system_properties | 0.1.6 | MIT OR Apache-2.0 |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 |
+| approx | 0.5.1 | Apache-2.0 |
 | ar_archive_writer | 0.5.3 | Apache-2.0 WITH LLVM-exception |
 | arbitrary | 1.5.0 | MIT OR Apache-2.0 |
 | arg_enum_proc_macro | 0.3.4 | MIT |
@@ -34,6 +36,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | ash-window | 0.13.0 | MIT OR Apache-2.0 |
 | ashpd | 0.11.1 | MIT |
 | ashpd | 0.12.3 | MIT |
+| async_zip | 0.0.17 | MIT |
 | async-broadcast | 0.7.2 | MIT OR Apache-2.0 |
 | async-channel | 1.9.0 | Apache-2.0 OR MIT |
 | async-channel | 2.5.0 | Apache-2.0 OR MIT |
@@ -50,7 +53,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | async-std | 1.13.2 | Apache-2.0 OR MIT |
 | async-task | 4.7.1 | Apache-2.0 OR MIT |
 | async-trait | 0.1.92 | MIT OR Apache-2.0 |
-| async_zip | 0.0.17 | MIT |
+| atoi_simd | 0.18.1 | MIT OR Apache-2.0 |
 | atomic | 0.5.3 | Apache-2.0/MIT |
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT |
@@ -61,9 +64,11 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | axum-core | 0.5.6 | MIT |
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
 | bindgen | 0.71.1 | BSD-3-Clause |
+| bit_field | 0.10.3 | Apache-2.0/MIT |
 | bit-set | 0.8.0 | Apache-2.0 OR MIT |
 | bit-vec | 0.8.0 | Apache-2.0 OR MIT |
-| bit_field | 0.10.3 | Apache-2.0/MIT |
+| bitcode | 0.6.9 | MIT OR Apache-2.0 |
+| bitcode_derive | 0.6.9 | MIT OR Apache-2.0 |
 | bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 |
 | bitstream-io | 4.10.0 | MIT/Apache-2.0 |
@@ -86,22 +91,26 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | byteorder | 1.5.0 | Unlicense OR MIT |
 | byteorder-lite | 0.1.0 | Unlicense OR MIT |
 | bytes | 1.12.1 | MIT |
+| calamine | 0.36.1 | MIT |
 | calloop | 0.13.0 | MIT |
 | calloop-wayland-source | 0.3.0 | MIT |
 | cbc | 0.1.2 | MIT OR Apache-2.0 |
 | cbindgen | 0.28.0 | MPL-2.0 |
 | cc | 1.9.0 | MIT OR Apache-2.0 |
 | cexpr | 0.6.0 | Apache-2.0/MIT |
-| cfg-if | 1.0.5 | MIT OR Apache-2.0 |
 | cfg_aliases | 0.2.2 | MIT |
+| cfg-if | 1.0.5 | MIT OR Apache-2.0 |
 | cgl | 0.3.2 | MIT / Apache-2.0 |
 | chacha20 | 0.10.2 | MIT OR Apache-2.0 |
+| chrono | 0.4.45 | MIT OR Apache-2.0 |
+| chrono-tz | 0.10.4 | MIT OR Apache-2.0 |
 | cipher | 0.4.4 | MIT OR Apache-2.0 |
 | clang-sys | 1.9.1 | Apache-2.0 |
 | cocoa | 0.25.0 | MIT OR Apache-2.0 |
 | cocoa | 0.26.0 | MIT OR Apache-2.0 |
 | cocoa-foundation | 0.1.2 | MIT OR Apache-2.0 |
 | cocoa-foundation | 0.2.0 | MIT OR Apache-2.0 |
+| codepage | 0.1.3 | Apache-2.0 OR MIT |
 | codespan-reporting | 0.12.0 | Apache-2.0 |
 | color_quant | 1.1.0 | MIT |
 | command-fds | 0.3.3 | Apache-2.0 |
@@ -111,9 +120,12 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | const-oid | 0.10.2 | Apache-2.0 OR MIT |
 | const-random | 0.1.18 | MIT OR Apache-2.0 |
 | const-random-macro | 0.1.16 | MIT OR Apache-2.0 |
+| constant_time_eq | 0.6.1 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | convert_case | 0.4.0 | MIT |
-| core-foundation | 0.9.4 | MIT OR Apache-2.0 |
+| core_detect | 1.0.0 | MIT/Apache-2.0 |
+| core_maths | 0.1.1 | MIT |
 | core-foundation | 0.10.0 | MIT OR Apache-2.0 |
+| core-foundation | 0.9.4 | MIT OR Apache-2.0 |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 |
 | core-graphics | 0.23.2 | MIT OR Apache-2.0 |
 | core-graphics | 0.24.0 | MIT OR Apache-2.0 |
@@ -123,8 +135,6 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | core-graphics2 | 0.4.1 | MIT OR Apache-2.0 |
 | core-text | 21.0.0 | MIT OR Apache-2.0 |
 | core-video | 0.4.3 | MIT OR Apache-2.0 |
-| core_detect | 1.0.0 | MIT/Apache-2.0 |
-| core_maths | 0.1.1 | MIT |
 | cosmic-text | 0.14.2 | MIT OR Apache-2.0 |
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 |
 | cpufeatures | 0.3.1 | MIT OR Apache-2.0 |
@@ -136,6 +146,8 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | crunchy | 0.2.4 | MIT |
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 |
 | crypto-common | 0.2.2 | MIT OR Apache-2.0 |
+| csv | 1.4.0 | Unlicense/MIT |
+| csv-core | 0.1.13 | Unlicense/MIT |
 | ctor | 0.4.3 | Apache-2.0 OR MIT |
 | ctor-proc-macro | 0.0.6 | Apache-2.0 OR MIT |
 | darling | 0.24.1 | MIT |
@@ -143,6 +155,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | darling_macro | 0.24.1 | MIT |
 | data-encoding | 2.11.1 | MIT |
 | data-url | 0.3.2 | MIT OR Apache-2.0 |
+| debug_unsafe | 0.1.4 | MIT OR Apache-2.0 |
 | deflate64 | 0.1.12 | MIT |
 | derive_more | 0.99.20 | MIT |
 | digest | 0.10.7 | MIT OR Apache-2.0 |
@@ -179,7 +192,9 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | event-listener | 2.5.3 | Apache-2.0 OR MIT |
 | event-listener | 5.4.2 | Apache-2.0 OR MIT |
 | event-listener-strategy | 0.5.4 | Apache-2.0 OR MIT |
+| extended | 0.1.0 | MIT |
 | exr | 1.74.2 | BSD-3-Clause |
+| fast-float2 | 0.2.4 | MIT OR Apache-2.0 |
 | fastrand | 1.9.0 | Apache-2.0 OR MIT |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fax | 0.2.7 | MIT |
@@ -188,9 +203,9 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | filetime | 0.2.29 | MIT/Apache-2.0 |
 | find-msvc-tools | 0.1.15 | MIT OR Apache-2.0 |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
+| float_next_after | 1.0.0 | MIT |
 | float-cmp | 0.9.0 | MIT |
 | float-ord | 0.3.2 | MIT / Apache-2.0 |
-| float_next_after | 1.0.0 | MIT |
 | flume | 0.11.1 | Apache-2.0/MIT |
 | fnv | 1.0.7 | Apache-2.0 / MIT |
 | foldhash | 0.1.5 | Zlib |
@@ -222,6 +237,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | getrandom | 0.3.4 | MIT OR Apache-2.0 |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 |
 | gif | 0.14.2 | MIT OR Apache-2.0 |
+| glam | 0.34.3 | MIT OR Apache-2.0 |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
 | globset | 0.4.20 | Unlicense OR MIT |
 | gloo-timers | 0.3.0 | MIT OR Apache-2.0 |
@@ -230,7 +246,6 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | gpu-alloc-ash | 0.7.1 | MIT OR Apache-2.0 |
 | gpu-alloc-types | 0.3.1 | MIT OR Apache-2.0 |
 | gpui | 0.2.2 | Apache-2.0 |
-| gpui-macros | 0.2.2 | Apache-2.0 |
 | gpui_collections | 0.2.2 | Apache-2.0 |
 | gpui_derive_refineable | 0.2.2 | Apache-2.0 |
 | gpui_http_client | 0.2.2 | Apache-2.0 |
@@ -241,6 +256,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | gpui_sum_tree | 0.2.2 | Apache-2.0 |
 | gpui_util | 0.2.2 | Apache-2.0 |
 | gpui_util_macros | 0.2.2 | Apache-2.0 |
+| gpui-macros | 0.2.2 | Apache-2.0 |
 | grid | 0.18.0 | MIT |
 | h2 | 0.4.20 | MIT |
 | half | 2.7.1 | MIT OR Apache-2.0 |
@@ -267,6 +283,8 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | hyper | 1.12.0 | MIT |
 | hyper-rustls | 0.27.10 | Apache-2.0 OR ISC OR MIT |
 | hyper-util | 0.1.21 | MIT |
+| iana-time-zone | 0.1.65 | MIT OR Apache-2.0 |
+| iana-time-zone-haiku | 0.1.2 | MIT OR Apache-2.0 |
 | icu_collections | 2.3.0 | Unicode-3.0 |
 | icu_locale_core | 2.3.0 | Unicode-3.0 |
 | icu_normalizer | 2.3.0 | Unicode-3.0 |
@@ -288,10 +306,13 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | inventory | 0.3.25 | MIT OR Apache-2.0 |
 | io-surface | 0.16.1 | MIT OR Apache-2.0 |
 | ipnet | 2.12.2 | MIT OR Apache-2.0 |
+| ironcalc | 0.9.1 | MIT OR Apache-2.0 |
+| ironcalc_base | 0.9.1 | MIT OR Apache-2.0 |
 | is-docker | 0.2.0 | MIT |
 | is-wsl | 0.4.0 | MIT |
 | itertools | 0.13.0 | MIT OR Apache-2.0 |
 | itertools | 0.14.0 | MIT OR Apache-2.0 |
+| itertools | 0.15.0 | MIT OR Apache-2.0 |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
 | jobserver | 0.1.35 | MIT OR Apache-2.0 |
 | js-sys | 0.3.106 | MIT OR Apache-2.0 |
@@ -308,8 +329,8 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | libloading | 0.8.9 | ISC |
 | libm | 0.2.16 | MIT |
 | libredox | 0.1.25 | MIT |
-| linux-raw-sys | 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| linux-raw-sys | 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | litemap | 0.8.3 | Unicode-3.0 |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.34 | MIT OR Apache-2.0 |
@@ -354,6 +375,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | ntapi | 0.4.3 | Apache-2.0 OR MIT |
 | nu-ansi-term | 0.50.3 | MIT |
 | num | 0.4.3 | MIT OR Apache-2.0 |
+| num_cpus | 1.17.0 | MIT OR Apache-2.0 |
 | num-bigint | 0.4.8 | MIT OR Apache-2.0 |
 | num-bigint-dig | 0.8.6 | MIT/Apache-2.0 |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 |
@@ -362,8 +384,9 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | num-iter | 0.1.46 | MIT OR Apache-2.0 |
 | num-rational | 0.4.2 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
-| num_cpus | 1.17.0 | MIT OR Apache-2.0 |
 | objc | 0.2.7 | MIT |
+| objc_exception | 0.1.2 | MIT |
+| objc_id | 0.1.1 | MIT |
 | objc-foundation | 0.1.1 | MIT |
 | objc2 | 0.6.5 | MIT |
 | objc2-app-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
@@ -373,8 +396,6 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | objc2-metal | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-quartz-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
-| objc_exception | 0.1.2 | MIT |
-| objc_id | 0.1.1 | MIT |
 | object | 0.39.1 | Apache-2.0 OR MIT |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | oo7 | 0.5.0 | MIT |
@@ -392,6 +413,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | pbkdf2 | 0.12.2 | MIT OR Apache-2.0 |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 |
 | phf | 0.11.3 | MIT |
+| phf | 0.12.1 | MIT |
 | phf | 0.14.0 | MIT |
 | phf_codegen | 0.11.3 | MIT |
 | phf_codegen | 0.14.0 | MIT |
@@ -399,6 +421,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | phf_generator | 0.14.0 | MIT |
 | phf_macros | 0.14.0 | MIT |
 | phf_shared | 0.11.3 | MIT |
+| phf_shared | 0.12.1 | MIT |
 | phf_shared | 0.14.0 | MIT |
 | pico-args | 0.5.0 | MIT |
 | pin-project | 1.1.13 | Apache-2.0 OR MIT |
@@ -431,20 +454,21 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | quick-error | 2.0.1 | MIT/Apache-2.0 |
 | quick-xml | 0.37.5 | MIT |
 | quick-xml | 0.41.0 | MIT |
+| quick-xml | 0.42.0 | MIT |
 | quinn | 0.11.12 | MIT OR Apache-2.0 |
 | quinn-proto | 0.11.19 | MIT OR Apache-2.0 |
 | quinn-udp | 0.5.16 | MIT OR Apache-2.0 |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
+| rand | 0.10.3 | MIT OR Apache-2.0 |
 | rand | 0.8.8 | MIT OR Apache-2.0 |
 | rand | 0.9.5 | MIT OR Apache-2.0 |
-| rand | 0.10.3 | MIT OR Apache-2.0 |
 | rand_chacha | 0.3.1 | MIT OR Apache-2.0 |
 | rand_chacha | 0.9.0 | MIT OR Apache-2.0 |
+| rand_core | 0.10.1 | MIT OR Apache-2.0 |
 | rand_core | 0.6.4 | MIT OR Apache-2.0 |
 | rand_core | 0.9.5 | MIT OR Apache-2.0 |
-| rand_core | 0.10.1 | MIT OR Apache-2.0 |
 | rand_pcg | 0.10.2 | MIT OR Apache-2.0 |
 | rangemap | 1.8.0 | MIT/Apache-2.0 |
 | rapidhash | 4.5.1 | MIT OR Apache-2.0 |
@@ -465,7 +489,9 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | ref-cast-impl | 1.0.27 | MIT OR Apache-2.0 |
 | regex | 1.13.1 | MIT OR Apache-2.0 |
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 |
+| regex-lite | 0.1.9 | MIT OR Apache-2.0 |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
+| renamore | 0.3.2 | MIT OR Apache-2.0 |
 | resvg | 0.45.1 | Apache-2.0 OR MIT |
 | rgb | 0.8.53 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
@@ -473,9 +499,9 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | rust-embed | 8.13.0 | MIT |
 | rust-embed-impl | 8.13.0 | MIT |
 | rust-embed-utils | 8.13.0 | MIT |
+| rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustc-hash | 1.1.0 | Apache-2.0/MIT |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
-| rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 0.38.44 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
@@ -520,8 +546,8 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | shlex | 1.3.0 | MIT OR Apache-2.0 |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
-| simd-adler32 | 0.3.10 | MIT |
 | simd_helpers | 0.1.0 | MIT |
+| simd-adler32 | 0.3.10 | MIT |
 | simdutf8 | 0.1.5 | MIT OR Apache-2.0 |
 | simplecss | 0.2.2 | Apache-2.0 OR MIT |
 | siphasher | 1.0.4 | MIT OR Apache-2.0 |
@@ -539,6 +565,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | stacksafe | 0.1.4 | Apache-2.0 |
 | stacksafe-macro | 0.1.4 | Apache-2.0 |
 | static_assertions | 1.1.0 | MIT OR Apache-2.0 |
+| statrs | 0.19.1 | MIT |
 | strict-num | 0.1.1 | MIT |
 | string_cache | 0.8.9 | MIT OR Apache-2.0 |
 | string_cache_codegen | 0.5.4 | MIT OR Apache-2.0 |
@@ -561,6 +588,18 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | svg_fmt | 0.4.5 | MIT/Apache-2.0 |
 | svgtypes | 0.15.3 | Apache-2.0 OR MIT |
 | swash | 0.2.10 | Apache-2.0 OR MIT |
+| symphonia | 0.5.5 | MPL-2.0 |
+| symphonia-bundle-flac | 0.5.5 | MPL-2.0 |
+| symphonia-bundle-mp3 | 0.5.5 | MPL-2.0 |
+| symphonia-codec-aac | 0.5.5 | MPL-2.0 |
+| symphonia-codec-pcm | 0.5.5 | MPL-2.0 |
+| symphonia-codec-vorbis | 0.5.5 | MPL-2.0 |
+| symphonia-core | 0.5.5 | MPL-2.0 |
+| symphonia-format-isomp4 | 0.5.5 | MPL-2.0 |
+| symphonia-format-ogg | 0.5.5 | MPL-2.0 |
+| symphonia-format-riff | 0.5.5 | MPL-2.0 |
+| symphonia-metadata | 0.5.5 | MPL-2.0 |
+| symphonia-utils-xiph | 0.5.5 | MPL-2.0 |
 | syn | 1.0.109 | MIT OR Apache-2.0 |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.9 | MIT OR Apache-2.0 |
@@ -611,11 +650,14 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | tracing-core | 0.1.36 | MIT |
 | tracing-log | 0.2.0 | MIT |
 | tracing-subscriber | 0.3.23 | MIT |
+| trash | 5.3.0 | MIT |
 | try-lock | 0.2.5 | MIT |
 | ttf-parser | 0.20.0 | MIT OR Apache-2.0 |
 | ttf-parser | 0.21.1 | MIT OR Apache-2.0 |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 |
 | tungstenite | 0.29.0 | MIT OR Apache-2.0 |
+| typed-path | 0.12.4 | MIT OR Apache-2.0 |
+| typed-path | 0.13.0 | MIT OR Apache-2.0 |
 | typeid | 1.0.3 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | uds_windows | 1.2.1 | MIT |
@@ -635,6 +677,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | untrusted | 0.9.0 | ISC |
 | url | 2.5.8 | MIT OR Apache-2.0 |
+| urlencoding | 2.1.3 | MIT |
 | usvg | 0.45.1 | Apache-2.0 OR MIT |
 | utf-8 | 0.7.6 | MIT OR Apache-2.0 |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT |
@@ -679,32 +722,7 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | winapi-x86_64-pc-windows-gnu | 0.4.0 | MIT/Apache-2.0 |
 | windows | 0.57.0 | MIT OR Apache-2.0 |
 | windows | 0.61.3 | MIT OR Apache-2.0 |
-| windows-capture | 1.5.0 | MIT |
-| windows-collections | 0.2.0 | MIT OR Apache-2.0 |
-| windows-core | 0.57.0 | MIT OR Apache-2.0 |
-| windows-core | 0.61.2 | MIT OR Apache-2.0 |
-| windows-future | 0.2.1 | MIT OR Apache-2.0 |
-| windows-implement | 0.57.0 | MIT OR Apache-2.0 |
-| windows-implement | 0.60.2 | MIT OR Apache-2.0 |
-| windows-interface | 0.57.0 | MIT OR Apache-2.0 |
-| windows-interface | 0.59.3 | MIT OR Apache-2.0 |
-| windows-link | 0.1.3 | MIT OR Apache-2.0 |
-| windows-link | 0.2.1 | MIT OR Apache-2.0 |
-| windows-numerics | 0.2.0 | MIT OR Apache-2.0 |
-| windows-registry | 0.4.0 | MIT OR Apache-2.0 |
-| windows-registry | 0.5.3 | MIT OR Apache-2.0 |
-| windows-result | 0.1.2 | MIT OR Apache-2.0 |
-| windows-result | 0.3.4 | MIT OR Apache-2.0 |
-| windows-strings | 0.3.1 | MIT OR Apache-2.0 |
-| windows-strings | 0.4.2 | MIT OR Apache-2.0 |
-| windows-sys | 0.48.0 | MIT OR Apache-2.0 |
-| windows-sys | 0.52.0 | MIT OR Apache-2.0 |
-| windows-sys | 0.59.0 | MIT OR Apache-2.0 |
-| windows-sys | 0.61.2 | MIT OR Apache-2.0 |
-| windows-targets | 0.48.5 | MIT OR Apache-2.0 |
-| windows-targets | 0.52.6 | MIT OR Apache-2.0 |
-| windows-targets | 0.53.5 | MIT OR Apache-2.0 |
-| windows-threading | 0.1.0 | MIT OR Apache-2.0 |
+| windows | 0.62.2 | MIT OR Apache-2.0 |
 | windows_aarch64_gnullvm | 0.48.5 | MIT OR Apache-2.0 |
 | windows_aarch64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
 | windows_aarch64_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
@@ -728,6 +746,39 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | windows_x86_64_msvc | 0.48.5 | MIT OR Apache-2.0 |
 | windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
 | windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 |
+| windows-capture | 1.5.0 | MIT |
+| windows-collections | 0.2.0 | MIT OR Apache-2.0 |
+| windows-collections | 0.3.2 | MIT OR Apache-2.0 |
+| windows-core | 0.57.0 | MIT OR Apache-2.0 |
+| windows-core | 0.61.2 | MIT OR Apache-2.0 |
+| windows-core | 0.62.2 | MIT OR Apache-2.0 |
+| windows-future | 0.2.1 | MIT OR Apache-2.0 |
+| windows-future | 0.3.2 | MIT OR Apache-2.0 |
+| windows-implement | 0.57.0 | MIT OR Apache-2.0 |
+| windows-implement | 0.60.2 | MIT OR Apache-2.0 |
+| windows-interface | 0.57.0 | MIT OR Apache-2.0 |
+| windows-interface | 0.59.3 | MIT OR Apache-2.0 |
+| windows-link | 0.1.3 | MIT OR Apache-2.0 |
+| windows-link | 0.2.1 | MIT OR Apache-2.0 |
+| windows-numerics | 0.2.0 | MIT OR Apache-2.0 |
+| windows-numerics | 0.3.1 | MIT OR Apache-2.0 |
+| windows-registry | 0.4.0 | MIT OR Apache-2.0 |
+| windows-registry | 0.5.3 | MIT OR Apache-2.0 |
+| windows-result | 0.1.2 | MIT OR Apache-2.0 |
+| windows-result | 0.3.4 | MIT OR Apache-2.0 |
+| windows-result | 0.4.1 | MIT OR Apache-2.0 |
+| windows-strings | 0.3.1 | MIT OR Apache-2.0 |
+| windows-strings | 0.4.2 | MIT OR Apache-2.0 |
+| windows-strings | 0.5.1 | MIT OR Apache-2.0 |
+| windows-sys | 0.48.0 | MIT OR Apache-2.0 |
+| windows-sys | 0.52.0 | MIT OR Apache-2.0 |
+| windows-sys | 0.59.0 | MIT OR Apache-2.0 |
+| windows-sys | 0.61.2 | MIT OR Apache-2.0 |
+| windows-targets | 0.48.5 | MIT OR Apache-2.0 |
+| windows-targets | 0.52.6 | MIT OR Apache-2.0 |
+| windows-targets | 0.53.5 | MIT OR Apache-2.0 |
+| windows-threading | 0.1.0 | MIT OR Apache-2.0 |
+| windows-threading | 0.2.1 | MIT OR Apache-2.0 |
 | winnow | 0.7.15 | MIT |
 | winnow | 1.0.4 | MIT |
 | winreg | 0.56.0 | MIT |
@@ -772,8 +823,11 @@ MarkdownX 本体以 MIT 协议发布（见 [LICENSE](LICENSE)）。下面是随�
 | zerotrie | 0.2.5 | Unicode-3.0 |
 | zerovec | 0.11.8 | Unicode-3.0 |
 | zerovec-derive | 0.11.6 | Unicode-3.0 |
+| zip | 8.6.0 | MIT |
+| zip | 9.5.1 | MIT |
 | zlib-rs | 0.6.8 | Zlib |
 | zmij | 1.0.23 | MIT |
+| zopfli | 0.8.4 | Apache-2.0 |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib |
 | zune-inflate | 0.2.54 | MIT OR Apache-2.0 OR Zlib |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib |

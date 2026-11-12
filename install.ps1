@@ -368,6 +368,14 @@ try {
             $path = Join-Path $tempRoot $name
             if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force }
         }
-        if (Test-Path -LiteralPath $tempRoot -PathType Container) { Remove-Item -LiteralPath $tempRoot -Force }
+        # Antivirus scanners can briefly hold the downloaded package; retry, then
+        # leave the temporary folder behind instead of failing a completed install.
+        if (Test-Path -LiteralPath $tempRoot -PathType Container) {
+            foreach ($attempt in 1..3) {
+                try { Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction Stop } catch { }
+                if (-not (Test-Path -LiteralPath $tempRoot)) { break }
+                Start-Sleep -Milliseconds 150
+            }
+        }
     }
 }

@@ -19,7 +19,7 @@ def main():
         temp = Path(tmp).resolve()
         (temp / '.markdownx-workspace-test').touch()
         documents = temp / 'documents'
-        workspace = documents / 'MarkDown-Demo'
+        workspace = documents / 'MarkdownX-Demo'
         workspace.mkdir(parents=True)
         library = temp / 'library'
         shutil.copytree(ROOT / 'tools/harness/lib_clean', library)

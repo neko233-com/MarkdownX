@@ -57,10 +57,13 @@ pub struct Preferences {
     /// An upgraded, untouched English starter has already been offered a sample.
     #[serde(default)]
     pub starter_offered: bool,
+    /// Plugin ids the user turned off; newly installed plugins start enabled.
+    #[serde(default)]
+    pub disabled_plugins: Vec<String>,
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), workspace_dir: None, workspaces: None, last_workspace_file: None, starter_offered: false } }
+    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), workspace_dir: None, workspaces: None, last_workspace_file: None, starter_offered: false, disabled_plugins: vec![] } }
 }
 
 impl Preferences {
@@ -251,7 +254,7 @@ pub(crate) fn watch_themes(cx: &mut Context<Workspace>) {
 // ---- the view
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Page { #[default] General, Appearance, Shortcuts, Library, About }
+pub enum Page { #[default] General, Appearance, Shortcuts, Library, Extensions, About }
 
 impl Page {
     fn title(self) -> &'static str {
@@ -260,6 +263,7 @@ impl Page {
             Page::Appearance => tr("外观", "Appearance"),
             Page::Shortcuts => tr("快捷键", "Shortcuts"),
             Page::Library => tr("文档库", "Documents"),
+            Page::Extensions => tr("扩展", "Extensions"),
             Page::About => tr("关于", "About"),
         }
     }
@@ -269,14 +273,15 @@ impl Page {
             Page::Appearance => "palette",
             Page::Shortcuts => "keyboard",
             Page::Library => "storage",
+            Page::Extensions => "layout-grid",
             Page::About => "info",
         }
     }
 }
 
-/// The sidebar list, one evenly spaced run (six rows need no unlabelled
-/// groups); `None` is 回收站 (its own view, shown with this sidebar).
-const NAV: [Option<Page>; 6] = [Some(Page::General), Some(Page::Appearance), Some(Page::Shortcuts), Some(Page::Library), None, Some(Page::About)];
+/// The sidebar list, one evenly spaced run; `None` is 回收站 (its own view,
+/// shown with this sidebar).
+const NAV: [Option<Page>; 7] = [Some(Page::General), Some(Page::Appearance), Some(Page::Shortcuts), Some(Page::Library), Some(Page::Extensions), None, Some(Page::About)];
 
 // ---- controls (switch on the accent, 30pt buttons, grouped rows)
 
@@ -666,6 +671,7 @@ impl Workspace {
             Page::Appearance => self.appearance_page(cx),
             Page::Shortcuts => self.shortcut_settings(cx),
             Page::Library => self.library_page(cx),
+            Page::Extensions => self.extensions_page(cx),
             Page::About => self.about_page(cx),
         };
         div().flex_1().min_w_0().h_full().flex().flex_col().bg(Theme::bg_body()).text_color(Theme::text()).font_family(theme::UI_FONT)
@@ -697,6 +703,89 @@ impl Workspace {
                 row(tr("自动检查更新", "Check for updates automatically"), desc(tr("启动后和每 12 小时检查一次 GitHub 发布页；发现新版本会提示下载地址，不自动安装。", "Checks the GitHub releases page after launch and every 12 hours; a new version is announced with its download page, never installed silently.")),
                     switch("pref-update", p.auto_update).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.auto_update = !p.auto_update, cx)))).into_any_element(),
             ]))
+            .into_any_element()
+    }
+
+    fn extensions_page(&self, cx: &mut Context<Self>) -> AnyElement {
+        fn builtin_name(editor: fdl_core::extensions::BuiltinEditor) -> &'static str {
+            use fdl_core::extensions::BuiltinEditor;
+            match editor {
+                BuiltinEditor::Markdown => "Markdown",
+                BuiltinEditor::DocxXml => "DocxXML",
+                BuiltinEditor::Book => "MarkdownX Book",
+                BuiltinEditor::Spreadsheet => tr("电子表格（Excel）", "Spreadsheet (Excel)"),
+                BuiltinEditor::Image => tr("图片与 GIF", "Images & GIF"),
+                BuiltinEditor::Audio => tr("音频", "Audio"),
+                BuiltinEditor::Video => tr("视频", "Video"),
+                BuiltinEditor::Model => tr("3D 模型", "3D models"),
+            }
+        }
+        let catalog = crate::extensions::catalog();
+        let folder = crate::extensions::directory().display().to_string();
+        let builtins = fdl_core::extensions::BUILTINS.iter().map(|(_, editor, suffixes)| {
+            row(builtin_name(*editor), Some(suffixes.join("  ").into()),
+                div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_disabled()).child(tr("内置", "Built in"))).into_any_element()
+        }).collect::<Vec<_>>();
+        let no_plugins = catalog.plugins.is_empty();
+        let mut installed = vec![
+            row(tr("安装扩展…", "Install extension…"),
+                Some(tr("选择包含 plugin.json 的文件夹。已安装的扩展不会被覆盖。", "Choose a folder with plugin.json. An installed extension is never replaced.").into()),
+                button("install-plugin", tr("选择文件夹…", "Choose folder…")).on_click(cx.listener(|_, _, window, cx| {
+                    let prompt = cx.prompt_for_paths(PathPromptOptions {
+                        files: false, directories: true, multiple: false,
+                        prompt: Some(tr("选择扩展文件夹", "Choose extension folder").into()),
+                        extensions: None,
+                    });
+                    cx.spawn_in(window, async move |this, cx| {
+                        let picked = prompt.await.ok().and_then(Result::ok).flatten().and_then(|paths| paths.into_iter().next());
+                        let Some(source) = picked else { return };
+                        let task = cx.background_executor().spawn(async move { crate::extensions::install(&source) });
+                        let result = task.await;
+                        let _ = this.update_in(cx, |w, _, cx| match result {
+                            Ok(id) => w.show_toast_kind(crate::ui::ToastKind::Info, &crate::localized_format!("已安装扩展 {}", "Installed extension {}", id), cx),
+                            Err(error) => w.show_toast_kind(crate::ui::ToastKind::Error,
+                                &crate::localized_format!("无法安装扩展：{}", "Could not install extension: {}", crate::settings::diagnostic(&error.to_string())), cx),
+                        });
+                    }).detach();
+                }))).into_any_element(),
+        ];
+        for plugin in catalog.plugins {
+            let id = plugin.manifest.id.clone();
+            let title = plugin.manifest.name.clone();
+            let suffixes = plugin.manifest.suffixes.join("  ");
+            let detail = match &plugin.error {
+                Some(error) => format!("{id} · {suffixes} · {error}"),
+                None => format!("{id} · {suffixes}"),
+            };
+            let control = if plugin.error.is_some() {
+                div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_disabled()).child(tr("不可用", "Unavailable")).into_any_element()
+            } else {
+                let toggled = id.clone();
+                switch(SharedString::from(format!("plugin-toggle-{id}")), plugin.enabled)
+                    .on_click(cx.listener(move |w, _, _, cx| {
+                        let toggled = toggled.clone();
+                        w.set_pref(move |p| {
+                            if p.disabled_plugins.iter().any(|item| item == &toggled) { p.disabled_plugins.retain(|item| item != &toggled); }
+                            else { p.disabled_plugins.push(toggled.clone()); }
+                        }, cx)
+                    })).into_any_element()
+            };
+            installed.push(row(title, Some(detail.into()), control).into_any_element());
+        }
+        if no_plugins {
+            installed.push(row(tr("尚未安装扩展", "No extensions installed"), Some(tr("也可以把包含 plugin.json 的文件夹直接放进下面的扩展目录。", "You can also put a folder with plugin.json in the extensions folder below.").into()),
+                div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_disabled()).child(folder.clone())).into_any_element());
+        }
+        let mut errors = catalog.errors.into_iter().map(|error| {
+            row(tr("清单无法读取", "Unreadable manifest"), Some(error.into()),
+                div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_disabled()).child(tr("已跳过", "Skipped"))).into_any_element()
+        }).collect::<Vec<_>>();
+        let mut page = div().w_full().flex().flex_col().gap(px(28.))
+            .child(group(Some(tr("内置格式", "Built-in formats")), builtins))
+            .child(group(Some(tr("已安装扩展", "Installed extensions")), installed));
+        if !errors.is_empty() { page = page.child(group(Some(tr("无法读取的扩展", "Unreadable extensions")), std::mem::take(&mut errors))); }
+        page.child(caption(tr("扩展目录", "Extensions folder")))
+            .child(div().px(px(4.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_caption()).child(folder))
             .into_any_element()
     }
 

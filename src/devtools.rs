@@ -275,6 +275,17 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 cx.update(|cx| crate::feishu_ui::check_feishu_import(rest.trim(), cx)).unwrap();
                 continue;
             }
+            if cmd == "check-media-preview" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, _| ws.check_media_preview(rest.trim())).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "check-spreadsheet-preview" {
+                cx.update(|cx| crate::spreadsheet_ui::check_preview(rest.trim(), cx)).unwrap();
+                continue;
+            }
             if cmd == "check-native-experiment" {
                 cx.update(|cx| crate::feishu_ui::check_native_experiment(rest.trim(), cx)).unwrap();
                 continue;

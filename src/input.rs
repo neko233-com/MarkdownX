@@ -9,6 +9,19 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use unicode_segmentation::UnicodeSegmentation;
 
+pub(crate) const SPREADSHEET_CLIPBOARD_PREFIX: &str = "markdownx-spreadsheet-clipboard-v1:";
+
+fn spreadsheet_clipboard_metadata(item: &ClipboardItem) -> Option<String> {
+    item.entries().iter().find_map(|entry| match entry {
+        ClipboardEntry::String(value) => value.metadata_json::<String>().filter(|s| s.starts_with(SPREADSHEET_CLIPBOARD_PREFIX)),
+        _ => None,
+    })
+}
+
+fn route_table_paste(enabled: bool, text: &str, baseline: Option<&str>, selection_empty: bool, incoming: &str) -> bool {
+    enabled && (incoming.contains(['\t', '\n', '\r']) || (selection_empty && baseline == Some(text)))
+}
+
 actions!(
     field,
     [Backspace, Delete, Left, Right, SelectLeft, SelectRight, Home, End, SelectAll, Copy, Cut, Paste, Submit, ShiftSubmit, Cancel, Up, Down, Swallow, Tab, ShiftTab]
@@ -48,6 +61,10 @@ pub fn bind_keys(cx: &mut App) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextFieldEvent {
     Changed,
+    /// A multi-cell clipboard paste, handled by an embedding spreadsheet.
+    PasteTable,
+    /// Copy the active spreadsheet cell or range when no text is selected.
+    CopyTable,
     Submit,
     /// Shift+Enter (查找: previous match).
     ShiftSubmit,
@@ -91,6 +108,12 @@ pub struct TextField {
     pub digits: bool,
     /// Tab / Shift+Tab emit events instead of reaching the parent.
     pub tab_events: bool,
+    /// Route tabular clipboard content to the embedding spreadsheet.
+    pub table_paste: bool,
+    pub table_copy: bool,
+    table_committed: Option<String>,
+    pub pending_table_paste: Option<String>,
+    pub pending_table_metadata: Option<String>,
     /// Draw no caret even when focused (a field that takes keys before it
     /// looks focused, like the emoji search).
     pub hide_caret: bool,
@@ -130,6 +153,11 @@ impl TextField {
             max_len: None,
             digits: false,
             tab_events: false,
+            table_paste: false,
+            table_copy: false,
+            table_committed: None,
+            pending_table_paste: None,
+            pending_table_metadata: None,
             hide_caret: false,
             selecting: false,
             pointer_hidden: false,
@@ -147,6 +175,13 @@ impl TextField {
         self.marked = None;
         cx.notify();
     }
+
+    pub fn set_table_text(&mut self, s: &str, cx: &mut Context<Self>) {
+        self.set_text(s, cx);
+        self.mark_table_committed();
+    }
+
+    pub fn mark_table_committed(&mut self) { self.table_committed = Some(self.text.clone()); }
 
     pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
         self.sel = 0..self.text.len();
@@ -269,7 +304,7 @@ impl TextField {
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if !self.sel.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(self.text[self.sel.clone()].to_string()));
-        }
+        } else if self.table_copy { cx.emit(TextFieldEvent::CopyTable); }
     }
 
     fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
@@ -280,7 +315,20 @@ impl TextField {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(t) = cx.read_from_clipboard().and_then(|i| i.text()) {
+        if let Some(item) = cx.read_from_clipboard() && let Some(t) = item.text() {
+            let metadata = if self.table_paste { spreadsheet_clipboard_metadata(&item) } else { None };
+            if let Some(metadata) = metadata {
+                self.pending_table_paste = Some(t);
+                self.pending_table_metadata = Some(metadata);
+                cx.emit(TextFieldEvent::PasteTable);
+                return;
+            }
+            if route_table_paste(self.table_paste, &self.text, self.table_committed.as_deref(), self.sel.is_empty(), &t) {
+                self.pending_table_paste = Some(t);
+                self.pending_table_metadata = None;
+                cx.emit(TextFieldEvent::PasteTable);
+                return;
+            }
             self.replace(self.sel.clone(), &t, cx);
         }
     }
@@ -410,6 +458,7 @@ impl TextField {
         self.from16(r.start)..self.from16(r.end)
     }
 }
+
 
 impl EntityInputHandler for TextField {
     fn text_for_range(
@@ -575,5 +624,30 @@ impl Render for TextField {
                 .absolute()
                 .size_full(),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{route_table_paste, spreadsheet_clipboard_metadata, SPREADSHEET_CLIPBOARD_PREFIX};
+    use gpui::ClipboardItem;
+
+    #[test]
+    fn recognizes_only_own_spreadsheet_clipboard_metadata() {
+        let metadata = format!("{}{{\"source\":\"test\"}}", SPREADSHEET_CLIPBOARD_PREFIX);
+        let item = ClipboardItem::new_string_with_json_metadata("=A1".into(), metadata.clone());
+        assert_eq!(spreadsheet_clipboard_metadata(&item), Some(metadata));
+        let other = ClipboardItem::new_string_with_json_metadata("text".into(), "another format".to_string());
+        assert_eq!(spreadsheet_clipboard_metadata(&other), None);
+        assert_eq!(spreadsheet_clipboard_metadata(&ClipboardItem::new_string("text".into())), None);
+    }
+
+    #[test]
+    fn single_cell_paste_replaces_only_when_not_editing_text() {
+        assert!(route_table_paste(true, "0.125", Some("0.125"), true, "50%"));
+        assert!(!route_table_paste(true, "edited", Some("0.125"), true, "50%"));
+        assert!(!route_table_paste(true, "0.125", Some("0.125"), false, "50%"));
+        assert!(route_table_paste(true, "edited", Some("0.125"), true, "a\tb"));
+        assert!(!route_table_paste(false, "x", Some("x"), true, "a\tb"));
     }
 }

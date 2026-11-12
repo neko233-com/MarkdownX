@@ -8,6 +8,8 @@ mod book_source;
 mod book_folder;
 mod feishu;
 mod feishu_ui;
+mod spreadsheet_ui;
+mod spreadsheet_save;
 mod shared_store;
 mod quick_note;
 mod assets;
@@ -27,6 +29,7 @@ mod devtools {
 mod docinfo;
 mod docmenu;
 mod editor;
+mod extensions;
 mod highlight;
 mod home;
 mod html;
@@ -34,6 +37,8 @@ mod input;
 mod logging;
 mod modes;
 mod markdown_source;
+mod media_ui;
+mod media_thumb;
 #[cfg(target_os = "macos")]
 mod native_header;
 #[cfg(not(target_os = "macos"))]
@@ -86,7 +91,7 @@ fn set_app_icon() {
 fn startup_target_from(args: impl IntoIterator<Item = std::ffi::OsString>) -> Option<std::path::PathBuf> {
     args.into_iter().map(std::path::PathBuf::from).find(|p| {
         !p.to_string_lossy().starts_with('-')
-            && (p.is_dir() || (workspace_fs::DocKind::of(p).is_some() && p.is_file()))
+            && (p.is_dir() || ((workspace_fs::DocKind::of(p).is_some() || spreadsheet_ui::is_spreadsheet(p) || media_ui::is_media(p)) && p.is_file()))
     })
 }
 
@@ -225,9 +230,12 @@ mod startup_tests {
         std::fs::write(&book, "{}").unwrap();
         let note = dir.join("note.MD");
         std::fs::write(&note, "note").unwrap();
+        let workbook = dir.join("sample.XLSX");
+        std::fs::write(&workbook, "fixture").unwrap();
         assert_eq!(startup_target_from([dir.as_os_str().to_os_string()]), Some(dir.clone()));
         assert_eq!(startup_target_from([book.as_os_str().to_os_string()]), Some(book));
         assert_eq!(startup_target_from([note.as_os_str().to_os_string()]), Some(note));
+        assert_eq!(startup_target_from([workbook.as_os_str().to_os_string()]), Some(workbook));
         assert_eq!(startup_target_from([dir.join("missing").into_os_string()]), None);
         std::fs::remove_dir_all(dir).unwrap();
     }

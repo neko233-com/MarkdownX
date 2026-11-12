@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_WORKSPACE_DIR: &str = "MarkDown-Demo";
+pub const DEFAULT_WORKSPACE_DIR: &str = "MarkdownX-Demo";
 
 fn initially_expanded() -> bool { true }
 
@@ -75,10 +75,10 @@ pub enum DocKind {
 
 impl DocKind {
     pub fn of(path: &Path) -> Option<Self> {
-        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-            "md" | "markdown" | "mark" | "txt" => Some(DocKind::Markdown),
-            "docxxml" => Some(DocKind::DocxXml),
-            "mdxb" => Some(DocKind::Book),
+        match fdl_core::extensions::builtin_editor(path)? {
+            fdl_core::extensions::BuiltinEditor::Markdown => Some(DocKind::Markdown),
+            fdl_core::extensions::BuiltinEditor::DocxXml => Some(DocKind::DocxXml),
+            fdl_core::extensions::BuiltinEditor::Book => Some(DocKind::Book),
             _ => None,
         }
     }
@@ -211,6 +211,25 @@ pub fn write_if_unchanged(path: &Path, expected: &[u8], bytes: &[u8]) -> Result<
     write_atomic_checked(path, bytes, || {
         if fs::read(path).map_err(SaveFileError::Io)? == expected { Ok(()) } else { Err(SaveFileError::Changed) }
     })
+}
+
+/// Spreadsheet saves refuse links and read-only sources in addition to checking
+/// the byte snapshot. Both checks are repeated immediately before replacement.
+pub fn write_regular_if_unchanged(path: &Path, expected: &[u8], bytes: &[u8]) -> Result<(), SaveFileError> {
+    fn check(path: &Path, expected: &[u8]) -> Result<(), SaveFileError> {
+        let meta = fs::symlink_metadata(path).map_err(SaveFileError::Io)?;
+        #[cfg(windows)]
+        let reparse = { use std::os::windows::fs::MetadataExt; meta.file_attributes() & 0x400 != 0 };
+        #[cfg(not(windows))]
+        let reparse = false;
+        if !meta.is_file() || meta.file_type().is_symlink() || reparse || meta.permissions().readonly() {
+            return Err(SaveFileError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "source is not a writable regular file")));
+        }
+        if fs::read(path).map_err(SaveFileError::Io)? != expected { return Err(SaveFileError::Changed); }
+        Ok(())
+    }
+    check(path, expected)?;
+    write_atomic_checked(path, bytes, || check(path, expected))
 }
 
 /// Copy assets before publishing the Markdown, without replacing an existing file.

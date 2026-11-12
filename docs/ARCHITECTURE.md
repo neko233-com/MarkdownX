@@ -9,6 +9,16 @@ MarkdownX 的桌面端是一个单进程 GPUI 应用（Rust，约 4 万行）；
 
 依赖只能从应用指向 core。core 里的模块只引用 core 里的模块。
 
+## 文件扩展机制
+
+`crates/core/src/extensions.rs` 集中登记内置格式和外部扩展的版本化清单。匹配按文件名后缀、不区分 ASCII 大小写，复合后缀优先；重复后缀或保留的内置标识会被拒绝，注册失败不会留下部分映射。清单中的程序路径必须相对扩展目录，登记清单本身不会启动程序。`discover` 读取扩展目录下每个子目录的 `plugin.json`，坏清单单独返回错误，不影响其他扩展。
+
+`crates/core/src/extension_rpc.rs` 提供 LSP 风格的 `Content-Length` JSON-RPC 消息分帧，并限制消息与头部大小。`extension_host.rs` 拥有外部进程的生命周期：`initialize` 校验协议版本和扩展声明的后缀必须与清单一致，`textDocument/open` 返回 Markdown，`textDocument/save` 交回 Markdown，超时、响应错乱或传输中断都会停止该进程。`crates/core/src/bin/mdx_plugin_fixture.rs` 是可运行的参考扩展，集成测试用它覆盖握手、打开、保存和失败路径。
+
+内置媒体预览也走同一张后缀表：`builtin.image`、`builtin.audio`、`builtin.video`、`builtin.model`。`media_ui.rs` 是预览弹层，`media_thumb.rs` 在 Windows 上取资源管理器同款缩略图；core 的 `media/audio.rs` 用 symphonia 解码波形，`media/video.rs` 只读 ISO 容器头，`media/model.rs` 解析 OBJ/STL/glTF/GLB 并软件光栅化，全部有独立测试。插件与内置媒体后缀冲突时整体被拒绝。
+
+应用层 `src/extensions.rs` 从 `MARKDOWNX_PLUGIN_DIR` 或应用数据目录的 `markdownx/plugins` 读取扩展；设置 › 扩展的「安装扩展…」把选中的文件夹原子校验后复制进来，已存在的 id 不会被覆盖，也可以逐个开关，关闭的扩展只保留清单、不占用后缀。工作区里匹配扩展后缀的文件在打开时启动扩展，返回的 Markdown 以只读文档显示；预览不写回原格式。外部扩展目前提供只读预览和协议级保存，尚未接入 MarkdownX 自己的可编辑扩展界面。
+
 ```
 main.rs ─ 窗口
   └─ app.rs  Workspace（窗口根视图）
@@ -169,7 +179,7 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 文件夹工作区与批注
 
-`workspace_fs.rs` 扫描文件系统并输出 `WorkspaceDir` / `FileNode` / `Hit`，也负责带外部修改检查的原子文件写入。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示当前编辑文件所属目录；`workspace_roots` 保存同时显示的多个目录及各自的加载、展开和错误状态。默认目录是系统文档目录下的 `MarkDown-Demo`，用户添加的目录保存在文档库的 `preferences.json` 中；启动参数只为本次窗口添加临时目录。目录选择保持用户所选路径，不因位于 Git 仓库内而扩大目录树；直接打开文件仍可找到其所属的 Git 根。选过的目录不可用时保留原选择，不创建它或静默切换。每个目录在后台独立扫描，不可用的目录保留错误提示；刷新和窗口重新获得焦点时重扫目录、双链与搜索结果，保留展开状态和打开的编辑器。工作区移除只修改列表；文件操作检查工作区边界和受保护目录，创建与重命名不覆盖已有文件，删除经确认后交给系统回收站。`flush` 在文件模式下先比较最近读取或保存的文件内容，再将文档重新导出为 Markdown，保留 BOM 和主要换行风格并写回；检测到外部修改、标题或正文往返丢失、资源缺失或同名资源内容不同时保留未保存内容；资源先检查并复制，不覆盖已有不同内容的文件；检查不能证明所有 Markdown 语义都能保留，比较和替换之间也不提供跨进程锁。成功写回后，对该文件（及复制出的资源）提交一次 `edit: <relative>`；提交失败只记录日志，不回滚已完成的保存。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
+`workspace_fs.rs` 扫描文件系统并输出 `WorkspaceDir` / `FileNode` / `Hit`，也负责带外部修改检查的原子文件写入。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示当前编辑文件所属目录；`workspace_roots` 保存同时显示的多个目录及各自的加载、展开和错误状态。默认目录是系统文档目录下的 `MarkdownX-Demo`，用户添加的目录保存在文档库的 `preferences.json` 中；启动参数只为本次窗口添加临时目录。目录选择保持用户所选路径，不因位于 Git 仓库内而扩大目录树；直接打开文件仍可找到其所属的 Git 根。选过的目录不可用时保留原选择，不创建它或静默切换。每个目录在后台独立扫描，不可用的目录保留错误提示；刷新和窗口重新获得焦点时重扫目录、双链与搜索结果，保留展开状态和打开的编辑器。工作区移除只修改列表；文件操作检查工作区边界和受保护目录，创建与重命名不覆盖已有文件，删除经确认后交给系统回收站。`flush` 在文件模式下先比较最近读取或保存的文件内容，再将文档重新导出为 Markdown，保留 BOM 和主要换行风格并写回；检测到外部修改、标题或正文往返丢失、资源缺失或同名资源内容不同时保留未保存内容；资源先检查并复制，不覆盖已有不同内容的文件；检查不能证明所有 Markdown 语义都能保留，比较和替换之间也不提供跨进程锁。成功写回后，对该文件（及复制出的资源）提交一次 `edit: <relative>`；提交失败只记录日志，不回滚已完成的保存。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
 
 `Ctrl+K` / `⌘K` 打开全局搜索：合并文档库与所有工作目录的路径和正文结果。各目录的正文搜索在后台独立执行、逐步返回，按查询代次丢弃过期结果，并在新结果到达时保持键盘选中的目标；`Ctrl+J` / `⌘J` 保留原有搜索入口。
 

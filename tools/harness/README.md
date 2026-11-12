@@ -30,6 +30,8 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 - `python3 tools/harness/workspace_startup.py` 用隔离目录验证多目录并存、重启恢复、跨目录搜索、保存和文件管理，以及不可用目录的保护；不会读取真实文档目录。
 - `python3 tools/harness/onboarding.py` 在隔离目录验证中英文首次启动、示例文件与目录树、重启和切换语言、已有文件保护、旧版未改/已改指南及启动参数。
 - `python3 tools/harness/feishu_interactive.py` 使用模拟飞书 CLI、临时工作目录和屏幕外窗口验证在线导入及单位圆、抛体画布控件；不会连接真实飞书账号。
+- `python3 tools/harness/spreadsheet_number_format.py` 使用隔离工作区和屏幕外窗口验证数字格式应用、撤销、重做、隐藏公式、单元格样式与 openpyxl 兼容性；需先构建 `devtools` 版本并安装 openpyxl。
+- `python3 tools/harness/spreadsheet_conditional.py` 在隔离桌面窗口中验证条件格式、公式重算、撤销、大区域保护和原文件兼容性；需先构建 `devtools` 版本并安装 openpyxl。
 - `python3 tools/harness/book_languages.py` 在隔离库中验证双语书导入、重启、`.mdxb` 导出和 Markdown 文件夹重打包。
 - Windows 上运行 `python tools/harness/window_controls.py`，在隔离窗口和临时文档库中验证标题栏命中、最小化、最大化/还原、全屏控件、关闭时保存和外部修改冲突保护。
 

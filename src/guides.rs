@@ -100,6 +100,10 @@ pub fn create_workspace_demo(root: &Path, english: bool) -> anyhow::Result<Optio
         let _ = fs::remove_file(&path);
         return Err(error.into());
     }
+    // The same empty default folder also gets a workbook, so the spreadsheet
+    // editor can be tried without finding a file first.
+    let workbook = if english { "Sales data.xlsx" } else { "销售数据.xlsx" };
+    fs::write(root.join(workbook), include_bytes!("../MarkdownX-Demo/销售数据.xlsx"))?;
     Ok(Some(path))
 }
 
@@ -174,6 +178,9 @@ mod tests {
             let demo = super::create_workspace_demo(&root, english).unwrap().unwrap();
             let text = std::fs::read_to_string(&demo).unwrap();
             assert!(text.contains(if english { "Welcome to MarkdownX" } else { "欢迎使用 MarkdownX" }));
+            let workbook = root.join(if english { "Sales data.xlsx" } else { "销售数据.xlsx" });
+            let book = fdl_core::spreadsheet::read(&workbook).unwrap();
+            assert!(book.sheets.iter().any(|sheet| sheet.name == "销售数据"));
             std::fs::write(&demo, "My own document").unwrap();
             assert!(super::create_workspace_demo(&root, !english).unwrap().is_none());
             assert_eq!(std::fs::read_to_string(&demo).unwrap(), "My own document");

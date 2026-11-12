@@ -52,7 +52,7 @@ def main():
         for language, filename, title in (('zh', '开始使用.md', '欢迎使用 MarkdownX'), ('en', 'Getting started.md', 'Welcome to MarkdownX')):
             root = setup(language)
             run(root, language, language, change_language='en' if language == 'zh' else None)
-            path = root / 'documents' / 'MarkDown-Demo' / filename
+            path = root / 'documents' / 'MarkdownX-Demo' / filename
             text = path.read_text(encoding='utf-8')
             assert title in text and ('Ctrl+K' in text if sys.platform != 'darwin' else '⌘ K' in text)
             guide = (root / 'library/docs' / WELCOME).read_text(encoding='utf-8')
@@ -68,12 +68,12 @@ def main():
 
         root = setup('missing')
         run(root, 'zh', 'zh')
-        (root / 'documents/MarkDown-Demo/开始使用.md').unlink()
+        (root / 'documents/MarkdownX-Demo/开始使用.md').unlink()
         run(root, 'missing', 'zh')
         assert not json.loads((root / 'library/preferences.json').read_text(encoding='utf-8')).get('last_workspace_file')
 
         root = setup('existing')
-        folder = root / 'documents/MarkDown-Demo'
+        folder = root / 'documents/MarkdownX-Demo'
         folder.mkdir()
         existing = folder / 'My notes.md'
         existing.write_text('# Existing\n\nDo not change.\n', encoding='utf-8')
@@ -92,13 +92,13 @@ def main():
             run(root, 'edited-legacy' if edited else 'zh', 'zh')
             assert old.read_bytes() == legacy
             if edited:
-                assert not list((root / 'documents/MarkDown-Demo').glob('*.md'))
+                assert not list((root / 'documents/MarkdownX-Demo').glob('*.md'))
 
         root = setup('target')
         target = root / 'chosen.md'
         target.write_text('# A chosen file\n', encoding='utf-8')
         run(root, 'target', 'zh', target, expected_file=target)
-        assert not list((root / 'documents/MarkDown-Demo').glob('*.md'))
+        assert not list((root / 'documents/MarkdownX-Demo').glob('*.md'))
         assert target.read_text(encoding='utf-8') == '# A chosen file\n'
         print('Onboarding: PASS (both languages, tree, restart, language change, missing file, library switch, existing files, legacy guides and startup file).')
 

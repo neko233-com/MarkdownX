@@ -22,7 +22,7 @@ pub(crate) struct WorkspaceRoot {
 pub(crate) enum WorkspaceMenuTarget {
     Root(u64),
     Node { root: u64, path: PathBuf, dir: bool },
-    New { root: u64, parent: PathBuf, dir: bool },
+    New { root: u64, parent: PathBuf, dir: bool, spreadsheet: bool },
 }
 
 #[derive(Clone)]
@@ -50,7 +50,7 @@ fn file_diagnostic(error: &anyhow::Error) -> String {
             "cannot change a workspace root" => Some("不能操作工作区根目录"),
             "path overlaps a protected directory or another workspace" | "parent is protected" => Some("此位置包含文档库或其他工作区，不能操作"),
             "symbolic links and junctions cannot be changed" => Some("不能操作符号链接或目录联接"),
-            "choose a Markdown or text filename" => Some("请输入 Markdown 或文本文件名"),
+            "choose a Markdown, DocxXML, text or XLSX filename" => Some("请输入 Markdown、DocxXML、文本或 XLSX 文件名"),
             "the document type cannot be changed by renaming" => Some("不能通过重命名改变文件类型"),
             "destination annotation sidecar already exists" | "an annotation sidecar already exists for this name" => Some("同名批注文件已存在，未覆盖"),
             "cannot identify the annotation sidecar" => Some("无法确认批注文件的归属，已保留原文件"),
@@ -231,7 +231,17 @@ impl Workspace {
 
     pub(crate) fn open_workspace_file(&mut self, id: u64, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace_path_busy(&path) { self.workspace_busy_notice(cx); return; }
-        if crate::workspace_fs::DocKind::of(&path).is_none() {
+        if crate::spreadsheet_ui::is_spreadsheet(&path) {
+            let Some(root) = self.workspace_roots.iter().find(|r| r.id == id) else { return };
+            if !root.tree.as_ref().is_some_and(|tree| tree.all_files().iter().any(|file| same_path(&file.path, &path)))
+                || crate::workspace_files::validate_external_open(&root.spec.path, &path).is_err() {
+                self.show_toast_kind(ToastKind::Error, crate::settings::tr("无法打开此工作区文件", "Cannot open this workspace file"), cx);
+                return;
+            }
+            self.open_spreadsheet_preview(path, window, cx);
+            return;
+        }
+        if crate::workspace_fs::DocKind::of(&path).is_none() && !crate::extensions::is_external(&path) && !crate::media_ui::is_media(&path) {
             self.show_toast_kind(ToastKind::Info, crate::settings::tr("请从文件菜单选择「使用系统应用打开」", "Use the file menu to open this with your system app"), cx);
             return;
         }
@@ -329,13 +339,21 @@ impl Workspace {
     }
 
     pub(crate) fn prompt_workspace_new(&mut self, id: u64, parent: Option<PathBuf>, dir: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_workspace_new_kind(id, parent, dir, false, window, cx);
+    }
+
+    pub(crate) fn prompt_workspace_spreadsheet(&mut self, id: u64, parent: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_workspace_new_kind(id, parent, false, true, window, cx);
+    }
+
+    fn prompt_workspace_new_kind(&mut self, id: u64, parent: Option<PathBuf>, dir: bool, spreadsheet: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.workspace_roots.iter_mut().find(|r| r.id == id && r.tree.is_some() && r.error.is_none()) else {
             self.show_toast_kind(ToastKind::Error, crate::settings::tr("目录尚未加载或无法读取", "Folder is unavailable or still loading"), cx); return;
         };
         let parent = parent.unwrap_or_else(|| root.spec.path.clone());
         root.spec.expanded = true;
         if parent != root.spec.path { root.expanded_paths.insert(parent.clone()); }
-        self.start_workspace_rename(WorkspaceMenuTarget::New { root: id, parent, dir }, window, cx);
+        self.start_workspace_rename(WorkspaceMenuTarget::New { root: id, parent, dir, spreadsheet }, window, cx);
     }
 
     pub(crate) fn start_workspace_rename(&mut self, target: WorkspaceMenuTarget, window: &mut Window, cx: &mut Context<Self>) {
@@ -362,14 +380,21 @@ impl Workspace {
 
     fn finish_workspace_rename(&mut self, commit: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rename) = self.workspace_rename.take() else { return };
-        let name = rename.field.read(cx).text.trim().to_string();
+        let mut name = rename.field.read(cx).text.trim().to_string();
         if !commit || name.is_empty() { cx.notify(); return; }
         match rename.target {
             WorkspaceMenuTarget::Root(id) => {
                 if let Some(root) = self.workspace_roots.iter_mut().find(|r| r.id == id) { root.spec.label = Some(name); }
                 self.save_workspaces(cx);
             }
-            WorkspaceMenuTarget::New { root, parent, dir } => {
+            WorkspaceMenuTarget::New { root, parent, dir, spreadsheet } => {
+                if spreadsheet {
+                    if std::path::Path::new(&name).extension().is_none() { name.push_str(".xlsx"); }
+                    if !std::path::Path::new(&name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xlsx")) {
+                        self.show_toast_kind(ToastKind::Error, crate::settings::tr("表格文件名必须以 .xlsx 结尾", "Workbook names must end in .xlsx"), cx);
+                        return;
+                    }
+                }
                 let Some(path) = self.workspace_roots.iter().find(|r| r.id == root).map(|r| r.spec.path.clone()) else { return };
                 let protected = self.protected_paths(root);
                 let editing = (self.file.clone(), self.current.clone(), self.file_revision);
@@ -416,7 +441,8 @@ impl Workspace {
         self.folder = Some(tree);
         self.save_workspaces(cx);
         self.refresh_folder_links(cx);
-        self.open_file_path(path, window, cx);
+        if crate::spreadsheet_ui::is_spreadsheet(&path) { self.open_spreadsheet_preview(path, window, cx); }
+        else { self.open_file_path(path, window, cx); }
     }
 
     fn rename_workspace_node_now(&mut self, id: u64, path: PathBuf, name: String, dir: bool, window: &mut Window, cx: &mut Context<Self>) {
