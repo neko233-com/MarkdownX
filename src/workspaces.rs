@@ -80,7 +80,10 @@ impl Workspace {
         let roots = self.workspace_roots.iter().filter(|r| r.persistent).map(|r| r.spec.clone()).collect::<Vec<_>>();
         let active = self.active_workspace.and_then(|id| self.workspace_roots.iter().find(|r| r.id == id && r.persistent)).map(|r| r.spec.path.clone())
             .or_else(|| crate::settings::prefs().workspace_dir.filter(|p| roots.iter().any(|r| same_path(&r.path, p))));
-        self.set_pref(|p| { p.workspaces = Some(roots); p.workspace_dir = active; }, cx);
+        self.set_pref(|p| {
+            if p.last_workspace_file.as_ref().is_some_and(|file| !roots.iter().any(|root| file.starts_with(&root.path))) { p.last_workspace_file = None; }
+            p.workspaces = Some(roots); p.workspace_dir = active;
+        }, cx);
     }
 
     pub(crate) fn restore_workspaces(&mut self, documents: Option<PathBuf>, cx: &mut Context<Self>) {
@@ -228,6 +231,10 @@ impl Workspace {
 
     pub(crate) fn open_workspace_file(&mut self, id: u64, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace_path_busy(&path) { self.workspace_busy_notice(cx); return; }
+        if crate::workspace_fs::DocKind::of(&path).is_none() {
+            self.show_toast_kind(ToastKind::Info, crate::settings::tr("请从文件菜单选择「使用系统应用打开」", "Use the file menu to open this with your system app"), cx);
+            return;
+        }
         let retry = path.clone();
         if self.save_before(cx, move |w, window, cx| w.open_workspace_file_now(id, retry, window, cx)) {
             self.open_workspace_file_now(id, path, window, cx);
@@ -241,7 +248,7 @@ impl Workspace {
             self.show_toast_kind(ToastKind::Error, crate::settings::tr("目录尚未加载", "Folder is not loaded"), cx);
             return;
         };
-        if !tree.files().iter().any(|file| same_path(&file.path, &path)) {
+        if !tree.all_files().iter().any(|file| same_path(&file.path, &path)) {
             self.show_toast_kind(ToastKind::Error, crate::settings::tr("文件不在此工作目录中", "The file is not in this workspace"), cx);
             return;
         }
@@ -263,6 +270,22 @@ impl Workspace {
         self.refresh_folder_links(cx);
         if self.file.as_ref().is_some_and(|file| same_path(file, &path)) && self.editor.is_some() { self.show_view(View::Doc, cx); }
         else { self.open_file_path(path, window, cx); }
+    }
+
+    pub(crate) fn open_workspace_external(&mut self, id: u64, path: PathBuf, cx: &mut Context<Self>) {
+        self.workspace_menu = None;
+        let Some(root) = self.workspace_roots.iter().find(|r| r.id == id) else { return };
+        if !root.tree.as_ref().is_some_and(|tree| tree.all_files().iter().any(|node| same_path(&node.path, &path))) {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("文件不在此工作目录中", "The file is not in this workspace"), cx); return;
+        }
+        if let Err(error) = crate::workspace_files::validate_external_open(&root.spec.path, &path) {
+            self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法打开文件：{}", "Could not open file: {}", file_diagnostic(&error)), cx); return;
+        }
+        let Ok(url) = url::Url::from_file_path(&path) else {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("无法识别文件路径", "Could not identify the file path"), cx); return;
+        };
+        if crate::devtools::scripted() { eprintln!("devtools: external workspace file"); return; }
+        cx.open_url(url.as_str());
     }
 
     pub(crate) fn remove_workspace(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {

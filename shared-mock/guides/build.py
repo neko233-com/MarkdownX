@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the 开始指南 sample library from shared-mock/guides/src.
 
-usage: python3 shared-mock/guides/build.py <out_library_dir>
+usage: python3 shared-mock/guides/build.py <out_library_dir> [en|zh]
 
 Each src/*.xml is one document (file name order = reading order). Placeholders:
   {{doc:key}}                       @文档 link to the guide whose KEYS entry is key
@@ -16,6 +16,9 @@ from pathlib import Path
 
 here = Path(__file__).resolve().parent
 out = Path(sys.argv[1]).resolve()
+language = sys.argv[2] if len(sys.argv) > 2 else "en"
+if language not in ("en", "zh"):
+    sys.exit("guide language must be en or zh")
 NS = uuid.UUID("6f7c1e9a-9d0b-4a51-8c7e-2a1d3b4c5e6f")
 # file stem -> (key, parent key, pinned)
 KEYS = {
@@ -24,7 +27,8 @@ KEYS = {
     "03-books": ("books", None, False),
 }
 ids = {k: str(uuid.uuid5(NS, k)) for k, _, _ in KEYS.values()}
-srcs = {KEYS[p.stem][0]: p.read_text() for p in sorted((here / "src").glob("*.xml"))}
+source = here / ("src" if language == "en" else "src-zh")
+srcs = {KEYS[p.stem][0]: p.read_text(encoding="utf-8") for p in sorted(source.glob("*.xml"))}
 missing = set(ids) - set(srcs)
 assert not missing, f"no source for {missing}"
 
@@ -80,7 +84,7 @@ if out.exists() and any(out.iterdir()):
 index = {}
 order = list(KEYS.values())
 for i, (k, parent, pinned) in enumerate(order):
-    (out / "docs" / f"{ids[k]}.xml").write_text(fill(srcs[k]))
+    (out / "docs" / f"{ids[k]}.xml").write_text(fill(srcs[k]), encoding="utf-8", newline="\n")
     # Reading order: the sidebar lists the most recently modified first, and
     # children oldest first.
     t = now - 60 * i
@@ -88,8 +92,8 @@ for i, (k, parent, pinned) in enumerate(order):
     if parent:
         meta["parent"] = ids[parent]
     index[ids[k]] = meta
-(out / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n")
-(out / "format.json").write_text('{\n  "format": 1\n}')
+(out / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+(out / "format.json").write_text('{\n  "format": 1\n}', encoding="utf-8", newline="\n")
 (out / "assets").mkdir()
 if covers:
     (out / "assets" / "guides" / "covers").mkdir(parents=True)

@@ -30,5 +30,4 @@
 </tbody></table>
 <h1>Write for both languages</h1>
 <p>Keep sentences short and avoid idioms that only work in one language. A <code>.mdxb</code> chapter can store an English body in <code>content_en</code> next to the primary Chinese body; the reader switches without reloading the page.</p>
-<h2>中文</h2>
-<p>Markdown 适合快速写作和迁移，DocxXML 是桌面书库的原生格式，能保留表格、标注、Canvas 和 HTML 交互块。导入 Markdown 用 <code>⌘ ⇧ I</code>；导出书用「下载为 → MarkdownX 书 (.mdxb)」。只读分享可以导出 Markdown，想保留交互就用 <code>.mdxb</code>。</p>
+<p>Changing the interface language in Settings does not translate or overwrite existing file names or content.</p>

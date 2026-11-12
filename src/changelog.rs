@@ -15,6 +15,12 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.15", &[
+        ("首次打开时按界面语言展示可编辑示例和入门指南", "Start with an editable sample and guides in your interface language"),
+        ("示例显示在默认工作目录中，重启时恢复最近打开的工作区文件", "Find the sample in the default workspace and restore your last workspace file"),
+        ("保留已有文档和旧指南，空目录可直接新建文件", "Preserve existing documents and create files directly from an empty folder"),
+        ("目录和文件按类型显示彩色图标，其他文件可用系统应用打开", "See color-coded folders and file types, and open other files with a system app"),
+    ]),
     ("0.1.14", &[
         ("同时打开多个工作目录，管理文件和文件夹，并在所有目录中搜索", "Open multiple workspaces, manage files and folders, and search across them"),
         ("默认打开文档目录下的 MarkDown-Demo，支持添加和切换目录", "Open MarkDown-Demo in Documents by default, and add or switch folders"),

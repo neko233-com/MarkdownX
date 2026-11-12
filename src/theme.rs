@@ -392,6 +392,13 @@ impl Theme {
     /// they don't pull the eye from the labels and the page. Inferred: the
     /// SF Symbols sit near secondary label; this is between N700 and N600.
     pub fn icon() -> Hsla { ca(craft::N900, 0.6) }
+    /// Workspace file and folder accents adapt to the light and dark sidebar.
+    pub fn workspace_folder() -> Hsla { mix(craft::old::O500, craft::N900, 0.20) }
+    pub fn workspace_documents() -> Hsla { c(craft::B600) }
+    pub fn workspace_assets() -> Hsla { mix(craft::old::G500, craft::N900, 0.33) }
+    pub fn workspace_source() -> Hsla { c(craft::O600) }
+    pub fn workspace_data() -> Hsla { c(craft::B700) }
+    pub fn workspace_pdf() -> Hsla { c(craft::R600) }
     /// Line above the sidebar footer (1pt, black 3.5%, #E8E8E9 on the sidebar).
     /// Line under the page title.
     /// White pill buttons on the note (back / + / share): hairline.

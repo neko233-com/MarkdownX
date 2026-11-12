@@ -1,0 +1,23 @@
+<title>写作：Markdown 与文档库</title>
+<p>Markdown 适合快速记录和与其他工具共享；文档库使用 DocxXML 保存页面结构，也能保留交互内容。</p>
+<h1>用 Markdown 写作</h1>
+<p>打开工作目录中的 Markdown 文件即可原地编辑。标题、列表、待办、引用、表格、代码和图片都可以用于组织内容。</p>
+<pre lang="markdown" caption="一篇简单的笔记"><code># 我的笔记
+
+- 每行写一个想法
+- 使用 **粗体** 和 `代码`
+- [ ] 记录一件待办事项
+
+&gt; 把值得记住的话放在这里。
+</code></pre>
+<h1>导入与导出</h1>
+<ul><li>使用 <code>⌘ ⇧ I</code> 将 Markdown 导入文档库。</li><li>从页面菜单导出 Markdown，可用于阅读和版本比较。</li><li>选择「下载为 → MarkdownX 书 (.mdxb)」，保留页面树和交互块。</li></ul>
+<callout emoji="✦" background-color="light-blue" border-color="blue"><p>工作目录中的文件和文档库是两个位置。切换或移除工作目录不会删除文档库，也不会删除目录里的文件。</p></callout>
+<h1>常用操作</h1>
+<table><colgroup><col width="210"/><col width="480"/></colgroup><thead><tr><th><p>内容</p></th><th><p>如何开始</p></th></tr></thead><tbody>
+<tr><td><p>标题</p></td><td><p>输入 <code># </code>，或按 <code>⌘ ⌥ 1</code></p></td></tr>
+<tr><td><p>表格</p></td><td><p>输入 <code>/</code> 并选择表格</p></td></tr>
+<tr><td><p>代码</p></td><td><p>输入 <code>```</code> 和语言名称</p></td></tr>
+<tr><td><p>交互内容</p></td><td><p>从插入菜单选择交互块，参见 <cite type="doc" doc-id="b1004f41-9cb8-5365-96e4-eeee20b95f21" file-type="docx">制作交互书</cite></p></td></tr>
+</tbody></table>
+<p>界面语言可以在「设置 → 通用」中切换；已有文件的标题和正文会保留，不会被自动翻译或覆盖。</p>

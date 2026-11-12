@@ -53,6 +53,7 @@ mod trash;
 mod tree;
 mod ui;
 mod workspace_fs;
+mod workspace_icons;
 mod git_workspace;
 mod update;
 
@@ -94,10 +95,13 @@ fn startup_target() -> Option<std::path::PathBuf> {
 }
 
 /// The main window, centred at the remembered size.
-fn open_main_window(scripted: bool, cx: &mut App) {
+fn open_main_window(scripted: bool, first_run: bool, legacy_welcome: bool, cx: &mut App) {
     // Scripted dev runs must not steal keyboard focus from whatever the
     // user is typing into.
     let bounds = Bounds::centered(None, quick_note::main_window_size(cx), cx);
+    // On Windows a non-activating window can still be clicked. Keep scripted
+    // windows hidden until they are parked outside the desktop.
+    let park = cfg!(all(target_os = "windows", feature = "devtools")) && scripted && std::env::var_os("FDL_NOPARK").is_none();
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -111,17 +115,27 @@ fn open_main_window(scripted: bool, cx: &mut App) {
             }),
             window_min_size: Some(size(px(480.), px(480.))),
             focus: !scripted,
+            show: !park,
             ..Default::default()
         },
         |window, cx| {
+            #[cfg(all(feature = "devtools", target_os = "windows"))]
+            if park { devtools::park_window(window); }
             devtools::start(window, cx);
             let workspace = cx.new(|cx| app::Workspace::new(window, cx));
             let test_startup = cfg!(feature = "devtools") && scripted && std::env::var_os("MARKDOWNX_TEST_STARTUP_WORKSPACE").is_some();
-            if !scripted || test_startup {
+            let test_first_run = cfg!(feature = "devtools") && scripted && std::env::var_os("MARKDOWNX_TEST_FIRST_RUN").is_some();
+            if !scripted || test_startup || test_first_run {
                 workspace.update(cx, |w, cx| {
-                    let documents = if test_startup { std::env::var_os("MARKDOWNX_TEST_DOCUMENTS_DIR").map(std::path::PathBuf::from) } else { workspace_fs::documents_dir() };
-                    w.open_initial_workspace(documents, window, cx);
-                    if let Some(path) = startup_target() {
+                    let documents = if test_startup || test_first_run { std::env::var_os("MARKDOWNX_TEST_DOCUMENTS_DIR").map(std::path::PathBuf::from) } else { workspace_fs::documents_dir() };
+                    let target = startup_target();
+                    let prefs = settings::prefs();
+                    let legacy_selected = legacy_welcome && w.current.as_deref() == Some(guides::WELCOME_ID);
+                    let restore = target.is_none() && prefs.last_workspace_file.is_some();
+                    if first_run || target.is_none() && (legacy_selected || restore) { w.show_view(app::View::Home, cx); }
+                    let demo = target.is_none() && (first_run || legacy_selected && !prefs.starter_offered);
+                    w.open_initial_workspace(documents, demo, restore, window, cx);
+                    if let Some(path) = target {
                         if path.is_dir() { w.open_folder_tree_path(path, window, cx); }
                         else { w.open_external_path(path, window, cx); }
                     }
@@ -143,13 +157,20 @@ fn main() {
     logging::write(&format!("library {}", root.display()));
     // A library that was here before this launch can show 更新日志.
     let existed = guides::seeded(&root).unwrap_or(false);
-    if !scripted && let Err(err) = guides::initialize(&root) {
-        logging::fatal(&format!("无法初始化文档库 / Could not set up the library at {}", root.display()), &err);
-    }
+    // The initial documents must use the same resolved language as the UI.
+    settings::load();
+    let test_first_run = cfg!(feature = "devtools") && scripted && std::env::var_os("MARKDOWNX_TEST_FIRST_RUN").is_some();
+    let first_run = if !scripted || test_first_run {
+        match guides::initialize(&root, settings::english()) {
+            Ok(created) => created,
+            Err(err) => logging::fatal(&format!("无法初始化文档库 / Could not set up the library at {}", root.display()), &err),
+        }
+    } else { false };
+    let legacy_welcome = !first_run && guides::legacy_welcome_is_untouched(&root, settings::english());
     let app = Application::new().with_assets(assets::Assets);
     // macOS keeps running after ⌘W closes the last window (quick notes stay
     // available); clicking the Dock icon then brings the main window back.
-    app.on_reopen(|cx| if cx.windows().is_empty() { open_main_window(false, cx); });
+    app.on_reopen(|cx| if cx.windows().is_empty() { open_main_window(false, false, false, cx); });
     app.run(move |cx: &mut App| {
         #[cfg(target_os = "macos")]
         set_app_icon();
@@ -172,7 +193,7 @@ fn main() {
         if quick_enabled { quick_note::install(cx); }
         app::set_menus(cx);
         update::init(cx);
-        open_main_window(scripted, cx);
+        open_main_window(scripted, first_run, legacy_welcome, cx);
         cx.on_window_closed(move |cx| {
             if (!quick_enabled || !cfg!(target_os = "macos")) && cx.windows().is_empty() {
                 cx.quit();

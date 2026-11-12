@@ -93,6 +93,11 @@ impl WorkspaceDir {
     }
 
     pub fn files(&self) -> Vec<&FileNode> {
+        self.all_files().into_iter().filter(|node| DocKind::of(&node.path).is_some()).collect()
+    }
+
+    /// All visible regular files; `files` remains the editable-document set.
+    pub fn all_files(&self) -> Vec<&FileNode> {
         let mut out = vec![];
         collect_files(&self.children, &mut out);
         out
@@ -138,7 +143,7 @@ fn scan_dir(root: &Path) -> anyhow::Result<(Vec<FileNode>, Vec<(PathBuf, String)
                 let index = nodes.len();
                 nodes.push(Some((parent, FileNode { path: path.clone(), name, dir: true, children: vec![] })));
                 pending.push((path, Some(index)));
-            } else if ty.is_file() && DocKind::of(&path).is_some() {
+            } else if ty.is_file() {
                 nodes.push(Some((parent, FileNode { path, name, dir: false, children: vec![] })));
             }
         }
@@ -298,11 +303,11 @@ impl WorkspaceDir {
             return vec![];
         }
         let mut hits = vec![];
-        for file in self.files() {
+        for file in self.all_files() {
             let rel = file.path.strip_prefix(&self.root).unwrap_or(&file.path).to_string_lossy().replace('\\', "/");
             let path_score = fuzzy_score(&q, &rel.to_lowercase());
             let mut body_match = None;
-            if content
+            if content && DocKind::of(&file.path).is_some()
                 && let Ok(bytes) = fs::read(&file.path)
             {
                 let text = String::from_utf8_lossy(&bytes);
@@ -408,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn scans_markdown_and_books_but_skips_other_files() {
+    fn shows_regular_files_but_keeps_document_operations_limited() {
         let dir = temp("scan");
         fs::create_dir_all(dir.join("chapters")).unwrap();
         fs::create_dir_all(dir.join("empty")).unwrap();
@@ -418,10 +423,13 @@ mod tests {
         fs::write(dir.join("cover.png"), "not a doc").unwrap();
         fs::write(dir.join(".hidden/ignored.md"), "hidden").unwrap();
         let ws = WorkspaceDir::scan(dir.clone()).unwrap();
-        assert_eq!(ws.children.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["chapters", "empty", "readme.md"]);
+        assert_eq!(ws.children.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["chapters", "empty", "cover.png", "readme.md"]);
         assert!(ws.warnings.is_empty());
         let names: Vec<&str> = ws.files().iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["one.mdxb", "readme.md"]);
+        assert_eq!(ws.all_files().len(), 3);
+        assert_eq!(ws.search("cover.png", false)[0].path, dir.join("cover.png"));
+        assert!(ws.search("not a doc", true).is_empty(), "binary or unsupported file bodies must not be searched");
         fs::remove_dir_all(dir).unwrap();
     }
 

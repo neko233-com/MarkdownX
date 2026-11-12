@@ -41,6 +41,14 @@ fn checked(root: &Path, path: &Path, protected: &[PathBuf], may_be_root: bool) -
     Ok(())
 }
 
+/// Recheck an item selected from a possibly stale tree before handing it to
+/// another application; links and paths outside the workspace are rejected.
+pub(crate) fn validate_external_open(root: &Path, path: &Path) -> Result<()> {
+    checked(root, path, &[], false)?;
+    ensure!(fs::symlink_metadata(path)?.is_file(), "not a regular file");
+    Ok(())
+}
+
 pub(crate) fn create(root: &Path, parent: &Path, name: &str, dir: bool, protected: &[PathBuf]) -> Result<PathBuf> {
     checked(root, parent, &[], true)?;
     // Creating next to a protected descendant is fine; creating inside it is not.
@@ -138,6 +146,29 @@ fn send_to_trash(paths: Vec<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn external_open_checks_workspace_membership_and_regular_files() {
+        let base = std::env::temp_dir().join(format!("markdownx-open-{}", uuid::Uuid::new_v4()));
+        let root = base.join("workspace");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("图片 #1.png");
+        fs::write(&file, b"sample").unwrap();
+        let outside = base.join("outside.png");
+        fs::write(&outside, b"keep").unwrap();
+        assert!(validate_external_open(&root, &file).is_ok());
+        assert!(validate_external_open(&root, &outside).is_err());
+        assert!(validate_external_open(&root, &root).is_err());
+        let url = url::Url::from_file_path(&file).unwrap().to_string();
+        assert!(url.contains("%20") && url.contains("%23"));
+        #[cfg(unix)]
+        {
+            let link = root.join("link.png");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert!(validate_external_open(&root, &link).is_err());
+        }
+        fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn creates_and_renames_without_overwriting_or_escaping() {
         let root = std::env::temp_dir().join(format!("markdownx-files-{}", uuid::Uuid::new_v4()));

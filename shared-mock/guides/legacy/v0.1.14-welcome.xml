@@ -1,0 +1,30 @@
+<title>Welcome to MarkdownX</title>
+<p>MarkdownX is a local-first editor for interactive books. A book can hold text, headings, tables, code, Canvas widgets and sandboxed HTML experiments. When it is ready, pack the whole thing into one <code>.mdxb</code> file and open it in the desktop app or the browser reader.</p>
+<p>This library starts with three short guides. They are ordinary documents: edit them, break them, or delete them once you know your way around.</p>
+<callout emoji="✦" background-color="light-blue" border-color="blue"><p>Reading is local. No account or cloud workspace: the MarkdownX library stays in <code>~/Documents/MarkdownX</code>.</p></callout>
+<h1>Make your first page</h1>
+<p>Press <code>⌘ N</code> and give the page a title. Then work through this list; click a checkbox to mark it complete.</p>
+<checkbox done="true">Open this guide</checkbox>
+<checkbox done="false">Create a page with <code>⌘ N</code></checkbox>
+<checkbox done="false">Type <code># </code> to make a heading</checkbox>
+<checkbox done="false">Type <code>/</code> on an empty line and insert a table</checkbox>
+<checkbox done="false">Select a word and press <code>⌘ B</code> to make it bold</checkbox>
+<checkbox done="false">Read <cite type="doc" doc-id="3e98a021-e013-5d8f-b41f-5c3fbf3dbfc3" file-type="docx">Write: Markdown and DocxXML</cite></checkbox>
+<h1>The home screen</h1>
+<p>My documents shows the <code>MarkDown-Demo</code> folder inside your system Documents folder. Use the + beside My documents to add folders; their trees remain visible together. Each folder’s … menu can change its name or location, refresh it, or remove it from the list without deleting files. Pinned pages can appear below the folder trees. Home lists recent library pages; search all locations with <code>⌘ K</code>.</p>
+<h1>Two languages, one library</h1>
+<p>The interface switches between English and Simplified Chinese in Settings › General. A book can carry both languages too: the browser reader shows <code>content_en</code> when the reader chooses English, while the desktop library keeps the primary text.</p>
+<h1>Where your books live</h1>
+<p>The default library is <code>~/Documents/MarkdownX</code>. Each library page is XML under <code>docs</code>; images and attachments live under <code>assets</code>. Back up the whole library folder. The My documents folder is separate and contains your Markdown files.</p>
+<h1>Shortcuts worth remembering</h1>
+<table><colgroup><col width="240"/><col width="450"/></colgroup><thead><tr><th><p>Keys</p></th><th><p>Action</p></th></tr></thead><tbody>
+<tr><td><p><code>⌘ N</code> / <code>⌘ K</code></p></td><td><p>New library page / search the library and open folders</p></td></tr>
+<tr><td><p><code>⌘ B</code> / <code>⌘ I</code></p></td><td><p>Bold / italic</p></td></tr>
+<tr><td><p><code>⌘ ⌥ 1</code></p></td><td><p>Heading 1</p></td></tr>
+<tr><td><p><code>⌘ ⇧ C</code></p></td><td><p>Inline code</p></td></tr>
+<tr><td><p><code>⌘ /</code></p></td><td><p>All shortcuts</p></td></tr>
+</tbody></table>
+<h1>Next</h1>
+<p>Read <cite type="doc" doc-id="3e98a021-e013-5d8f-b41f-5c3fbf3dbfc3" file-type="docx">Write: Markdown and DocxXML</cite> for the two writing formats, then <cite type="doc" doc-id="b1004f41-9cb8-5365-96e4-eeee20b95f21" file-type="docx">Interactive books</cite> for Canvas, HTML and <code>.mdxb</code>.</p>
+<h2>中文</h2>
+<p>MarkdownX 是一个本地优先的交互书编辑器。文字、表格、代码、Canvas 和 HTML 小实验可以放在同一本书里，最后打包成一个 <code>.mdxb</code> 文件，在桌面应用或浏览器阅读器中打开。默认书库在 <code>~/Documents/MarkdownX</code>，不需要账号，也不依赖网络。「我的文档」默认显示系统文档目录下的 <code>MarkDown-Demo</code>，可用旁边的加号添加多个目录，目录树会同时显示并在重启后恢复；目录旁的「…」可更换目录或移除工作区（不删除文件），文件和文件夹也可新建、重命名及确认后移入系统回收站。<code>⌘ K</code> 可同时搜索书库和全部工作目录。</p>

@@ -28,6 +28,7 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 - 旧版二进制可以这样编：`git worktree add /tmp/old <提交>`，在那里用 `CARGO_TARGET_DIR=<本仓库>/target cargo build --release --features devtools`，再把二进制复制出来。
 - `python3 tools/harness/global_search.py` 用临时文档库和目录，验证全局搜索的键盘打开、正文匹配、结果选择以及链接和旧搜索快捷键。
 - `python3 tools/harness/workspace_startup.py` 用隔离目录验证多目录并存、重启恢复、跨目录搜索、保存和文件管理，以及不可用目录的保护；不会读取真实文档目录。
+- `python3 tools/harness/onboarding.py` 在隔离目录验证中英文首次启动、示例文件与目录树、重启和切换语言、已有文件保护、旧版未改/已改指南及启动参数。
 - Windows 上运行 `python tools/harness/window_controls.py`，在隔离窗口和临时文档库中验证标题栏命中、最小化、最大化/还原、全屏控件、关闭时保存和外部修改冲突保护。
 
 ## 脚本命令
@@ -54,6 +55,7 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 | `open-file` / `new-folder-file` | 触发打开文件 / 在目录中新建文件，配合 `pick` 使用 |
 | `check-folder-state <目录>` | 只读检查已打开的目录、侧栏和首个文件 |
 | `check-workspace-startup <阶段> <目录>` | 检查临时目录中的默认、选择、恢复和启动参数覆盖行为 |
+| `check-onboarding <阶段>` | 在带标记的临时目录验证首开示例、目录树和已有内容 |
 | `check-multi-workspace <阶段>` | 在带标记的临时目录中检查多目录、保存、搜索和文件管理 |
 | `window-native <动作>` / `window-client <动作>` / `check-window-close <阶段>` | Windows 隔离窗口专用：验证原生及全屏标题栏消息和关闭时的保存保护 |
 | `check-global-search <阶段> <临时目录>` | 在带 `.markdownx-global-search-test` 标记的临时目录中检查全局搜索、键盘选择、链接快捷键和原有搜索 |
@@ -71,6 +73,7 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 - `FDL_RECORD_FPS`：录屏帧率，默认 30。
 
 窗口内截图命令目前只支持 macOS；Windows 可用原生窗口截图工具检查实际渲染。
+Windows 的脚本窗口默认放在屏幕之外，避免与用户操作相互干扰；需要人工观察时才使用 `FDL_NOPARK`。
 
 ## 使用规则
 

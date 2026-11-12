@@ -30,6 +30,8 @@ def main():
         chosen.mkdir()
         note = chosen / 'note.md'
         note.write_text('# Second\n\nmultiworkspacesearch\n', encoding='utf-8')
+        image = chosen / '示例 image.png'
+        image.write_bytes(b'\x89PNG\r\n')
         replacement = temp / 'replacement'
         replacement.mkdir()
         (replacement / 'keep.md').write_text('# Keep\n', encoding='utf-8')
@@ -43,6 +45,7 @@ def main():
         env = dict(os.environ, MARKDOWNX_HOME=str(library), MARKDOWNX_LOG_DIR=str(temp / 'logs'),
                    MARKDOWNX_TEST_STARTUP_WORKSPACE='1', MARKDOWNX_TEST_DOCUMENTS_DIR=str(documents),
                    MARKDOWNX_TEST_WORKSPACE_ROOT=str(temp), FDL_SHOTS=str(temp))
+        env.pop('FDL_NOPARK', None)
         mod = 'cmd' if sys.platform == 'darwin' else 'ctrl'
 
         def run(name, steps, expected, *args):
@@ -65,6 +68,7 @@ pick {chosen}
 open-folder
 wait 500
 check-workspace-startup selected {chosen}
+check-multi-workspace file-types
 check-multi-workspace library-rename-start
 wait 250
 type Renamed from Home
@@ -116,7 +120,7 @@ wait 300
 check-multi-workspace label-done
 quit
 ''', ('workspace-startup: default PASS', 'workspace-startup: selected PASS',
-      *(f'multi-workspace: {phase} PASS' for phase in ('library-rename-done', 'switch-done', 'search', 'legacy', 'new-file-done', 'new-dir-done', 'rename-done', 'removed', 'replaced', 'label-done'))))
+      *(f'multi-workspace: {phase} PASS' for phase in ('file-types', 'library-rename-done', 'switch-done', 'search', 'legacy', 'new-file-done', 'new-dir-done', 'rename-done', 'removed', 'replaced', 'label-done'))))
         assert default.is_dir() and (default / 'alpha.md').is_file()
         assert not missing.exists()
         prefs_path = library / 'preferences.json'
@@ -138,6 +142,7 @@ check-workspace-startup empty {replacement}
 quit
 ''', ('workspace-startup: empty PASS',))
         assert library_doc.read_bytes() == original_library_doc
+        assert image.read_bytes() == b'\x89PNG\r\n'
         print('Multiple workspaces: PASS (default, add/deduplicate, missing root, background save, cross-root search, create/rename, remove/replace, restart and temporary startup override).')
 
 

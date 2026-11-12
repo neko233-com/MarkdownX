@@ -185,7 +185,9 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 界面语言
 
-界面支持简体中文与英文。当前选择保存在 `Preferences::language`（`auto` / `zh` / `en`），`Preferences::english` 是给旧版本看的兼容位；旧偏好没有 `language` 时继续使用原来的 `english`。`auto` 在 Windows 读取用户 `LocaleName`，在 macOS/Linux 读取系统 locale，未知语言回退英文。静态文案使用 `settings::text` / `label` 的统一映射，成对文案使用 `settings::tr`，带参数的文案使用 `localized_format!`。菜单表保留稳定的原始标签，在显示时翻译；搜索同时匹配英文标签与原有关键词。输入框保留原始 placeholder，在渲染时翻译，切换语言时刷新所有窗口。
+界面支持简体中文与英文。当前选择保存在 `Preferences::language`（`auto` / `zh` / `en`），`Preferences::english` 是给旧版本看的兼容位；旧偏好没有 `language` 时继续使用原来的 `english`。`auto` 在 Windows 和 macOS 优先读取用户显示语言，在 Linux 读取系统 locale，未知语言回退英文。静态文案使用 `settings::text` / `label` 的统一映射，成对文案使用 `settings::tr`，带参数的文案使用 `localized_format!`。菜单表保留稳定的原始标签，在显示时翻译；搜索同时匹配英文标签与原有关键词。输入框保留原始 placeholder，在渲染时翻译，切换语言时刷新所有窗口。
+
+首次建库之前先解析界面语言，`guides` 从中英文两份指南初始化新的文档库；中断后恢复仍使用原来的语言。空的默认工作目录另生成一份同语言的可编辑 Markdown 示例，并在后台扫描后打开；只创建新文件，不覆盖非空目录。已保存工作区的最近文件在后台确认仍属于目录树后恢复，命令行指定的文件或目录优先。旧版英文欢迎页只有与原始内置文件完全一致时才会触发安全引导，不改写原文件；已经编辑的页面保持原样。语言切换不翻译任何已有文档。
 
 用户标题、正文、附件名和已保存的按钮文字不作为翻译键；只有空标题等界面默认值随语言变化。Core 的存储诊断在应用层用已知模板翻译，保留路径、文档 ID 和系统错误原文，文档引擎不依赖界面语言。语言回归检查覆盖界面翻译键、菜单表、日期提醒，以及用户内容和诊断参数的保留。
 

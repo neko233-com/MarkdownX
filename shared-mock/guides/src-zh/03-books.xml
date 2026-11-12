@@ -1,0 +1,10 @@
+<title>制作交互书</title>
+<p>一份书稿可以包含文字、表格与交互内容。读者调整参数时，图形会随之变化。</p>
+<h1>试试交互图形</h1>
+<p>Canvas 交互块用 JSON 描述内容。拖动下方参数，观察二次函数曲线和顶点的变化。</p>
+<interactive type="canvas" title="拖动参数" height="340"><![CDATA[{"kind":"quadratic","a":1,"b":0,"c":0,"xMin":-4,"xMax":4,"yMin":-4,"yMax":8}]]></interactive>
+<h1>分享一本书</h1>
+<p>在文档库页面中选择「下载为 → MarkdownX 书 (.mdxb)」，即可把页面、资源和交互块打包到一个文件。读者可以在桌面应用或浏览器阅读器中打开它。</p>
+<ol><li>在浏览器阅读器中选择「打开书籍」，或将 <code>.mdxb</code> 文件拖入页面。</li><li>使用顶部菜单切换可用语言和主题。</li></ol>
+<callout emoji="✦" background-color="light-blue" border-color="blue"><p>交互书可以为章节保存中文和英文内容；切换界面语言不会修改你已经写好的文档。</p></callout>
+<p>继续阅读 {{doc:writing}}，或回到 {{doc:welcome}}。</p>

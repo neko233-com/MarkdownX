@@ -51,10 +51,16 @@ pub struct Preferences {
     /// None means first launch; Some(empty) means the user removed every root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspaces: Option<Vec<crate::workspace_fs::WorkspaceSpec>>,
+    /// Last opened file in a persistent workspace, restored without modifying it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_workspace_file: Option<std::path::PathBuf>,
+    /// An upgraded, untouched English starter has already been offered a sample.
+    #[serde(default)]
+    pub starter_offered: bool,
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), workspace_dir: None, workspaces: None } }
+    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), workspace_dir: None, workspaces: None, last_workspace_file: None, starter_offered: false } }
 }
 
 impl Preferences {
@@ -112,12 +118,14 @@ fn language_index(p: &Preferences) -> usize {
     }
 }
 
-/// The user's OS language tag, lowercased (`zh-cn`, `en-us`, …). Windows
-/// reads the user locale from the registry; macOS and Linux read the
-/// environment, which is what their launchers export.
+/// Follow the OS display language, not a potentially different date/number locale.
 fn system_language() -> String {
+    #[cfg(feature = "devtools")]
+    if let Ok(language) = std::env::var("MARKDOWNX_TEST_LANGUAGE") { return language.to_ascii_lowercase(); }
     #[cfg(target_os = "windows")]
     {
+        let language = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
+        if language != 0 { return if language & 0x03ff == 0x0004 { "zh" } else { "en" }.into(); }
         if let Ok(key) = windows_registry::CURRENT_USER.open(r"Control Panel\International")
             && let Ok(name) = key.get_string("LocaleName")
         {
@@ -126,11 +134,12 @@ fn system_language() -> String {
     }
     #[cfg(target_os = "macos")]
     {
-        if let Ok(out) = std::process::Command::new("defaults").args(["read", "-g", "AppleLocale"]).output()
+        if let Ok(out) = std::process::Command::new("defaults").args(["read", "-g", "AppleLanguages"]).output()
             && out.status.success()
         {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_ascii_lowercase();
-            if !s.is_empty() { return s }
+            let output = String::from_utf8_lossy(&out.stdout);
+            if let Some(language) = output.lines().map(|line| line.trim().trim_matches(|c: char| c == '(' || c == ')' || c == ',' || c == '"' || c.is_whitespace()))
+                .find(|line| !line.is_empty()) { return language.to_ascii_lowercase(); }
         }
     }
     for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {

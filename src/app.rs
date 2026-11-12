@@ -726,8 +726,65 @@ impl Workspace {
         if let Some(tree) = self.workspace_roots.iter().find(|r| r.id == id).and_then(|r| r.tree.clone()) { self.folder = Some(tree); self.refresh_folder_links(cx); }
     }
 
-    pub(crate) fn open_initial_workspace(&mut self, documents: Option<std::path::PathBuf>, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace_roots.is_empty() { self.restore_workspaces(documents, cx); }
+    pub(crate) fn open_initial_workspace(&mut self, documents: Option<std::path::PathBuf>, first_run: bool, restore: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.workspace_roots.is_empty() { return; }
+        let prefs = crate::settings::prefs();
+        let demo_root = first_run.then(|| documents.clone()).flatten()
+            .filter(|path| path.is_absolute()).map(|path| path.join(crate::workspace_fs::DEFAULT_WORKSPACE_DIR));
+        self.restore_workspaces(documents, cx);
+        if restore && let Some(path) = prefs.last_workspace_file.filter(|path| path.is_absolute())
+            && let Some((id, root)) = self.workspace_roots.iter().filter(|root| root.persistent && path.starts_with(&root.spec.path))
+                .max_by_key(|root| root.spec.path.components().count()).map(|root| (root.id, root.spec.path.clone())) {
+            let current = self.current.clone();
+            let active = self.active_workspace;
+            let task = cx.background_executor().spawn(async move {
+                let canonical = root.canonicalize()?;
+                Ok::<_, anyhow::Error>((canonical, crate::workspace_fs::WorkspaceDir::scan(root)?))
+            });
+            cx.spawn_in(window, async move |this, cx| {
+                let result = task.await;
+                let _ = this.update_in(cx, |w, window, cx| if let Ok((canonical, tree)) = result {
+                    if !w.workspace_roots.iter().any(|r| r.id == id) { return; }
+                    let found = tree.files().iter().any(|node| crate::workspaces::same_path(&node.path, &path));
+                    w.register_workspace_snapshot(tree, true, cx);
+                    if let Some(root) = w.workspace_roots.iter_mut().find(|r| r.id == id) { root.canonical = Some(canonical); }
+                    if found && w.view == View::Home && w.current == current && w.file.is_none() && !w.unsaved && !w.search_open && w.active_workspace == active {
+                        w.open_workspace_file_now(id, path, window, cx);
+                    }
+                });
+            }).detach();
+            return;
+        }
+        let Some(root) = demo_root else { return };
+        let Some(id) = self.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &root)).map(|r| r.id) else { return };
+        if self.active_workspace != Some(id) { return; }
+        let current = self.current.clone();
+        let english = crate::settings::english();
+        let task = cx.background_executor().spawn(async move {
+            let parent = root.parent().map(std::path::Path::to_path_buf);
+            crate::workspace_fs::initial_workspace(None, parent)?;
+            let demo = crate::guides::create_workspace_demo(&root, english)?;
+            let tree = if demo.is_some() { Some((root.canonicalize()?, crate::workspace_fs::WorkspaceDir::scan(root)?)) } else { None };
+            Ok::<_, anyhow::Error>((demo, tree))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |w, window, cx| match result {
+                Ok((demo, tree)) => {
+                    if !crate::settings::prefs().starter_offered { w.set_pref(|p| p.starter_offered = true, cx); }
+                    if let (Some(path), Some((canonical, tree))) = (demo, tree) {
+                        if !w.workspace_roots.iter().any(|r| r.id == id) { return; }
+                        w.register_workspace_snapshot(tree, true, cx);
+                        if let Some(root) = w.workspace_roots.iter_mut().find(|r| r.id == id) { root.canonical = Some(canonical); }
+                        // A slow disk must never interrupt a choice or edit made while it loaded.
+                        if w.view == View::Home && w.current == current && w.file.is_none() && !w.unsaved && !w.search_open && w.active_workspace == Some(id) {
+                            w.open_workspace_file_now(id, path, window, cx);
+                        }
+                    }
+                }
+                Err(error) => w.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法创建示例文件：{}", "Could not create the sample file: {}", crate::settings::diagnostic(&error.to_string())), cx),
+            });
+        }).detach();
     }
 
     #[cfg(feature = "devtools")]
@@ -794,6 +851,9 @@ impl Workspace {
     }
 
     pub(crate) fn close_folder_now(&mut self, cx: &mut Context<Self>) {
+        if !self.quick_note && self.file.as_ref().is_some_and(|file| crate::settings::prefs().last_workspace_file.as_ref() == Some(file)) {
+            self.set_pref(|p| p.last_workspace_file = None, cx);
+        }
         self.folder = None;
         self.refresh_global_folder_hits(cx);
         self.folder_search_generation = self.folder_search_generation.wrapping_add(1);
@@ -958,6 +1018,7 @@ impl Workspace {
                 if !self.search_open { editor.read(cx).focus(window); }
                 self.editor = Some(editor);
                 self.current = None;
+                let remembered = (!self.quick_note && self.workspace_roots.iter().any(|root| root.persistent && path.starts_with(&root.spec.path))).then(|| path.clone());
                 self.file = Some(path);
                 self.file_snapshot = Some(text);
                 self.file_source = Some(source);
@@ -966,6 +1027,7 @@ impl Workspace {
                 self.doc_menu = false;
                 self.close_menus();
                 self.reload_annotations(cx);
+                if remembered.is_some() && crate::settings::prefs().last_workspace_file != remembered { self.set_pref(|p| p.last_workspace_file = remembered, cx); }
                 cx.notify();
             }
             None => {}
@@ -1071,11 +1133,13 @@ impl Workspace {
             && let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
                 e.meta.opened = m.opened;
             }
+        let was_file = self.file.is_some();
         self.editor = Some(editor);
         self.current = Some(id.to_string());
         self.file = None;
         self.file_snapshot = None;
         self.file_source = None;
+        if was_file && !self.quick_note && crate::settings::prefs().last_workspace_file.is_some() { self.set_pref(|p| p.last_workspace_file = None, cx); }
         crate::quick_note::used(id, cx);
         self.reveal_in_tree(id);
         self.sync_sub_pages(cx);
@@ -2240,6 +2304,55 @@ pub(crate) fn check_global_search(args: &str, cx: &mut App) {
     eprintln!("global-search: {phase} PASS");
 }
 
+/// Validate the visible first-run file and tree only in a marked temporary root.
+#[cfg(feature = "devtools")]
+pub(crate) fn check_onboarding(phase: &str, cx: &mut App) {
+    let test_root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_TEST_WORKSPACE_ROOT").expect("test root"));
+    assert!(test_root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(test_root.join(".markdownx-workspace-test").is_file());
+    let root = test_root.join("documents/MarkDown-Demo");
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, window, cx| {
+        #[cfg(target_os = "windows")]
+        if std::env::var_os("FDL_NOPARK").is_none() { assert!(window.bounds().origin.x < px(-10000.), "scripted test window must remain off-screen"); }
+        #[cfg(not(target_os = "windows"))]
+        let _ = window;
+        let workspace = ws.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &root)).expect("default workspace");
+        let tree = workspace.tree.as_ref().expect("workspace loaded");
+        match phase {
+            "zh" | "en" => {
+                let (filename, title) = if phase == "zh" { ("开始使用.md", "欢迎使用 MarkdownX") } else { ("Getting started.md", "Welcome to MarkdownX") };
+                let path = root.join(filename);
+                assert_eq!(ws.view, View::Doc);
+                assert_eq!(ws.file.as_ref(), Some(&path));
+                assert!(tree.files().iter().any(|node| node.path == path));
+                assert_eq!(ws.editor.as_ref().unwrap().read(cx).core.doc.title.text, title);
+                assert_eq!(crate::settings::prefs().last_workspace_file.as_ref(), Some(&path));
+            }
+            "existing" => { assert!(ws.file.is_none()); assert_eq!(ws.view, View::Home); }
+            "edited-legacy" => { assert!(ws.file.is_none()); assert_eq!(ws.view, View::Doc); assert_eq!(ws.current.as_deref(), Some(crate::guides::WELCOME_ID)); }
+            "ui-en" => assert!(crate::settings::english()),
+            "target" => {
+                let path = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_TEST_EXPECTED_FILE").unwrap());
+                assert_eq!(ws.file.as_ref(), Some(&path));
+                assert_eq!(ws.view, View::Doc);
+            }
+            _ => panic!("unknown onboarding phase"),
+        }
+    }).unwrap();
+    eprintln!("onboarding: {phase} PASS");
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn onboarding_test_language(language: &str, cx: &mut App) {
+    let root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_TEST_WORKSPACE_ROOT").expect("test root"));
+    assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(root.join(".markdownx-workspace-test").is_file());
+    assert!(language == "zh" || language == "en");
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, _, cx| ws.set_pref(|p| { p.language = language.into(); p.english = language == "en"; }, cx)).unwrap();
+}
+
 /// Validate startup and folder selection only within an explicitly marked test root.
 #[cfg(feature = "devtools")]
 pub(crate) fn check_workspace_startup(args: &str, cx: &mut App) {
@@ -2251,7 +2364,11 @@ pub(crate) fn check_workspace_startup(args: &str, cx: &mut App) {
     assert!(test_root.join(".markdownx-workspace-test").is_file());
     assert!(root.is_absolute() && root.parent().unwrap().canonicalize().unwrap().starts_with(&canonical_test_root));
     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
-    handle.update(cx, |ws, _, _| {
+    handle.update(cx, |ws, window, _| {
+        #[cfg(target_os = "windows")]
+        if std::env::var_os("FDL_NOPARK").is_none() { assert!(window.bounds().origin.x < px(-10000.), "scripted test window must remain off-screen"); }
+        #[cfg(not(target_os = "windows"))]
+        let _ = window;
         assert!(ws.sidebar_open);
         if phase == "empty" { assert!(ws.workspace_roots.is_empty()); return; }
         let registered = ws.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &root)).expect("registered workspace");
@@ -2293,6 +2410,18 @@ pub(crate) fn check_multi_workspace(phase: &str, cx: &mut App) {
     handle.update(cx, |ws, window, cx| {
         let root_id = |ws: &Workspace, path: &std::path::Path| ws.workspace_roots.iter().find(|r| r.spec.path == path).expect("test root registered").id;
         match phase {
+            "file-types" => {
+                let id = root_id(ws, &second_root);
+                let image = second_root.join("示例 image.png");
+                let tree = ws.workspace_roots.iter().find(|r| r.id == id).unwrap().tree.as_ref().unwrap();
+                assert!(tree.all_files().iter().any(|node| node.path == image));
+                assert!(!tree.files().iter().any(|node| node.path == image));
+                assert!(tree.search("示例 image", false).iter().any(|hit| hit.path == image));
+                let before = (ws.current.clone(), ws.file.clone());
+                ws.open_workspace_file(id, image.clone(), window, cx);
+                assert_eq!((ws.current.clone(), ws.file.clone()), before);
+                ws.open_workspace_external(id, image, cx);
+            }
             "library-rename-start" => {
                 let doc = crate::model::Document { title: crate::model::RichText::plain("Temporary rename"), ..Default::default() };
                 let id = ws.store.create_from(&doc).unwrap();

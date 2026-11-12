@@ -183,7 +183,11 @@ impl Workspace {
                     } else if let Some(folder) = &root.tree {
                         list = list.children(self.folder_nodes(root.id, &folder.children, 0, cx));
                         if folder.children.is_empty() {
-                            list = list.child(div().pl(px(28.)).py(px(5.)).text_size(px(11.)).text_color(Theme::text_caption()).child(crate::settings::tr("空目录", "Empty folder")));
+                            let id = root.id;
+                            list = list.child(div().id(("workspace-empty-new", id)).pl(px(28.)).py(px(5.)).text_size(px(11.)).text_color(Theme::text_caption()).cursor_pointer()
+                                .hover(|s| s.text_color(Theme::text()))
+                                .child(crate::settings::tr("空目录 · 新建文件", "Empty folder · Create file"))
+                                .on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(id, None, false, window, cx))));
                         }
                     }
                 }
@@ -292,7 +296,7 @@ impl Workspace {
         div().id(("workspace-root", id)).h(px(30.)).px(px(7.)).flex().items_center().gap(px(5.)).rounded(px(ROW_R))
             .cursor_pointer().hover(|s| s.bg(Theme::sidebar_hover()))
             .child(icon(if root.spec.expanded { "chevron-down" } else { "chevron-right" }, 12., Theme::text_caption()))
-            .child(icon("folder", 15., Theme::icon()))
+            .child(crate::workspace_icons::folder(&root.spec.name(), root.spec.expanded, 16.))
             .child(div().id(("workspace-name", id)).flex_1().min_w_0().text_size(px(12.)).text_color(Theme::text()).truncate()
                 .tip(&root.spec.path.display().to_string(), None)
                 .children(name.clone()).when(name.is_none(), |d| d.child(root.spec.name())))
@@ -318,8 +322,8 @@ impl Workspace {
         let crate::workspaces::WorkspaceMenuTarget::New { root, parent: selected, dir } = &rename.target else { return None };
         if *root != root_id || selected != parent { return None }
         Some(div().id(SharedString::from(format!("workspace-new-input-{root_id}-{}", parent.display())))
-            .h(px(28.)).pl(px(22. + depth as f32 * 12.)).pr(px(6.)).flex().items_center().gap(px(6.))
-            .child(icon(if *dir { "folder" } else { "file-text" }, 14., Theme::icon()))
+            .h(px(28.)).pl(px(25. + (depth as f32 * 12.).min(120.))).pr(px(6.)).flex().items_center().gap(px(5.))
+            .child(if *dir { crate::workspace_icons::folder("", false, 16.) } else { crate::workspace_icons::file(std::path::Path::new("new.md"), 16.) })
             .child(div().flex_1().min_w_0().child(rename.field.clone())))
     }
 
@@ -350,6 +354,11 @@ impl Workspace {
                     panel = panel
                         .child(item("node-new-file", "file-text", crate::settings::tr("新建文件", "New file")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(root, Some(file_parent.clone()), false, window, cx))))
                         .child(item("node-new-dir", "folder", crate::settings::tr("新建文件夹", "New folder")).on_click(cx.listener(move |w, _, window, cx| w.prompt_workspace_new(root, Some(dir_parent.clone()), true, window, cx))));
+                }
+                if !dir && crate::workspace_fs::DocKind::of(&path).is_none() {
+                    let external = path.clone();
+                    panel = panel.child(item("node-open-system", "export", crate::settings::tr("使用系统应用打开", "Open with system app"))
+                        .on_click(cx.listener(move |w, _, _, cx| w.open_workspace_external(root, external.clone(), cx))));
                 }
                 let rename_path = path.clone();
                 panel = panel
@@ -486,7 +495,9 @@ impl Workspace {
         let mut out = vec![];
         let mut pending: Vec<_> = nodes.iter().rev().map(|n| (n, depth)).collect();
         while let Some((n, depth)) = pending.pop() {
+            let indent = (depth as f32 * 12.).min(120.);
             let id = SharedString::from(format!("fd-{root_id}-{}", n.path.to_string_lossy()));
+            let label_id = SharedString::from(format!("fd-label-{root_id}-{}", n.path.to_string_lossy()));
             let rename = self.workspace_rename.as_ref().filter(|r| matches!(&r.target, WorkspaceMenuTarget::Node { root, path, .. } if *root == root_id && path == &n.path)).map(|r| r.field.clone());
             let menu_path = n.path.clone();
             let menu = div().id(SharedString::from(format!("fd-menu-{root_id}-{}", n.path.to_string_lossy())))
@@ -502,7 +513,7 @@ impl Workspace {
                     div()
                         .id(id)
                         .h(px(28.))
-                        .pl(px(8. + depth as f32 * 12.))
+                        .pl(px(8. + indent))
                         .pr(px(6.))
                         .flex()
                         .items_center()
@@ -511,7 +522,8 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(Theme::sidebar_hover()))
                         .child(icon(if open { "chevron-down" } else { "chevron-right" }, 12., Theme::text_caption()))
-                        .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate()
+                        .child(crate::workspace_icons::folder(&n.name, open, 16.))
+                        .child(div().id(label_id.clone()).flex_1().min_w_0().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().tip(&n.path.display().to_string(), None)
                             .children(rename.clone()).when(rename.is_none(), |d| d.child(n.name.clone())))
                         .child(menu)
                         .on_click(cx.listener(move |w, _, _, cx| {
@@ -527,23 +539,23 @@ impl Workspace {
                 }
             } else {
                 let selected = self.file.as_ref() == Some(&n.path);
-                let book = crate::workspace_fs::DocKind::of(&n.path) == Some(crate::workspace_fs::DocKind::Book);
                 let path = n.path.clone();
                 out.push(
                     div()
                         .id(id)
                         .h(px(28.))
-                        .pl(px(12. + depth as f32 * 12.))
+                        .pl(px(8. + indent))
                         .pr(px(6.))
                         .flex()
                         .items_center()
-                        .gap(px(6.))
+                        .gap(px(5.))
                         .rounded(px(ROW_R))
                         .cursor_pointer()
                         .when(selected, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
                         .when(!selected, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
-                        .child(icon(if book { "library" } else { "file-text" }, 15., Theme::icon()))
-                        .child(div().flex_1().min_w_0().text_size(px(12.)).truncate()
+                        .child(div().w(px(12.)).flex_none())
+                        .child(crate::workspace_icons::file(&n.path, 16.))
+                        .child(div().id(label_id).flex_1().min_w_0().text_size(px(12.)).truncate().tip(&n.path.display().to_string(), None)
                             .children(rename.clone()).when(rename.is_none(), |d| d.child(n.name.clone())))
                         .child(menu)
                         .on_click(cx.listener(move |w, _, window, cx| {
@@ -571,7 +583,9 @@ impl Workspace {
             .rounded(px(ROW_R))
             .cursor_pointer()
             .hover(|s| s.bg(Theme::sidebar_hover()))
-            .child(div().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().child(name))
+            .child(div().flex().items_center().gap(px(6.))
+                .child(crate::workspace_icons::file(&hit.path, 16.))
+                .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().child(name)))
             .when_some(snippet, |d, s| d.child(div().mt(px(1.)).text_size(px(10.)).line_height(px(14.)).text_color(Theme::text_caption()).truncate().child(s)))
             .on_click(cx.listener(move |w, _, window, cx| if let Some(id) = id { w.open_workspace_file(id, path.clone(), window, cx) } else { w.load_file(path.clone(), window, cx) }))
     }

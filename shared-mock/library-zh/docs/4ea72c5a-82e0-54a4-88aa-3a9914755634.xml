@@ -1,0 +1,14 @@
+<title>欢迎使用 MarkdownX</title>
+<p>把想法写下来，再慢慢整理成文档或交互书。这几篇指南可以直接编辑；熟悉之后，也可以删除。</p>
+<callout emoji="✦" background-color="light-blue" border-color="blue"><p>你的文件保存在本机，不需要账号。左侧「我的文档」显示工作目录；文档库位于 <code>~/Documents/MarkdownX</code>。</p></callout>
+<h1>从一篇笔记开始</h1>
+<p>在左侧目录旁点击 <code>+</code> 新建 Markdown 文件，或按 <code>⌘ N</code> 新建文档库页面。</p>
+<checkbox done="false">写下第一个想法</checkbox>
+<checkbox done="false">在空行输入 <code>/</code>，插入表格或待办事项</checkbox>
+<checkbox done="false">选中文字并按 <code>⌘ B</code> 加粗</checkbox>
+<checkbox done="false">阅读 <cite type="doc" doc-id="3e98a021-e013-5d8f-b41f-5c3fbf3dbfc3" file-type="docx">写作：Markdown 与文档库</cite></checkbox>
+<h1>整理和查找文件</h1>
+<p>「我的文档」默认显示系统文档目录下的 <code>MarkDown-Demo</code>。点击旁边的 <code>+</code> 添加其他文件夹，多个目录树可以同时显示；目录的 <code>…</code> 菜单可以刷新、更换或移除工作区，移除不会删除文件。</p>
+<p>目录和文件类型有不同图标与颜色。按 <code>⌘ K</code> 搜索文档库和工作目录；其他文件类型可以从 <code>…</code> 菜单选择「使用系统应用打开」。左侧也可以新建、重命名文件，删除时会先确认并移入系统回收站。</p>
+<h1>继续了解</h1>
+<p>阅读 <cite type="doc" doc-id="3e98a021-e013-5d8f-b41f-5c3fbf3dbfc3" file-type="docx">写作：Markdown 与文档库</cite> 了解 Markdown 和文档库，再阅读 <cite type="doc" doc-id="b1004f41-9cb8-5365-96e4-eeee20b95f21" file-type="docx">制作交互书</cite> 了解交互内容和 <code>.mdxb</code> 书。</p>

@@ -20,8 +20,9 @@ def cargo(*args, env=None):
     subprocess.run(["cargo", *args], check=True, env=env)
 
 cargo("test", "--release", "--workspace", "--locked")
-cargo("test", "--release", "--locked", "-p", "fdl_core", "library_round_trips", "--", "--ignored",
-      env={**os.environ, "FDL_ROUNDTRIP_DIR": str(Path("shared-mock/library/docs").resolve())})
+for library in ("library", "library-zh"):
+    cargo("test", "--release", "--locked", "-p", "fdl_core", "library_round_trips", "--", "--ignored",
+          env={**os.environ, "FDL_ROUNDTRIP_DIR": str(Path("shared-mock", library, "docs").resolve())})
 source = Path("shared-mock/guides/assets")
 bundled = Path("shared-mock/library/assets/guides")
 for image in source.rglob("*"):

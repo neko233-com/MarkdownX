@@ -49,6 +49,16 @@ fn log_pointer(x: f32, y: f32, what: &str) {
     }
 }
 
+/// Move the hidden test window off-screen before showing it without activation.
+#[cfg(target_os = "windows")]
+pub fn park_window(window: &Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW}};
+    let RawWindowHandle::Win32(raw) = HasWindowHandle::window_handle(window).unwrap().as_raw() else { panic!("not a Windows window") };
+    let hwnd = HWND(raw.hwnd.get() as *mut std::ffi::c_void);
+    unsafe { SetWindowPos(hwnd, None, -32000, -32000, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW).expect("park test window"); }
+}
+
 fn ease(t: f32) -> f32 {
     if t < 0.5 { 4. * t * t * t } else { 1. - (-2. * t + 2.).powi(3) / 2. }
 }
@@ -250,6 +260,14 @@ pub fn start(window: &mut Window, cx: &mut App) {
             }
             if cmd == "check-workspace-startup" {
                 cx.update(|cx| crate::app::check_workspace_startup(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            if cmd == "check-onboarding" {
+                cx.update(|cx| crate::app::check_onboarding(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            if cmd == "onboarding-language" {
+                cx.update(|cx| crate::app::onboarding_test_language(rest.trim(), cx)).unwrap();
                 continue;
             }
             if cmd == "check-multi-workspace" {

@@ -415,7 +415,7 @@ impl Workspace {
                 if *hovered && w.search_sel != Some(ix) { w.search_sel = Some(ix); cx.notify(); }
             }))
             .on_click(cx.listener(move |w, _, window, cx| w.pick_search(ix, window, cx)))
-            .child(doc_icon())
+            .child(div().flex_none().size(px(24.)).mr(px(10.)).flex().items_center().justify_center().child(crate::workspace_icons::file(&hit.path, 18.)))
             .child(div().flex_1().min_w_0().flex().flex_col().overflow_hidden()
                 .child(div().text_size(px(13.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).overflow_hidden().whitespace_nowrap().text_ellipsis().child(ui_text(hit.rel.clone()).hit(title_hit, Theme::link())))
                 .children(summary.map(|(text, hits)| div().text_size(px(12.)).line_height(px(20.)).child(summary_text(text, hits, width, window))))
