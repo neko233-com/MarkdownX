@@ -15,6 +15,11 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.16", &[
+        ("首次打开时按界面语言展示可编辑示例和入门指南", "Start with an editable sample and guides in your interface language"),
+        ("目录和文件按类型显示彩色图标，搜索结果可打开其他文件", "See color-coded folders and file types, and open other files from search"),
+        ("恢复最近使用的工作区文件，同时保留已有文档和旧指南", "Restore recent workspace files while preserving existing documents and guides"),
+    ]),
     ("0.1.15", &[
         ("首次打开时按界面语言展示可编辑示例和入门指南", "Start with an editable sample and guides in your interface language"),
         ("示例显示在默认工作目录中，重启时恢复最近打开的工作区文件", "Find the sample in the default workspace and restore your last workspace file"),

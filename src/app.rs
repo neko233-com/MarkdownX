@@ -750,6 +750,10 @@ impl Workspace {
                     if let Some(root) = w.workspace_roots.iter_mut().find(|r| r.id == id) { root.canonical = Some(canonical); }
                     if found && w.view == View::Home && w.current == current && w.file.is_none() && !w.unsaved && !w.search_open && w.active_workspace == active {
                         w.open_workspace_file_now(id, path, window, cx);
+                    } else if !found && crate::settings::prefs().last_workspace_file.as_ref() == Some(&path) {
+                        // A successfully scanned folder proves this file is gone; an
+                        // unavailable folder keeps its remembered path for later.
+                        w.set_pref(|p| p.last_workspace_file = None, cx);
                     }
                 });
             }).detach();
@@ -1083,11 +1087,15 @@ impl Workspace {
     /// Show `id`; false when it could not be opened (or the open document
     /// could not be saved first, see [`Self::save_before`]).
     pub fn try_open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // The constructor opens an initial library page before restoring a
+        // workspace file. Only a later, explicit library choice clears it.
+        let explicit = self.current.is_some() || self.file.is_some() || self.view != View::Doc;
         if self.view != View::Doc {
             self.view = View::Doc;
             cx.notify();
         }
         if self.current.as_deref() == Some(id) {
+            if explicit && !self.quick_note && crate::settings::prefs().last_workspace_file.is_some() { self.set_pref(|p| p.last_workspace_file = None, cx); }
             return true;
         }
         let target = id.to_string();
@@ -1133,13 +1141,12 @@ impl Workspace {
             && let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
                 e.meta.opened = m.opened;
             }
-        let was_file = self.file.is_some();
         self.editor = Some(editor);
         self.current = Some(id.to_string());
         self.file = None;
         self.file_snapshot = None;
         self.file_source = None;
-        if was_file && !self.quick_note && crate::settings::prefs().last_workspace_file.is_some() { self.set_pref(|p| p.last_workspace_file = None, cx); }
+        if explicit && !self.quick_note && crate::settings::prefs().last_workspace_file.is_some() { self.set_pref(|p| p.last_workspace_file = None, cx); }
         crate::quick_note::used(id, cx);
         self.reveal_in_tree(id);
         self.sync_sub_pages(cx);
@@ -2268,7 +2275,10 @@ pub(crate) fn check_global_search(args: &str, cx: &mut App) {
     assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
     assert!(root.join(".markdownx-global-search-test").is_file());
     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
-    handle.update(cx, |ws, window, cx| match phase {
+    handle.update(cx, |ws, window, cx| {
+        #[cfg(target_os = "windows")]
+        if std::env::var_os("FDL_NOPARK").is_none() { assert!(window.bounds().origin.x < px(-10000.), "scripted test window must remain off-screen"); }
+        match phase {
         "ready" => {
             assert!(ws.workspace_roots.iter().any(|r| r.spec.path == root && r.tree.is_some()), "folder tree must load");
         }
@@ -2297,9 +2307,19 @@ pub(crate) fn check_global_search(args: &str, cx: &mut App) {
             assert!(!ws.search_open);
             assert_eq!(ws.file.as_deref(), Some(root.join("notes/b.md").as_path()));
         }
+        "file-action" => {
+            let image = root.join("notes/pixelassetunique.png");
+            assert!(ws.search_open && ws.global_folder_hits.iter().any(|hit| hit.path == image));
+            let id = ws.workspace_roots.iter().find(|r| r.spec.path == root).unwrap().id;
+            let before = ws.file.clone();
+            ws.close_search(window, cx);
+            ws.open_workspace_external(id, image, cx);
+            assert_eq!(ws.file, before, "opening another file with a system app must not replace the editor");
+        }
         "link" => assert!(matches!(ws.editor.as_ref().unwrap().read(cx).menu.as_ref(), Some(crate::editor::view::Menu::Link { .. }))),
         "legacy" => assert!(!ws.search_open && ws.folder_query.read(cx).is_focused(window)),
         _ => panic!("unknown global search check"),
+        }
     }).unwrap();
     eprintln!("global-search: {phase} PASS");
 }
@@ -2330,6 +2350,8 @@ pub(crate) fn check_onboarding(phase: &str, cx: &mut App) {
                 assert_eq!(crate::settings::prefs().last_workspace_file.as_ref(), Some(&path));
             }
             "existing" => { assert!(ws.file.is_none()); assert_eq!(ws.view, View::Home); }
+            "missing" => { assert!(ws.file.is_none()); assert_eq!(ws.view, View::Home); assert!(crate::settings::prefs().last_workspace_file.is_none()); }
+            "library" => { assert!(ws.file.is_none()); assert_eq!(ws.view, View::Doc); assert!(ws.current.is_some()); assert!(crate::settings::prefs().last_workspace_file.is_none()); }
             "edited-legacy" => { assert!(ws.file.is_none()); assert_eq!(ws.view, View::Doc); assert_eq!(ws.current.as_deref(), Some(crate::guides::WELCOME_ID)); }
             "ui-en" => assert!(crate::settings::english()),
             "target" => {
@@ -2351,6 +2373,24 @@ pub(crate) fn onboarding_test_language(language: &str, cx: &mut App) {
     assert!(language == "zh" || language == "en");
     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
     handle.update(cx, |ws, _, cx| ws.set_pref(|p| { p.language = language.into(); p.english = language == "en"; }, cx)).unwrap();
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn onboarding_test_library(cx: &mut App) {
+    let root = std::path::PathBuf::from(std::env::var_os("MARKDOWNX_TEST_WORKSPACE_ROOT").expect("test root"));
+    assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(root.join(".markdownx-workspace-test").is_file());
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |ws, window, cx| {
+        let id = ws.entries.first().expect("starter guide").id.clone();
+        ws.show_view(View::Home, cx);
+        ws.open(&id, window, cx);
+        // Opening the already loaded library page from Home must clear a
+        // stale remembered file as well as opening a different page.
+        ws.set_pref(|p| p.last_workspace_file = Some(root.join("missing.md")), cx);
+        ws.show_view(View::Home, cx);
+        ws.open(&id, window, cx);
+    }).unwrap();
 }
 
 /// Validate startup and folder selection only within an explicitly marked test root.

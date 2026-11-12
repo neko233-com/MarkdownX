@@ -8,7 +8,7 @@ use crate::settings::display_title;
 use crate::store::Entry;
 use crate::theme::{self, Theme};
 use crate::trash::scrim;
-use crate::ui::{ROW_RADIUS, format_visit, icon, ui_runs, ui_text};
+use crate::ui::{ROW_RADIUS, TipExt, format_visit, icon, ui_runs, ui_text};
 use gpui::{prelude::FluentBuilder, *};
 use std::ops::Range;
 use std::time::Duration;
@@ -408,6 +408,7 @@ impl Workspace {
         let title_hit = find_ci(&hit.rel, q);
         let summary = hit.snippet.as_ref().map(|text| (text.clone(), find_all(text, q)));
         let folder = self.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &hit.root)).map(|r| r.spec.name()).unwrap_or_else(|| hit.root.display().to_string());
+        let external = (crate::workspace_fs::DocKind::of(&hit.path).is_none()).then(|| self.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &hit.root)).map(|r| (r.id, hit.path.clone()))).flatten();
         div().id(("search-hit", ix)).flex_none().pt(px(8.)).pr(px(8.)).pb(px(8.)).pl(px(12.))
             .flex().items_center().rounded(px(ROW_RADIUS)).cursor_pointer()
             .when(self.search_sel == Some(ix), |d| d.bg(Theme::fill_hover()))
@@ -420,6 +421,12 @@ impl Workspace {
                 .child(div().text_size(px(13.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text()).overflow_hidden().whitespace_nowrap().text_ellipsis().child(ui_text(hit.rel.clone()).hit(title_hit, Theme::link())))
                 .children(summary.map(|(text, hits)| div().text_size(px(12.)).line_height(px(20.)).child(summary_text(text, hits, width, window))))
                 .child(div().mt(px(2.)).text_size(px(12.)).text_color(Theme::text_caption()).truncate().child(format!("{} · {}", crate::settings::tr("文件夹", "Folder"), folder))))
+            .when_some(external, |d, (id, path)| d.child(div().id(("search-open-system", ix)).size(px(26.)).flex_none().flex().items_center().justify_center().rounded(px(6.)).cursor_pointer()
+                .hover(|s| s.bg(Theme::fill_hover_strong())).child(icon("export", 15., Theme::icon()))
+                .tip(crate::settings::tr("使用系统应用打开", "Open with system app"), None)
+                .on_mouse_down(MouseButton::Left, cx.listener(move |w, _: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation(); w.close_search(window, cx); w.open_workspace_external(id, path.clone(), cx);
+                }))))
     }
 
     pub(crate) fn render_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {

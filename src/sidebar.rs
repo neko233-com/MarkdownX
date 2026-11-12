@@ -569,6 +569,7 @@ impl Workspace {
 
     fn folder_hit_row(&self, hit: &crate::workspace_fs::Hit, cx: &mut Context<Self>) -> Stateful<Div> {
         let path = hit.path.clone();
+        let menu_path = path.clone();
         let root = self.workspace_roots.iter().find(|r| crate::workspaces::same_path(&r.spec.path, &hit.root));
         let id = root.map(|r| r.id);
         let name = root.map_or_else(|| hit.rel.clone(), |r| format!("{} / {}", r.spec.name(), hit.rel));
@@ -585,7 +586,14 @@ impl Workspace {
             .hover(|s| s.bg(Theme::sidebar_hover()))
             .child(div().flex().items_center().gap(px(6.))
                 .child(crate::workspace_icons::file(&hit.path, 16.))
-                .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().child(name)))
+                .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(Theme::sidebar_text()).truncate().child(name))
+                .when_some(id, |d, root_id| d.child(div().id(SharedString::from(format!("fh-menu-{}-{}", hit.root.display(), hit.path.display())))
+                    .size(px(20.)).flex_none().flex().items_center().justify_center().rounded(px(5.)).cursor_pointer()
+                    .hover(|s| s.bg(Theme::sidebar_selected())).child(icon("ellipsis", 13., Theme::text_caption()))
+                    .tip(crate::settings::tr("文件操作", "File actions"), None)
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |w, ev: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation(); w.workspace_menu = Some(crate::workspaces::WorkspaceMenu { target: crate::workspaces::WorkspaceMenuTarget::Node { root: root_id, path: menu_path.clone(), dir: false }, pos: ev.position }); cx.notify();
+                    })))))
             .when_some(snippet, |d, s| d.child(div().mt(px(1.)).text_size(px(10.)).line_height(px(14.)).text_color(Theme::text_caption()).truncate().child(s)))
             .on_click(cx.listener(move |w, _, window, cx| if let Some(id) = id { w.open_workspace_file(id, path.clone(), window, cx) } else { w.load_file(path.clone(), window, cx) }))
     }

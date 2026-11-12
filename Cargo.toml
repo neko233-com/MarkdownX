@@ -1,6 +1,6 @@
 [package]
 name = "markdownx"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2024"
 description = "Interactive books for the next generation of learners: Markdown, DocxXML, Canvas, HTML, one .mdxb file"
 license = "MIT"

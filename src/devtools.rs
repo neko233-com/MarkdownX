@@ -270,6 +270,10 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 cx.update(|cx| crate::app::onboarding_test_language(rest.trim(), cx)).unwrap();
                 continue;
             }
+            if cmd == "onboarding-library" {
+                cx.update(crate::app::onboarding_test_library).unwrap();
+                continue;
+            }
             if cmd == "check-multi-workspace" {
                 cx.update(|cx| crate::app::check_multi_workspace(rest.trim(), cx)).unwrap();
                 continue;

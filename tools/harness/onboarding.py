@@ -26,13 +26,15 @@ def main():
             (root / 'documents').mkdir()
             return root
 
-        def run(root, phase, language, *args, expected_file=None, change_language=None, expect_english=False):
+        def run(root, phase, language, *args, expected_file=None, change_language=None, expect_english=False, open_library=False):
             script = root / 'steps.txt'
             steps = f'wait 1600\ncheck-onboarding {phase}\n'
             if change_language:
                 steps += f'onboarding-language {change_language}\nwait 300\ncheck-onboarding ui-en\ncheck-onboarding {phase}\n'
             if expect_english:
                 steps += 'check-onboarding ui-en\n'
+            if open_library:
+                steps += 'onboarding-library\nwait 300\ncheck-onboarding library\n'
             script.write_text(steps + 'quit\n', encoding='utf-8')
             env = dict(os.environ, MARKDOWNX_HOME=str(root / 'library'), MARKDOWNX_LOG_DIR=str(root / 'logs'),
                        MARKDOWNX_TEST_FIRST_RUN='1', MARKDOWNX_TEST_LANGUAGE=language,
@@ -44,7 +46,7 @@ def main():
             result = subprocess.run([str(binary), *map(str, args)], cwd=root, env=env, capture_output=True,
                                     text=True, encoding='utf-8', errors='replace', timeout=120)
             output = result.stdout + result.stderr
-            if result.returncode or f'onboarding: {phase} PASS' not in output or ((change_language or expect_english) and 'onboarding: ui-en PASS' not in output):
+            if result.returncode or f'onboarding: {phase} PASS' not in output or ((change_language or expect_english) and 'onboarding: ui-en PASS' not in output) or (open_library and 'onboarding: library PASS' not in output):
                 raise SystemExit(f'Onboarding {root.name}/{phase} failed:\n' + output[-7000:])
 
         for language, filename, title in (('zh', '开始使用.md', '欢迎使用 MarkdownX'), ('en', 'Getting started.md', 'Welcome to MarkdownX')):
@@ -58,9 +60,17 @@ def main():
             assert ('Welcome to MarkdownX' not in guide) if language == 'zh' else ('欢迎使用 MarkdownX' not in guide)
             changed = text + '\nUser content remains untouched.\n'
             path.write_text(changed, encoding='utf-8')
-            run(root, language, 'zh', expect_english=language == 'zh')
+            run(root, language, 'zh', expect_english=language == 'zh', open_library=True)
             assert path.read_text(encoding='utf-8') == changed
-            assert json.loads((root / 'library/preferences.json').read_text(encoding='utf-8'))['starter_offered']
+            prefs = json.loads((root / 'library/preferences.json').read_text(encoding='utf-8'))
+            assert prefs['starter_offered'] and not prefs.get('last_workspace_file')
+            run(root, 'library', 'zh')
+
+        root = setup('missing')
+        run(root, 'zh', 'zh')
+        (root / 'documents/MarkDown-Demo/开始使用.md').unlink()
+        run(root, 'missing', 'zh')
+        assert not json.loads((root / 'library/preferences.json').read_text(encoding='utf-8')).get('last_workspace_file')
 
         root = setup('existing')
         folder = root / 'documents/MarkDown-Demo'
@@ -90,7 +100,7 @@ def main():
         run(root, 'target', 'zh', target, expected_file=target)
         assert not list((root / 'documents/MarkDown-Demo').glob('*.md'))
         assert target.read_text(encoding='utf-8') == '# A chosen file\n'
-        print('Onboarding: PASS (both languages, workspace tree, restart and language change, existing files, untouched/edited legacy guides, explicit startup file).')
+        print('Onboarding: PASS (both languages, tree, restart, language change, missing file, library switch, existing files, legacy guides and startup file).')
 
 
 if __name__ == '__main__':

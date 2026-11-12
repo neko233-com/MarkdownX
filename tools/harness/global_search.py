@@ -27,6 +27,7 @@ def main():
         (empty / '.markdownx-global-search-test').touch()
         for name in ('a.md', 'b.md'):
             (folder / 'notes' / name).write_text('# Test\n\nglobalsearchuniquexyz in a file\n', encoding='utf-8')
+        (folder / 'notes' / 'pixelassetunique.png').write_bytes(b'\x89PNG\r\n')
         library = temp / 'library'
         shutil.copytree(ROOT / 'tools/harness/lib_clean', library)
         doc = next((library / 'docs').glob('*.xml'))
@@ -55,6 +56,10 @@ check-global-search moved {folder}
 key enter
 wait 500
 check-global-search picked {folder}
+key {modifier}-k
+type pixelassetunique
+wait 1300
+check-global-search file-action {folder}
 key {modifier}-shift-k
 wait 250
 check-global-search link {folder}
@@ -92,9 +97,10 @@ check-global-search results {folder}
 quit
 ''', encoding='utf-8')
         env = dict(os.environ, MARKDOWNX_HOME=str(library), MARKDOWNX_LOG_DIR=str(temp / 'logs'), FDL_SCRIPT=str(script), FDL_SHOTS=str(temp))
+        env.pop('FDL_NOPARK', None)
         result = subprocess.run([str(binary)], cwd=temp, env=env, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=90)
         output = result.stdout + result.stderr
-        expected = ('ready', 'open', 'results', 'moved', 'picked', 'link', 'legacy', 'empty', 'closed')
+        expected = ('ready', 'open', 'results', 'moved', 'picked', 'file-action', 'link', 'legacy', 'empty', 'closed')
         if result.returncode or any(f'global-search: {phase} PASS' not in output for phase in expected):
             raise SystemExit('Global search UI check failed:\n' + output[:6000] + '\n…\n' + output[-1500:])
         print('Global search UI: PASS (library, folders, stale query, keyboard selection, focus, link and legacy shortcuts).')
