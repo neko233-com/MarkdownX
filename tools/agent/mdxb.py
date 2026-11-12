@@ -25,12 +25,12 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 FORMAT = "markdownx.book"
-VERSION = 1
+VERSION = 2
 MAX_ASSET = 16 * 1024 * 1024
 MAX_TOTAL = 64 * 1024 * 1024
 IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 HTML_IMAGE = re.compile(r'(<img\b[^>]*\bsrc=")([^"]+)(")', re.I)
-ASSET_KEY = re.compile(r"^assets/[A-Za-z0-9._/-]+$")
+ASSET_KEY = re.compile(r"^assets/[^\\:\x00-\x1f\x7f-\x9f]+$")
 
 
 def die(message: str, code: int = 2) -> "NoReturn":
@@ -48,16 +48,16 @@ def read_json(path: Path) -> dict:
 
 def slug(text: str) -> str:
     text = text.strip().lower()
-    text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", text)
-    return text.strip("-") or "book"
+    text = ''.join(c if c.isalnum() or c in '-_' else '-' for c in text)
+    return re.sub(r'-+', '-', text).strip('-') or "book"
 
 
 def validate_book(book: dict, source: str = "book") -> list[str]:
     errors: list[str] = []
     if book.get("format") != FORMAT:
         errors.append(f"{source}: format is {book.get('format')!r}, expected {FORMAT!r}")
-    if book.get("version") != VERSION:
-        errors.append(f"{source}: version is {book.get('version')!r}, expected {VERSION}")
+    if book.get("version") not in (1, VERSION):
+        errors.append(f"{source}: unsupported version {book.get('version')!r}")
     chapters = book.get("chapters")
     if not isinstance(chapters, list) or not chapters:
         errors.append(f"{source}: needs a non-empty chapters array")
@@ -85,6 +85,16 @@ def validate_book(book: dict, source: str = "book") -> list[str]:
                 errors.append(f"{source}: chapter {cid or i!r} is not valid DocxXML: {exc}")
         elif fmt not in ("markdown", "md"):
             errors.append(f"{source}: chapter {cid or i!r} has unknown format {fmt!r}")
+        fmt_en = chapter.get("format_en", fmt)
+        if "format_en" in chapter and book.get("version") != 2:
+            errors.append(f"{source}: chapter {cid or i!r} needs version 2 for format_en")
+        if fmt_en not in ("docxxml", "markdown", "md"):
+            errors.append(f"{source}: chapter {cid or i!r} has unknown translation format {fmt_en!r}")
+        elif fmt_en == "docxxml" and chapter.get("content_en"):
+            try:
+                ET.fromstring(f"<root>{chapter['content_en']}</root>")
+            except ET.ParseError as exc:
+                errors.append(f"{source}: chapter {cid or i!r} has invalid translated DocxXML: {exc}")
         title = chapter.get("title")
         if title is not None and not isinstance(title, dict):
             errors.append(f"{source}: chapter {cid or i!r} title must be an object")
@@ -165,6 +175,8 @@ def collect_assets(root: Path, assets: dict[str, dict]) -> None:
     if not folder.is_dir():
         return
     for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+        if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+            die(f"asset escapes the book folder: {path}")
         raw = path.read_bytes()
         if len(raw) > MAX_ASSET:
             continue
@@ -225,8 +237,8 @@ def chapter_sources(root: Path) -> list[Path]:
     Markdown makes it newer, so the XML only restores structure while untouched.
     """
     files = [p for p in root.rglob("*") if p.is_file() and ".git" not in p.parts
-             and "node_modules" not in p.parts and not p.name.endswith(".en.md")
-             and p.suffix.lower() in (".md", ".xml")]
+             and "node_modules" not in p.parts and not p.name.endswith((".en.md", ".en.xml", ".en.docxxml"))
+             and p.suffix.lower() in (".md", ".xml", ".docxxml")]
     by_stem: dict[Path, Path] = {}
     for path in files:
         stem = path.with_suffix("")
@@ -235,7 +247,7 @@ def chapter_sources(root: Path) -> list[Path]:
             by_stem[stem] = path
             continue
         # Prefer XML only if it is at least as new as its Markdown sibling.
-        if path.suffix.lower() == ".xml" and path.stat().st_mtime >= current.stat().st_mtime:
+        if path.suffix.lower() in (".xml", ".docxxml") and path.stat().st_mtime >= current.stat().st_mtime:
             by_stem[stem] = path
     return sorted(by_stem.values())
 
@@ -253,39 +265,60 @@ def cmd_pack(args: argparse.Namespace) -> int:
     collect_assets(root, assets)
     chapters = []
     meta_path = root / "book.json"
-    meta_chapters = read_json(meta_path).get("chapters", []) if meta_path.is_file() else []
+    meta = read_json(meta_path) if meta_path.is_file() else {}
+    meta_chapters = meta.get("chapters", [])
+    for key, mime in (meta.get("asset_mimes") or {}).items():
+        if key in assets and isinstance(mime, str):
+            assets[key]["mime"] = mime
     for path in files:
         if args.skip_readme and path.name.lower() == "readme.md":
             continue
-        chapter = chapter_from_xml(path, root, assets) if path.suffix.lower() == ".xml" \
+        chapter = chapter_from_xml(path, root, assets) if path.suffix.lower() in (".xml", ".docxxml") \
             else chapter_from_markdown(path, root, assets)
-        english = path.with_name(path.stem + ".en.md")
-        if english.is_file():
-            chapter["content_en"] = english.read_text(encoding="utf-8")
-        if len(chapters) < len(meta_chapters) and isinstance(meta_chapters[len(chapters)], dict):
+        relative = path.relative_to(root).as_posix()
+        kept = next((m for m in meta_chapters if isinstance(m, dict) and relative in (m.get("file"), m.get("source"))), None)
+        if kept is None and len(chapters) < len(meta_chapters) and isinstance(meta_chapters[len(chapters)], dict):
             kept = meta_chapters[len(chapters)]
+        if kept:
             if kept.get("id"):
                 chapter["id"] = kept["id"]
             if kept.get("title"):
                 chapter["title"] = kept["title"]
             if kept.get("content_en"):
                 chapter["content_en"] = kept["content_en"]
+        english_name = kept.get("content_en_file") if kept else None
+        english = (root / english_name).resolve() if english_name else path.with_name(path.stem + ".en.md")
+        try:
+            english.relative_to(root)
+        except ValueError:
+            die(f"translation is outside the book folder: {english_name}")
+        if english.is_file():
+            chapter["content_en"] = english.read_text(encoding="utf-8")
+            fmt_en = (kept.get("format_en") if kept else None) or ("docxxml" if english.suffix.lower() in (".xml", ".docxxml") else "markdown")
+            if fmt_en != chapter["format"]:
+                chapter["format_en"] = fmt_en
         chapters.append(chapter)
     if not chapters:
         die("no chapters after skipping README")
-    title = args.title or root.name
+    original_title = meta.get("title") if isinstance(meta.get("title"), dict) else {}
+    title = args.title or original_title.get("zh") or original_title.get("en") or root.name
+    original_subtitle = meta.get("subtitle") if isinstance(meta.get("subtitle"), dict) else {}
+    theme = dict(meta.get("theme") or {"accent": "#b05226", "background": "", "text": "", "font": "serif"})
+    if args.accent:
+        theme["accent"] = args.accent
     book = {
         "format": FORMAT,
-        "version": VERSION,
-        "id": args.id or slug(title),
-        "title": {"zh": title, "en": args.title_en or title},
-        "subtitle": {"zh": args.subtitle or "", "en": args.subtitle_en or args.subtitle or ""},
-        "authors": args.author or [],
-        "languages": ["zh", "en"],
-        "default_language": args.lang,
-        "cover": args.cover or "",
-        "theme": {"accent": args.accent, "background": "", "text": "", "font": "serif"},
-        "reading": {"layout": "scroll", "max_width": 760, "show_toc": True},
+        "version": 2 if any("format_en" in chapter for chapter in chapters) else 1,
+        "id": args.id or meta.get("id") or slug(title),
+        "title": {"zh": title, "en": args.title_en or original_title.get("en") or title},
+        "subtitle": {"zh": args.subtitle if args.subtitle is not None else original_subtitle.get("zh", ""),
+                     "en": args.subtitle_en if args.subtitle_en is not None else original_subtitle.get("en", args.subtitle or "")},
+        "authors": args.author or meta.get("authors") or [],
+        "languages": meta.get("languages") or ["zh", "en"],
+        "default_language": args.lang or meta.get("default_language") or "zh",
+        "cover": args.cover or meta.get("cover") or "",
+        "theme": theme,
+        "reading": meta.get("reading") or {"layout": "scroll", "max_width": 760, "show_toc": True},
         "chapters": chapters,
         "assets": assets,
         "created": 0,
@@ -314,14 +347,22 @@ def cmd_unpack(args: argparse.Namespace) -> int:
     out = Path(args.folder)
     out.mkdir(parents=True, exist_ok=True)
     meta = {k: v for k, v in book.items() if k not in ("chapters", "assets")}
-    meta["chapters"] = [{k: v for k, v in chapter.items() if k != "content"} for chapter in book.get("chapters", [])]
-    (out / "book.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    meta["asset_mimes"] = {key: value.get("mime", "") for key, value in (book.get("assets") or {}).items()}
+    meta["chapters"] = []
     for i, chapter in enumerate(book.get("chapters", []), 1):
         ext = "xml" if chapter.get("format") == "docxxml" else "md"
         name = f"{i:02d}-{slug(chapter.get('id') or str(i))}.{ext}"
         (out / name).write_text(chapter.get("content", ""), encoding="utf-8")
+        item = {k: v for k, v in chapter.items() if k not in ("content", "content_en")}
+        item["file"] = name
         if chapter.get("content_en"):
-            (out / f"{i:02d}-{slug(chapter.get('id') or str(i))}.en.md").write_text(chapter["content_en"], encoding="utf-8")
+            en_ext = "xml" if chapter.get("format_en", chapter.get("format")) == "docxxml" else "md"
+            en_name = f"{i:02d}-{slug(chapter.get('id') or str(i))}.en.{en_ext}"
+            (out / en_name).write_text(chapter["content_en"], encoding="utf-8")
+            item["content_en_file"] = en_name
+            item["format_en"] = chapter.get("format_en", chapter.get("format"))
+        meta["chapters"].append(item)
+    (out / "book.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     for key, asset in (book.get("assets") or {}).items():
         path = out / key
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -398,8 +439,8 @@ def main(argv: list[str] | None = None) -> int:
     pack.add_argument("--subtitle-en")
     pack.add_argument("--author", action="append")
     pack.add_argument("--id")
-    pack.add_argument("--lang", default="zh")
-    pack.add_argument("--accent", default="#b05226")
+    pack.add_argument("--lang")
+    pack.add_argument("--accent")
     pack.add_argument("--cover")
     pack.add_argument("--glob")
     pack.add_argument("--skip-readme", action="store_true")

@@ -556,6 +556,18 @@ pub fn to_inline(kind: InlineKind) -> Inline {
     }
 }
 
+/// Change an inline attachment's source while preserving its other XML attributes.
+pub fn remap_inline_file(inline: &mut Inline, file: FileBlock) -> Result<()> {
+    let mut nodes = parse_dom(&inline.xml)?;
+    let Some(Node::El(element)) = nodes.first_mut() else { return Err(anyhow!("invalid inline attachment")); };
+    if element.name != "source" { return Err(anyhow!("invalid inline attachment")); }
+    let key = if file.src_kind == "token" { "token" } else { "path" };
+    element.attrs.retain(|(name, _)| name != "path" && name != "token");
+    element.attrs.push((key.to_string(), file.src));
+    *inline = inline_of(element);
+    Ok(())
+}
+
 /// An inline element read from a file: kept verbatim, understood if we can.
 fn inline_of(e: &Element) -> Inline {
     let kind = match e.name.as_str() {

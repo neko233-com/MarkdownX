@@ -13,6 +13,10 @@ export function mountInteractive(block, book, lang) {
   return mountCanvas(block, book, lang);
 }
 
+export function disposeInteractive(root) {
+  root.querySelectorAll('.widget').forEach(widget => widget.dispose?.());
+}
+
 function shell(block, lang, body) {
   const title = block.title || (lang === 'zh' ? '交互内容' : 'Interactive');
   const tag = block.kind === 'html' ? 'HTML' : 'Canvas';
@@ -34,7 +38,8 @@ function mountHtml(block) {
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.setAttribute('title', block.title || 'HTML widget');
   frame.style.height = `${Math.max(140, block.height)}px`;
-  const src = `<!doctype html><html><head><meta charset="utf-8"><style>
+  const src = `<!doctype html><html><head><meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"><style>
     html,body{margin:0;height:100%;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:#22201c;background:#fff}
     body{display:grid;place-items:center;padding:16px;box-sizing:border-box}
     button{font:inherit;padding:7px 12px;border:1px solid #cfc8ba;border-radius:8px;background:#f7f3ea;cursor:pointer}
@@ -68,13 +73,16 @@ function mountCanvas(block, book, lang) {
   const fig = shell(block, lang === 'zh' ? 'zh' : 'en', body);
   fig.dataset.kind = spec.kind || 'invalid';
 
-  requestAnimationFrame(() => {
+  let disposed = false;
+  const frame = requestAnimationFrame(() => {
+    if (disposed) return;
     const kind = String(spec.kind || '').toLowerCase();
     if (kind === 'quadratic') quadratic(runtime);
     else if (kind === 'unitcircle' || kind === 'unit-circle') unitCircle(runtime);
     else if (kind === 'projectile') projectile(runtime);
     else empty(runtime);
   });
+  fig.dispose = () => { disposed = true; cancelAnimationFrame(frame); runtime.stop?.(); };
   return fig;
 }
 
@@ -95,9 +103,11 @@ function setupCanvas(rt, aspect = 0.56) {
     rt.h = h;
     rt.redraw?.();
   };
-  new ResizeObserver(resize).observe(wrap);
+  const sizeObserver = new ResizeObserver(resize);
+  sizeObserver.observe(wrap);
   const observer = new MutationObserver(() => rt.redraw?.());
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+  rt.stop = () => { sizeObserver.disconnect(); observer.disconnect(); };
   resize();
   return ctx;
 }
@@ -310,9 +320,11 @@ function unitCircle(rt) {
 
 function projectile(rt) {
   let angle = num(rt.spec.angle, 45), speed = num(rt.spec.speed, 14);
-  let t = 0, playing = false, raf = 0;
+  let t = 0, playing = false, raf = 0, started = 0;
   const g = 9.8;
   const ctx = setupCanvas(rt, 0.54);
+  const stopObservers = rt.stop;
+  rt.stop = () => { playing = false; cancelAnimationFrame(raf); stopObservers(); };
   const out = readout(rt);
   const duration = () => (2 * speed * Math.sin((angle * Math.PI) / 180)) / g;
   const world = () => {
@@ -361,18 +373,19 @@ function projectile(rt) {
     out.innerHTML = `<span>${rt.lang === 'zh' ? '射程' : 'Range'} ${range.toFixed(1)} m</span><span>${rt.lang === 'zh' ? '最大高度' : 'Apex'} ${hmax.toFixed(1)} m</span><span>${rt.lang === 'zh' ? '飞行' : 'Flight'} ${flight.toFixed(2)} s</span>`;
   };
   rt.redraw = draw;
-  const tick = () => {
+  const tick = (now) => {
     if (!playing) return;
-    t += 1 / 60;
-    if (t > duration()) { t = duration(); playing = false; }
+    if (!started) started = now;
+    t = Math.min((now - started) / 1000, duration());
+    if (t >= duration()) playing = false;
     draw();
     if (playing) raf = requestAnimationFrame(tick);
+    else play.textContent = rt.lang === 'zh' ? '再发射' : 'Launch again';
   };
   const play = button(rt, rt.lang === 'zh' ? '发射' : 'Launch', () => {
     cancelAnimationFrame(raf);
-    t = 0; playing = true; play.textContent = rt.lang === 'zh' ? '发射中…' : 'Flying…';
-    const loop = () => { tick(); if (playing) raf = requestAnimationFrame(loop); else play.textContent = rt.lang === 'zh' ? '再发射' : 'Launch again'; };
-    loop();
+    t = 0; started = 0; playing = true; play.textContent = rt.lang === 'zh' ? '发射中…' : 'Flying…';
+    raf = requestAnimationFrame(tick);
   });
   slider(rt, rt.lang === 'zh' ? '发射角' : 'Angle', angle, 10, 80, 1, (v) => `${v}°`, (v) => { angle = v; if (!playing) { t = 0; play.textContent = rt.lang === 'zh' ? '发射' : 'Launch'; draw(); } });
   slider(rt, rt.lang === 'zh' ? '初速度' : 'Speed', speed, 4, 24, 0.5, (v) => `${v.toFixed(1)} m/s`, (v) => { speed = v; if (!playing) { t = 0; draw(); } });

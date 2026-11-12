@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail, ensure};
 use std::fs;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 fn is_link(meta: &fs::Metadata) -> bool {
@@ -50,6 +51,10 @@ pub(crate) fn validate_external_open(root: &Path, path: &Path) -> Result<()> {
 }
 
 pub(crate) fn create(root: &Path, parent: &Path, name: &str, dir: bool, protected: &[PathBuf]) -> Result<PathBuf> {
+    create_content(root, parent, name, dir, protected, &[])
+}
+
+pub(crate) fn create_content(root: &Path, parent: &Path, name: &str, dir: bool, protected: &[PathBuf], content: &[u8]) -> Result<PathBuf> {
     checked(root, parent, &[], true)?;
     // Creating next to a protected descendant is fine; creating inside it is not.
     let canonical_parent = parent.canonicalize()?;
@@ -61,11 +66,29 @@ pub(crate) fn create(root: &Path, parent: &Path, name: &str, dir: bool, protecte
     let path = parent.join(name);
     if dir { fs::create_dir(&path)?; }
     else {
-        ensure!(crate::workspace_fs::DocKind::of(&path) == Some(crate::workspace_fs::DocKind::Markdown), "choose a Markdown or text filename");
+        ensure!(matches!(crate::workspace_fs::DocKind::of(&path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml)), "choose a Markdown, DocxXML or text filename");
         ensure!(!fdl_core::annotations::sidecar(&path).exists(), "an annotation sidecar already exists for this name");
-        fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        ensure!(!feishu_sidecar(&path).exists(), "a Feishu source sidecar already exists for this name");
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
     }
     Ok(path)
+}
+
+pub(crate) fn feishu_sidecar(path: &Path) -> PathBuf {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!(".{name}.feishu.json"))
+}
+
+fn owned_feishu_sidecar(path: &Path) -> Result<Option<PathBuf>> {
+    let sidecar = feishu_sidecar(path);
+    if !sidecar.exists() { return Ok(None); }
+    let meta = fs::symlink_metadata(&sidecar)?;
+    ensure!(!is_link(&meta) && meta.is_file(), "Feishu source sidecar is not a regular file");
+    let data: serde_json::Value = serde_json::from_slice(&fs::read(&sidecar)?).context("cannot identify the Feishu source sidecar")?;
+    ensure!(data.get("format").and_then(|v| v.as_str()) == Some("markdownx.feishu-import"), "unrecognized Feishu source sidecar");
+    Ok(Some(sidecar))
 }
 
 /// A sidecar can be shared by same-stem extensions; move it only when its key
@@ -81,7 +104,7 @@ fn owned_sidecar(path: &Path) -> Result<Option<PathBuf>> {
     // ownership when that old path is gone and there is one matching document.
     if Path::new(&store.doc).exists() { return Ok(None); }
     let siblings = fs::read_dir(path.parent().context("missing parent")?)?.filter_map(|entry| entry.ok())
-        .map(|entry| entry.path()).filter(|p| p.is_file() && crate::workspace_fs::DocKind::of(p) == Some(crate::workspace_fs::DocKind::Markdown)
+        .map(|entry| entry.path()).filter(|p| p.is_file() && matches!(crate::workspace_fs::DocKind::of(p), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml))
             && fdl_core::annotations::sidecar(p) == sidecar).count();
     Ok((siblings == 1).then_some(sidecar))
 }
@@ -93,14 +116,25 @@ pub(crate) fn rename(root: &Path, path: &Path, name: &str, dir: bool, protected:
     let dest = path.parent().context("missing parent")?.join(leaf(name)?);
     if path == dest { return Ok(dest); }
     if !dir { ensure!(crate::workspace_fs::DocKind::of(&dest) == crate::workspace_fs::DocKind::of(path), "the document type cannot be changed by renaming"); }
-    let sidecar = if !dir && crate::workspace_fs::DocKind::of(path) == Some(crate::workspace_fs::DocKind::Markdown) { owned_sidecar(path)? } else { None };
-    let dest_sidecar = (!dir && crate::workspace_fs::DocKind::of(path) == Some(crate::workspace_fs::DocKind::Markdown)).then(|| fdl_core::annotations::sidecar(&dest));
+    let editable = !dir && matches!(crate::workspace_fs::DocKind::of(path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml));
+    let sidecar = if editable { owned_sidecar(path)? } else { None };
+    let dest_sidecar = editable.then(|| fdl_core::annotations::sidecar(&dest));
+    let feishu = if editable { owned_feishu_sidecar(path)? } else { None };
+    let dest_feishu = editable.then(|| feishu_sidecar(&dest));
     if let Some(target) = &dest_sidecar { ensure!(!target.exists() || fdl_core::annotations::sidecar(path) == *target, "destination annotation sidecar already exists"); }
+    if let Some(target) = &dest_feishu { ensure!(!target.exists() || feishu_sidecar(path) == *target, "destination Feishu source sidecar already exists"); }
     renamore::rename_exclusive(path, &dest)?;
-    if let (Some(from), Some(to)) = (sidecar, dest_sidecar) && from != to
-        && let Err(error) = renamore::rename_exclusive(&from, &to) {
+    if let (Some(from), Some(to)) = (&sidecar, &dest_sidecar) && from != to
+        && let Err(error) = renamore::rename_exclusive(from, to) {
         if let Err(rollback) = renamore::rename_exclusive(&dest, path) { bail!("annotation move failed: {error}; document rollback failed: {rollback}; document is at {}", dest.display()); }
         bail!("annotation move failed; document restored: {error}");
+    }
+    if let (Some(from), Some(to)) = (&feishu, &dest_feishu) && from != to
+        && let Err(error) = renamore::rename_exclusive(from, to) {
+        let annotation_restored = match (&sidecar, &dest_sidecar) { (Some(old), Some(new)) if old != new => renamore::rename_exclusive(new, old).is_ok(), _ => true };
+        let document_restored = renamore::rename_exclusive(&dest, path).is_ok();
+        ensure!(annotation_restored && document_restored, "Feishu source move failed: {error}; rollback incomplete");
+        bail!("Feishu source move failed; document restored: {error}");
     }
     Ok(dest)
 }
@@ -110,7 +144,10 @@ pub(crate) fn trash(root: &Path, path: &Path, dir: bool, protected: &[PathBuf]) 
     let meta = fs::symlink_metadata(path)?;
     ensure!(if dir { meta.is_dir() } else { meta.is_file() }, "file type changed");
     let mut paths = vec![path.to_path_buf()];
-    if !dir && crate::workspace_fs::DocKind::of(path) == Some(crate::workspace_fs::DocKind::Markdown) && let Some(sidecar) = owned_sidecar(path)? { paths.push(sidecar); }
+    if !dir && matches!(crate::workspace_fs::DocKind::of(path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml)) {
+        if let Some(sidecar) = owned_sidecar(path)? { paths.push(sidecar); }
+        if let Some(sidecar) = owned_feishu_sidecar(path)? { paths.push(sidecar); }
+    }
     // Windows COM must start in a fresh STA, not in GPUI's executor thread.
     std::thread::spawn(move || send_to_trash(paths).map_err(|e| e.to_string())).join()
         .map_err(|_| anyhow::anyhow!("recycle bin worker failed"))?.map_err(anyhow::Error::msg)

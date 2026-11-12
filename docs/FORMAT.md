@@ -6,13 +6,14 @@
 
 ```
 MarkdownX/
-├── format.json          {"format": 1}：目录布局版本（store::FORMAT）
+├── format.json          {"format": 2}：目录布局版本（store::FORMAT）
 ├── index.json           文档 id → Meta
 ├── index.json.bak       上一版 index.json
 ├── settings.json        窗口级 UI 设置（侧栏宽度等）
 ├── .lock                写锁（flock）：改写索引时短暂独占，不是单实例标记
 ├── docs/<id>.xml        每篇文档一份 DocxXML
 ├── assets/              粘贴或插入的图片、附件；assets/thumbs 是文件预览缩略图
+├── .book-sources/       导入书的原始元数据、翻译和资源，按页面 ID 关联
 └── trash/
     ├── index.json       id → Trashed { meta, deleted, root }
     └── <id>.xml
@@ -89,7 +90,7 @@ DocxXML 里没有、本应用自己加的写法。别的工具不认识这些写
 
 ## MarkdownX Book（`.mdxb`）
 
-一本动态书是一个 UTF-8 JSON 文件，扩展名 `.mdxb`，媒体类型 `application/vnd.markdownx.book+json`。v1 刻意不用 ZIP：桌面端和浏览器阅读器都能零依赖读取同一份文件；资源以 base64 内嵌，代价是体积增大约三分之一。
+一本动态书是一个 UTF-8 JSON 文件，扩展名 `.mdxb`，媒体类型 `application/vnd.markdownx.book+json`。v1 和 v2 均不用 ZIP：桌面端和浏览器阅读器读取同一份文件；资源以 base64 内嵌，代价是体积增大约三分之一。
 
 ```json
 {
@@ -120,7 +121,7 @@ DocxXML 里没有、本应用自己加的写法。别的工具不认识这些写
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `format` | 是 | 固定 `markdownx.book`；不匹配直接拒绝 |
-| `version` | 是 | 目前是 `1`；未来不兼容的布局要加一 |
+| `version` | 是 | 支持 `1` 和 `2`；翻译与主正文格式不同时使用 `2` |
 | `id` | 否 | 书标识；导入时用于资源目录名，空则生成 |
 | `title` / `subtitle` | 否 | `{zh, en}`；缺一边时回退到另一边 |
 | `authors` / `languages` | 否 | 作者列表、书里出现的语言标签 |
@@ -133,7 +134,7 @@ DocxXML 里没有、本应用自己加的写法。别的工具不认识这些写
 | `created` / `modified` | 否 | unix 秒 |
 | `generator` | 否 | 生成器标识，只用于诊断 |
 
-`chapters[]` 的 `format` 是 `docxxml` 或 `markdown`。DocxXML 章节的 `content` 是完整的 DocxXML，可以带 `<title>`；Markdown 章节在导入时走 `paste::markdown_to_blocks`。`content_en` 可选，是同一章的英文正文，阅读器切英文时优先用它；桌面文档库只保留主 `content`，所以导出再导入会丢掉 `content_en`（已知限制，后续会把双语正文并入文档模型）。
+`chapters[]` 的 `format` 是 `docxxml` 或 `markdown`。`content_en` 可选，是同一章的英文正文；缺少 `format_en` 时与主正文共用 `format`。v2 可用 `format_en` 指定英文正文的独立格式，旧版阅读器会拒绝 v2 而不是把 Markdown 当 XML 读取。桌面导入时按页面 ID 保存原书元数据、英文正文和原始资源；重新排序或重启后导出仍能对应原章。正文编辑不会自动翻译英文。旧版已导入且此前没有持久化的英文内容无法从页面中自动恢复，请重新导入原书。
 
 ### 资源 key 与安全
 
@@ -167,15 +168,19 @@ Markdown 用围栏代码块，info 是 `mdxb-canvas` 或 `mdxb-html`，正文是
 ```
 ````
 
-围栏长度按 `source` 里最长的反引号串加一，至少三个；读入时 JSON 解析失败或 `source` 为空会退回普通代码块。`canvas` 的 Web 运行时在 `web/js/widgets.js`，实现 `quadratic`、`unitcircle`、`projectile`；桌面端原生实现 `quadratic`（`src/editor/interactive.rs`），其他 `kind` 在桌面显示提示、在 Web 阅读器运行。未知 `kind` 在阅读器里显示“没有运行时”。`html` 在阅读器里放进 `iframe sandbox="allow-scripts"`，不能读宿主页面或本地文件；桌面端暂不执行 HTML。
+围栏长度按 `source` 里最长的反引号串加一，至少三个；读入时 JSON 解析失败或 `source` 为空会退回普通代码块。`canvas` 的 Web 和桌面端均实现 `quadratic`、`unitcircle`、`projectile`，未知 `kind` 显示提示。`html` 在 Web 阅读器中通过 `iframe sandbox="allow-scripts"` 运行：允许内联脚本、Canvas 和 data/blob 资源，内容安全策略阻止外部脚本、资源和脚本网络连接；桌面端暂不执行 HTML。
 
 ### 导入导出
 
 桌面端「下载为 → MarkdownX 书 (.mdxb)」把当前页和它的子页按文档树顺序打包：当前页是第一章，子页依次成章。导入时第一章建为根文档，其余章用 `Meta.parent` 挂到根文档下；资源写到独立目录，正文 `src` 改写为库内相对路径。
 
-「文件 → 打包成电子书…」是另一条入口：在文件夹工作区里把该目录下所有 `.md` 按文件名顺序装成章节，在单文件模式下只装当前 `.md`。它不依赖文档库，适合 agent 或脚本生成的书籍目录。
+「文件 → 打包成电子书…」是另一条入口：把工作目录中的 Markdown 和 `.docxxml` 按文件名顺序装成章节，读取 `book.json` 中的章节 ID、双语标题、翻译文件和书籍配置。它不依赖文档库，适合 agent 或脚本生成的书籍目录。
 
-「下载为 → Markdown 文件夹 (.md)」是反向入口：选定一个 `.md` 路径后，在它旁边建同名目录，写出 `01-title.md`…、`book.json`、`assets/`，再写一个带章节链接的索引 `.md`。章节正文来自 `markdown::export`；标题、表格、章节顺序和 `mdxb-canvas` / `mdxb-html` 源码都会保留，callout 颜色、分栏等纯展示可能退化为普通 Markdown。每章旁边还会写一份同名的 `.xml` DocxXML 源文件（`book.json` 的 `source` 字段），因此重新打包时只要 `.xml` 不比 `.md` 旧，就会优先用 XML 还原完整结构；编辑过 `.md` 后则以 Markdown 为准。源书带 `content_en` 时再写 `NN-title.en.md`，`book.json` 用 `content_en_file` 指过去，重新打包会把它装回 `content_en`。把该目录再交给「打包成电子书…」即可回到 `.mdxb`。`book.json` 记录章节 id/标题/文件名/XML 源，供 agent 与后续工具使用。
+「下载为 → Markdown 文件夹 (.md)」会写出 Markdown、可恢复结构的同名 `.xml`、`book.json` 和资源。较新的 Markdown 优先于 XML；英文正文按其原格式保存为 `.en.md` 或 `.en.xml`，由 `content_en_file` 和 `format_en` 标记。Markdown 的展示细节可能退化，XML 保留编辑器结构。缺失资源或无法安全合并不同原书的资源时，导出报错，不静默丢弃翻译。
+
+### 飞书来源
+
+在线导入调用用户已经配置并授权的飞书官方 `lark-cli`，以完整 DocxXML 读取文档正文，创建工作目录中的 `.docxxml`，并将完整响应保存为旁边的隐藏 `.文件名.feishu.json`。侧栏重命名或移入回收站时同步处理该来源文件。图片、附件、评论和嵌入对象不会自动下载或转换；它们的原始引用保留在响应中，需要后续处理。飞书导出的 Markdown 可以离线打开；`.docxxml` 是 DocxXML 文本，不是 Microsoft Word `.docx`。
 
 ## 文件夹工作区
 

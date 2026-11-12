@@ -36,11 +36,18 @@ $web = Join-Path $here 'web'
 $serverArgs = @(
     '-addr', "127.0.0.1:$port",
     '-root', ('"' + $data + '"'),
-    '-token', $token,
     '-web', ('"' + $web + '"')
 )
-Start-Process -FilePath $exe -ArgumentList $serverArgs -WorkingDirectory $data `
-    -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError $err | Out-Null
+$previousToken = [Environment]::GetEnvironmentVariable('MARKDOWNX_SERVER_TOKEN', 'Process')
+try {
+    # Pass the credential in the inherited environment rather than exposing
+    # it in the server's process command line.
+    [Environment]::SetEnvironmentVariable('MARKDOWNX_SERVER_TOKEN', $token, 'Process')
+    Start-Process -FilePath $exe -ArgumentList $serverArgs -WorkingDirectory $data `
+        -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError $err | Out-Null
+} finally {
+    [Environment]::SetEnvironmentVariable('MARKDOWNX_SERVER_TOKEN', $previousToken, 'Process')
+}
 
 for ($i = 0; $i -lt 20; $i++) {
     Start-Sleep -Milliseconds 250

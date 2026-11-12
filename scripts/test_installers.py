@@ -105,9 +105,74 @@ class MacInstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((existing / 'Info.plist').read_text(), 'INVALID')
 
+    def test_rate_limited_api_falls_back_to_public_release_feed(self):
+        tool = self.base / 'tools/curl'
+        tool.write_text('''#!/bin/sh
+head=0
+out=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in --head) head=1 ;; -o) shift; out=$1 ;; https://*) url=$1 ;; esac
+  shift
+done
+case "$url" in
+  *api.github.com*) exit 22 ;;
+  *releases.atom) printf '%s\\n' '<feed><id>tag:github.com,2008:Repository/123/v0.1.13</id></feed>' > "$out" ;;
+  *markdownx-macos-arm64-unsigned.dmg.sha256) [ "$head" -eq 1 ] || cp "$TEST_CHECKSUM" "$out" ;;
+  *markdownx-macos-arm64-unsigned.dmg) [ "$head" -eq 1 ] || cp "$TEST_PACKAGE" "$out" ;;
+  *) exit 22 ;;
+esac
+''', encoding='utf-8', newline='\n')
+        tool.chmod(0o755)
+        checksum = self.base / 'download.sha256'
+        checksum.write_text(hashlib.sha256(self.package.read_bytes()).hexdigest() + '  markdownx-macos-arm64-unsigned.dmg\n')
+        env = dict(self.env, TEST_PACKAGE=shell_name(self.package), TEST_CHECKSUM=shell_name(checksum))
+        command = 'PATH="$TEST_TOOLS:$PATH"; export PATH; file=$1; shift; . "$file"'
+        def run(*args):
+            return subprocess.run([shell_path(), '-c', command, 'installer-test', shell_name(ROOT / 'install.sh'),
+                                   '--applications-dir', shell_name(self.applications), *args],
+                                  env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        denied = run('--dry-run')
+        self.assertNotEqual(denied.returncode, 0, denied.stdout + denied.stderr)
+        allowed = run('--allow-unsigned', '--dry-run')
+        self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
+        self.assertIn('Ready: MarkdownX 0.1.13', allowed.stdout)
+
 
 @unittest.skipUnless(os.name == 'nt' and shutil.which('pwsh'), 'PowerShell 7 and Windows Installer required')
 class WindowsInstallerTests(unittest.TestCase):
+    def test_server_launcher_keeps_token_out_of_arguments_and_restores_environment(self):
+        with tempfile.TemporaryDirectory(prefix='markdownx-server-launch-') as tmp:
+            root = Path(tmp)
+            data = root / 'MarkdownX' / 'server'
+            data.mkdir(parents=True)
+            (data / 'token.txt').write_text('synthetic-test-token', encoding='ascii')
+            wrapper = root / 'check.ps1'
+            wrapper.write_text('''param([string]$Launcher)
+$ErrorActionPreference = 'Stop'
+$script:started = $false
+function Invoke-RestMethod {
+    param($Uri, $TimeoutSec)
+    if ($script:started) {
+        if ($env:MARKDOWNX_SERVER_TOKEN -cne 'previous-value') { throw 'previous environment was not restored' }
+        return @{ok=$true}
+    }
+    throw 'not running'
+}
+function Start-Sleep { param($Milliseconds) }
+function Start-Process {
+    param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle, $RedirectStandardOutput, $RedirectStandardError)
+    if ($env:MARKDOWNX_SERVER_TOKEN -cne 'synthetic-test-token') { throw 'credential was not passed to the child' }
+    if (($ArgumentList -contains '-token') -or (($ArgumentList -join ' ') -match 'synthetic-test-token')) { throw 'credential appeared in command arguments' }
+    $script:started = $true
+}
+$env:MARKDOWNX_SERVER_TOKEN = 'previous-value'
+. $Launcher
+''', encoding='utf-8')
+            result = subprocess.run(['pwsh', '-NoProfile', '-File', str(wrapper), str(ROOT / 'server' / 'start-server.ps1')],
+                                    env=dict(os.environ, LOCALAPPDATA=str(root)), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_workspace_build_respects_configured_parallelism(self):
         with tempfile.TemporaryDirectory(prefix='markdownx parallel build ') as tmp:
             root = Path(tmp)

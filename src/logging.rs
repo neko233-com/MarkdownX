@@ -29,6 +29,10 @@ impl log::Log for Logger {
     fn enabled(&self, m: &log::Metadata) -> bool { m.level() <= log::Level::Warn || m.target().starts_with("markdownx") }
     fn log(&self, r: &log::Record) {
         if self.enabled(r.metadata()) { write(&format!("{} {}: {}", r.level(), r.target(), r.args())); }
+        #[cfg(feature = "devtools")]
+        if std::env::var_os("MARKDOWNX_TRACE_BORROWS").is_some() && r.args().to_string().contains("already borrowed") {
+            eprintln!("borrow trace: {}", std::backtrace::Backtrace::force_capture());
+        }
     }
     fn flush(&self) {}
 }

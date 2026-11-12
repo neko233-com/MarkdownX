@@ -13,7 +13,7 @@ fn file_kind(path: &Path) -> FileKind {
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {
         "md" | "markdown" | "mark" => FileKind::Markdown,
-        "mdxb" => FileKind::Book,
+        "mdxb" | "docxxml" => FileKind::Book,
         "txt" => FileKind::Text,
         "rs" | "go" | "js" | "jsx" | "ts" | "tsx" | "py" | "sh" | "ps1" | "html" | "css" | "c" | "h" | "cpp" | "cs" | "java" => FileKind::Code,
         "json" | "yaml" | "yml" | "toml" | "xml" | "csv" => FileKind::Data,

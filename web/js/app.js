@@ -2,7 +2,7 @@
 // language/theme persistence. No framework, no build step.
 
 import { readBookFile, normalizeBook, assetURL, pick } from './mdxb.js';
-import { mountInteractive } from './widgets.js';
+import { disposeInteractive, mountInteractive } from './widgets.js';
 import { color, escapeHTML } from './docxml.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -194,6 +194,8 @@ function openBook(book) {
 }
 
 function closeBook() {
+  disposeInteractive($('#chapter'));
+  $('#chapter').replaceChildren();
   state.book = null;
   $('#reader').hidden = true;
   $('#landing').hidden = false;
@@ -260,6 +262,7 @@ function renderToc() {
 
 function renderChapter(ch) {
   const article = $('#chapter');
+  disposeInteractive(article);
   article.innerHTML = '';
   const blocks = state.lang === 'en' && ch.blocksEn ? ch.blocksEn : ch.blocks;
   const title = chapterTitle(ch) || t('empty');

@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const FORMAT: &str = "markdownx.book";
-pub const VERSION: u32 = 1;
+/// Version 2 permits a translated chapter to use a different source format.
+/// Readers must reject it rather than interpreting Markdown as DocxXML.
+pub const VERSION: u32 = 2;
 pub const MIME: &str = "application/vnd.markdownx.book+json";
 pub const EXTENSION: &str = "mdxb";
 
@@ -149,6 +151,9 @@ pub struct Chapter {
     /// the reader picks English; the desktop library keeps the primary `content`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_en: Option<String>,
+    /// If absent, the translation uses `format`, as in version 1 books.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_en: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -221,10 +226,15 @@ impl Default for PackOptions {
 /// Pack documents into one book. Local assets are embedded and their sources
 /// rewritten to `assets/...` keys with `src_kind = "src"`.
 pub fn pack(inputs: Vec<PackInput>, opts: &PackOptions) -> Result<Book> {
+    pack_with_assets(inputs, opts, BTreeMap::new())
+}
+
+/// Pack edited chapters while retaining assets referenced by translations.
+pub fn pack_with_assets(inputs: Vec<PackInput>, opts: &PackOptions, assets: BTreeMap<String, Asset>) -> Result<Book> {
     if inputs.is_empty() {
         bail!("a book needs at least one chapter");
     }
-    let mut packer = Packer::new(opts.assets_root.clone(), opts.max_asset_bytes);
+    let mut packer = Packer::new(opts.assets_root.clone(), opts.max_asset_bytes, assets);
     let mut chapters = Vec::with_capacity(inputs.len());
     let mut first_title = Localized::default();
     for (n, input) in inputs.into_iter().enumerate() {
@@ -249,6 +259,7 @@ pub fn pack(inputs: Vec<PackInput>, opts: &PackOptions) -> Result<Book> {
             format: "docxxml".into(),
             content: crate::docxml::serialize(&document),
             content_en: None,
+            format_en: None,
         });
     }
     let title = opts.title.clone().unwrap_or(first_title).clean();
@@ -256,7 +267,7 @@ pub fn pack(inputs: Vec<PackInput>, opts: &PackOptions) -> Result<Book> {
     let now = now_ms();
     let book = Book {
         format: FORMAT.into(),
-        version: VERSION,
+        version: 1,
         id: opts.id.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         title,
         subtitle: Localized::default(),
@@ -341,6 +352,18 @@ impl Book {
                 "markdown" => {}
                 other => bail!("chapter {:?} has unknown format {:?}", ch.id, other),
             }
+            if let Some(format) = &ch.format_en {
+                if self.version < 2 { bail!("chapter {:?} needs book version 2 for format_en", ch.id); }
+                if !matches!(format.as_str(), "docxxml" | "markdown") {
+                    bail!("chapter {:?} has unknown translation format {:?}", ch.id, format);
+                }
+            }
+            if let Some(content) = &ch.content_en
+                && ch.format_en.as_deref().unwrap_or(&ch.format) == "docxxml"
+                && !content.trim().is_empty()
+            {
+                crate::docxml::parse(content).with_context(|| format!("English chapter {:?} is not valid DocxXML", ch.id))?;
+            }
         }
         let mut total = 0u64;
         for (key, asset) in &self.assets {
@@ -367,21 +390,7 @@ impl Book {
     /// Write every embedded asset under `root`, keeping its `assets/...` key.
     /// Returns the number of files written.
     pub fn write_assets(&self, root: impl AsRef<Path>) -> Result<usize> {
-        let root = root.as_ref();
-        let mut n = 0;
-        for (key, asset) in &self.assets {
-            if !asset_key_ok(key) {
-                bail!("unsafe asset key {:?}", key);
-            }
-            let path = root.join(key);
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-            }
-            let bytes = B64.decode(&asset.data).with_context(|| format!("asset {:?} is not base64", key))?;
-            std::fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
-            n += 1;
-        }
-        Ok(n)
+        write_assets(root, &self.assets)
     }
 
     /// Parse each chapter into a [`Document`]. Asset sources are rewritten to
@@ -415,6 +424,18 @@ impl Book {
     }
 }
 
+pub fn write_assets(root: impl AsRef<Path>, assets: &BTreeMap<String, Asset>) -> Result<usize> {
+    let root = root.as_ref();
+    for (key, asset) in assets {
+        if !asset_key_ok(key) { bail!("unsafe asset key {:?}", key); }
+        let path = root.join(key);
+        if let Some(dir) = path.parent() { std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?; }
+        let bytes = B64.decode(&asset.data).with_context(|| format!("asset {:?} is not base64", key))?;
+        std::fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
+    }
+    Ok(assets.len())
+}
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -425,6 +446,7 @@ fn asset_key_ok(key: &str) -> bool {
         && !key.contains("..")
         && !key.contains('\\')
         && !key.contains(':')
+        && !key.chars().any(char::is_control)
         && Path::new(key).components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir))
 }
 
@@ -437,9 +459,9 @@ struct Packer {
 }
 
 impl Packer {
-    fn new(root: Option<PathBuf>, max: u64) -> Self {
+    fn new(root: Option<PathBuf>, max: u64, assets: BTreeMap<String, Asset>) -> Self {
         let root_canon = root.as_ref().and_then(|r| r.canonicalize().ok());
-        Packer { root, root_canon, max, assets: BTreeMap::new(), seen: BTreeMap::new() }
+        Packer { root, root_canon, max, assets, seen: BTreeMap::new() }
     }
 
     fn embed(&mut self, src_kind: &mut String, src: &mut String) -> Result<()> {
@@ -479,12 +501,20 @@ impl Packer {
         if bytes.len() as u64 > self.max {
             bail!("asset {} is larger than {} MB", canon.display(), self.max / 1024 / 1024);
         }
+        let encoded = B64.encode(&bytes);
         let stem = canon.file_stem().and_then(|s| s.to_str()).unwrap_or("asset");
         let ext = canon.extension().and_then(|s| s.to_str()).unwrap_or("bin");
+        let mime = mime_of(ext);
+        if let Some((key, _)) = self.assets.iter().find(|(key, a)| a.data == encoded && (a.mime == mime || canon.ends_with(Path::new(key)))) {
+            let key = key.clone();
+            self.seen.insert(canon, key.clone());
+            *src = key;
+            return Ok(true);
+        }
         let key = self.unique_key(stem, ext);
         self.assets.insert(
             key.clone(),
-            Asset { mime: mime_of(ext).into(), data: B64.encode(&bytes) },
+            Asset { mime: mime.into(), data: encoded },
         );
         self.seen.insert(canon, key.clone());
         *src = key;
@@ -513,6 +543,16 @@ fn collect_document(doc: &mut Document, packer: &mut Packer) -> Result<()> {
 
 fn collect_blocks(blocks: &mut [Block], packer: &mut Packer) -> Result<()> {
     for b in blocks {
+        for run in &mut b.text.runs {
+            if let Some(inline) = &mut run.marks.inline
+                && let InlineKind::File(file) = &inline.kind
+            {
+                let mut file = file.clone();
+                let old = file.clone();
+                packer.embed(&mut file.src_kind, &mut file.src)?;
+                if file != old { crate::docxml::remap_inline_file(inline, file)?; }
+            }
+        }
         match &mut b.kind {
             BlockKind::Image { src_kind, src, .. } => packer.embed(src_kind, src)?,
             BlockKind::File(f) => packer.embed(&mut f.src_kind, &mut f.src)?,
@@ -558,7 +598,7 @@ fn prepare_asset_paths(doc: &mut Document, assets: &BTreeMap<String, Asset>) {
 fn slug(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars().flat_map(char::to_lowercase) {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+        if c.is_alphanumeric() || c == '-' || c == '_' {
             out.push(c);
         } else if !out.ends_with('-') {
             out.push('-');
@@ -642,6 +682,36 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(out);
+    }
+
+    #[test]
+    fn preserves_unicode_asset_names_and_inline_attachment_attributes() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("assets/报告.pdf"), b"pdf fixture").unwrap();
+        let doc = crate::docxml::parse("<title>报告</title><p>See <source path=\"assets/报告.pdf\" name=\"报告\" custom=\"keep\"/></p>").unwrap();
+        let book = pack(vec![PackInput::new(doc)], &PackOptions { assets_root: Some(dir.clone()), ..Default::default() }).unwrap();
+        assert!(book.assets.contains_key("assets/报告.pdf"));
+        assert!(book.chapters[0].content.contains("custom=\"keep\""));
+        assert!(book.chapters[0].content.contains("path=\"assets/报告.pdf\""));
+        let unpacked = book.chapter_documents().unwrap();
+        assert!(unpacked[0].document.asset_sources().contains(&"assets/报告.pdf".to_string()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn identical_bytes_with_different_media_types_keep_separate_assets() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("assets/note.txt"), b"same bytes").unwrap();
+        let document = crate::docxml::parse("<title>Text</title><p><source path=\"assets/note.txt\" name=\"note\"/></p>").unwrap();
+        let mut original = BTreeMap::new();
+        original.insert("assets/image.png".into(), Asset { mime: "image/png".into(), data: B64.encode(b"same bytes") });
+        let result = pack_with_assets(vec![PackInput::new(document)], &PackOptions { assets_root: Some(dir.clone()), ..Default::default() }, original).unwrap();
+        assert_eq!(result.assets.len(), 2);
+        assert_eq!(result.assets["assets/image.png"].mime, "image/png");
+        assert_eq!(result.assets["assets/note.txt"].mime, "text/plain; charset=utf-8");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

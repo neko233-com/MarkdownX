@@ -208,7 +208,7 @@ impl Drop for WriteLock {
 
 /// Version of the on-disk layout, kept in `format.json`. Bump it when a
 /// change would make older builds misread the library.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct FormatMarker {
@@ -346,6 +346,7 @@ impl Store {
         let marker = root.join("format.json");
         match std::fs::read(&marker).ok().and_then(|b| serde_json::from_slice::<FormatMarker>(&b).ok()) {
             Some(m) if m.format > FORMAT => warnings.push("这个文档库由更新版本的 MarkdownX 创建，部分内容可能无法正确显示，请升级后再编辑".into()),
+            Some(m) if m.format < FORMAT => write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format: FORMAT })?)?,
             Some(_) => {}
             None => write_atomic(&marker, &serde_json::to_vec_pretty(&FormatMarker { format: FORMAT })?)?,
         }

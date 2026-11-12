@@ -138,14 +138,14 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `math.rs` | 公式（katex-rs 生成 HTML，再自行排版） |
 | `link.rs` / `links.rs` | 链接面板与卡片；@文档 与引用列表 |
 | `button.rs` / `countdown.rs` / `reminder.rs` / `subpages.rs` | 按钮、倒计时、日期提醒、子页面列表 |
-| `interactive.rs` | Canvas / HTML 交互卡片；桌面原生 `quadratic` 运行时，HTML 仍由 Web 阅读器执行 |
+| `interactive.rs` | Canvas / HTML 交互卡片；桌面原生 `quadratic`、`unitcircle`、`projectile`，HTML 由 Web 阅读器执行 |
 | `home.rs` | 主页：`书架`（根文档）/ `所有页面` / `收藏`，新建与导入卡片，列表/宫格 |
 | `emoji.rs` / `emoji_picker.rs` | 表情数据与面板 |
 | `catalogue.rs` / `find.rs` / `reading.rs` / `scrollbar.rs` / `caption.rs` | 目录、查找替换、阅读模式与信息行、滚动条、代码块名和图片描述 |
 
 ## 书与浏览器阅读器
 
-`.mdxb` 是 JSON 单文件（格式见 [FORMAT.md](FORMAT.md)）。桌面端 `transfer.rs` 的 `export_book` 把当前文档和 `Tree::subtree` 收集到的子页按顺序交给 `book::pack`，`import_book` 把 `Book::load` 的章节写成文档树，并把资源落到 `assets/books/<uuid>/`、改写正文里的 `src`。Windows 安装器注册 `.mdxb`；启动时 `main.rs` 从 argv 取第一本书，交给 `open_book_path` 走同一条导入并打开路径。
+`.mdxb` 是 JSON 单文件（格式见 [FORMAT.md](FORMAT.md)）。`transfer.rs` 导入章节并改写资源路径；`book_source.rs` 用页面 ID 关联原书翻译和资源，`book_folder.rs` 按 `book.json` 重新打包。Feishu 在线导入由 `feishu.rs` 调用官方 CLI，`feishu_ui.rs` 将 DocxXML 和原始响应写入当前工作目录；授权由 CLI 管理。Windows 安装器注册 `.mdxb`；启动时 `main.rs` 从 argv 取第一本书，交给 `open_book_path` 走同一条导入并打开路径。
 
 `web/` 是独立的无构建阅读器：`mdxb.js` 校验并归一化书，`docxml.js` / `markdown.js` 把章节转成同一套块对象，`app.js` 负责目录、章节、语言、主题和进度，`widgets.js` 挂载 Canvas / HTML 交互块。它不依赖 Rust 构建产物，也不嵌入桌面应用；两边共享的契约是 `.mdxb` 和 DocxXML，而不是代码。
 

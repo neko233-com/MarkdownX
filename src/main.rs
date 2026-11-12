@@ -4,6 +4,10 @@
 pub(crate) const APP_ID: &str = "com.neko233.markdownx";
 
 mod app;
+mod book_source;
+mod book_folder;
+mod feishu;
+mod feishu_ui;
 mod shared_store;
 mod quick_note;
 mod assets;

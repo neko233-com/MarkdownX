@@ -316,7 +316,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn protected_paths(&self, id: u64) -> Vec<PathBuf> {
+    pub(crate) fn protected_paths(&self, id: u64) -> Vec<PathBuf> {
         let root = self.workspace_roots.iter().find(|r| r.id == id);
         let mut paths = vec![crate::store::Store::root_dir()];
         paths.extend(self.workspace_roots.iter().filter(|r| r.id != id && root.is_some_and(|root| {

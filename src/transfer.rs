@@ -11,7 +11,6 @@ use crate::theme::Theme;
 use crate::trash::{close_button, dialog, primary_button, scrim, secondary_button};
 use crate::ui::ToastKind;
 use fdl_core::book;
-use fdl_core::docxml;
 use gpui::{prelude::FluentBuilder, *};
 use std::path::{Path, PathBuf};
 
@@ -77,7 +76,7 @@ fn chapter_slug(title: &str) -> String {
 }
 
 /// The modal mask (the window dimmed) and its dialog.
-fn mask(id: &'static str, dialog: impl IntoElement, close: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static, cx: &mut Context<Workspace>) -> AnyElement {
+pub(crate) fn mask(id: &'static str, dialog: impl IntoElement, close: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static, cx: &mut Context<Workspace>) -> AnyElement {
     deferred(
         div()
             .id(id)
@@ -129,7 +128,7 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Relative and `file://` image links of an imported file, made absolute.
-fn resolve_images(blocks: &mut [Block], base: &Path) {
+pub(crate) fn resolve_images(blocks: &mut [Block], base: &Path) {
     for b in blocks.iter_mut() {
         resolve_images(&mut b.children, base);
         if let BlockKind::Table(t) = &mut b.kind {
@@ -156,9 +155,19 @@ fn book_asset_src(rel: &Path, src: &str) -> String {
 
 /// A chapter's embedded assets were written under `rel`; point its images,
 /// attachments and cover at the files on disk.
-fn rewrite_book_assets(doc: &mut Document, rel: &Path) {
-    fn blocks(bs: &mut [Block], rel: &Path) {
+fn rewrite_book_assets(doc: &mut Document, rel: &Path) -> anyhow::Result<()> {
+    fn blocks(bs: &mut [Block], rel: &Path) -> anyhow::Result<()> {
         for b in bs {
+            for run in &mut b.text.runs {
+                if let Some(inline) = &mut run.marks.inline
+                    && let crate::model::InlineKind::File(file) = &inline.kind
+                    && file.src.starts_with("assets/")
+                {
+                    let mut file = file.clone();
+                    file.src = book_asset_src(rel, &file.src);
+                    crate::docxml::remap_inline_file(inline, file)?;
+                }
+            }
             match &mut b.kind {
                 BlockKind::Image { src, .. } if src.starts_with("assets/") => {
                     let next = book_asset_src(rel, src);
@@ -171,21 +180,22 @@ fn rewrite_book_assets(doc: &mut Document, rel: &Path) {
                 BlockKind::Table(t) => {
                     for row in &mut t.rows {
                         for cell in row {
-                            blocks(&mut cell.blocks, rel);
+                            blocks(&mut cell.blocks, rel)?;
                         }
                     }
                 }
                 _ => {}
             }
-            blocks(&mut b.children, rel);
+            blocks(&mut b.children, rel)?;
         }
+        Ok(())
     }
     if let Some(cover) = &mut doc.cover
         && cover.src.starts_with("assets/")
     {
         cover.src = book_asset_src(rel, &cover.src);
     }
-    blocks(&mut doc.blocks, rel);
+    blocks(&mut doc.blocks, rel)
 }
 
 /// A Markdown / TXT file as a page: titled after the file, its leading
@@ -220,23 +230,26 @@ fn install_book(store: &mut crate::shared_store::SharedStore, root: &Path, book:
         anyhow::bail!("empty book");
     }
     for chapter in &mut chapters {
-        rewrite_book_assets(&mut chapter.document, &rel);
+        rewrite_book_assets(&mut chapter.document, &rel)?;
     }
-    let mut root = chapters.remove(0).document;
+    let mut root_doc = chapters.remove(0).document;
     if !book.title.is_empty() {
-        root.title = RichText::plain(book.title.primary());
+        root_doc.title = RichText::plain(book.title.primary());
     }
-    if root.cover.is_none()
+    if root_doc.cover.is_none()
         && let Some(src) = &book.cover
     {
         let src = if src.starts_with("assets/") { book_asset_src(&rel, src) } else { src.clone() };
-        root.cover = Some(Cover { src, x: 0., y: 0. });
+        root_doc.cover = Some(Cover { src, x: 0., y: 0. });
     }
-    let id = store.create_from(&root)?;
+    let id = store.create_from(&root_doc)?;
+    let mut pages = vec![crate::book_source::Page { id: id.clone(), imported_title: root_doc.title.text.clone() }];
     for chapter in chapters {
         let child = store.create_from(&chapter.document)?;
         store.set_parent(&child, Some(&id))?;
+        pages.push(crate::book_source::Page { id: child, imported_title: chapter.document.title.text.clone() });
     }
+    crate::book_source::Source::write(root, pages, book)?;
     Ok(id)
 }
 
@@ -310,8 +323,9 @@ impl Workspace {
                 .files()
                 .into_iter()
                 .filter(|f| {
-                    crate::workspace_fs::DocKind::of(&f.path) == Some(crate::workspace_fs::DocKind::Markdown)
-                        && !f.path.to_string_lossy().ends_with(".en.md")
+                    matches!(crate::workspace_fs::DocKind::of(&f.path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml))
+                        && !f.path.to_string_lossy().to_ascii_lowercase().ends_with(".en.md")
+                        && !f.path.to_string_lossy().to_ascii_lowercase().ends_with(".en.docxxml")
                 })
                 .map(|f| f.path.clone())
                 .collect::<Vec<_>>();
@@ -328,52 +342,22 @@ impl Workspace {
             }
             return;
         };
-        let mut inputs = Vec::with_capacity(files.len());
-        for path in files {
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let source = path.with_extension("xml");
-            let source_is_newer = source.metadata().ok().and_then(|m| m.modified().ok())
-                >= path.metadata().ok().and_then(|m| m.modified().ok());
-            let (doc, chapter) = if source_is_newer {
-                match std::fs::read_to_string(&source).ok().and_then(|xml| docxml::parse(&xml).ok()) {
-                    Some(doc) => {
-                        let title = doc.title.text.clone();
-                        (doc, title)
-                    }
-                    None => {
-                        let (doc, _) = crate::app::parse_markdown_file(&path, &text);
-                        let chapter = doc.title.text.clone();
-                        (doc, chapter)
-                    }
-                }
-            } else {
-                let (doc, _) = crate::app::parse_markdown_file(&path, &text);
-                let chapter = doc.title.text.clone();
-                (doc, chapter)
-            };
-            inputs.push(book::PackInput::titled(doc, book::Localized::same(chapter)));
-        }
-        if inputs.is_empty() {
+        if files.is_empty() {
             self.show_toast_kind(ToastKind::Error, crate::settings::text("没有可打包的 Markdown"), cx);
             return;
         }
         let path = save_path(&format!("{title}.mdxb"), cx);
+        let background = cx.background_executor().clone();
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let Some(path) = path.await else { return };
-            let opts = book::PackOptions {
-                assets_root: Some(root),
-                id: None,
-                title: Some(book::Localized::same(title)),
-                ..Default::default()
-            };
-            let saved = book::pack(inputs, &opts).and_then(|b| b.save(&path));
+            let saved = background.spawn(async move { crate::book_folder::pack(&root, &title, &files).and_then(|b| b.save(&path)) }).await;
             let _ = this.update(cx, |w, cx| match saved {
                 Ok(()) => {
                     w.toast = None;
                     cx.notify();
                 }
-                Err(_) => w.show_toast_kind(ToastKind::Error, crate::settings::text("打包失败，请重试"), cx),
+                Err(error) => w.show_toast_kind(ToastKind::Error, &crate::localized_format!("打包失败：{}", "Could not package the book: {}", crate::settings::diagnostic(&error.to_string())), cx),
             });
         })
         .detach();
@@ -387,13 +371,20 @@ impl Workspace {
         let title = self.entries.iter().find(|e| e.id == id).map(|e| e.title.clone()).unwrap_or_default();
         let name = file_name(&doc);
         let ids = crate::tree::Tree::new(&self.entries).subtree(id);
-        let mut inputs = Vec::with_capacity(ids.len());
-        inputs.push(book::PackInput::titled(doc, book::Localized::same(title.clone())));
+        let mut pages = Vec::with_capacity(ids.len());
+        pages.push((id.to_string(), title.clone(), doc));
         for child in ids.iter().skip(1) {
-            let Some(doc) = self.doc_of(child, cx) else { continue };
+            let Some(doc) = self.doc_of(child, cx) else {
+                self.show_toast_kind(ToastKind::Error, crate::settings::text("导出失败，请重试"), cx);
+                return;
+            };
             let title = self.entries.iter().find(|e| &e.id == child).map(|e| e.title.clone()).unwrap_or_default();
-            inputs.push(book::PackInput::titled(doc, book::Localized::same(title)));
+            pages.push((child.clone(), title, doc));
         }
+        let source = match crate::book_source::Source::for_pages(&crate::store::Store::root_dir(), &ids) {
+            Ok(source) => source,
+            Err(error) => { self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法保留翻译或资源：{}", "Could not preserve translations or assets: {}", crate::settings::diagnostic(&error.to_string())), cx); return; }
+        };
         let path = save_path(&format!("{name}.mdxb"), cx);
         cx.spawn_in(window, async move |this, cx| {
             let Some(path) = path.await else { return };
@@ -403,13 +394,16 @@ impl Workspace {
                 title: Some(book::Localized::same(title)),
                 ..Default::default()
             };
-            let saved = book::pack(inputs, &opts).and_then(|b| b.save(&path));
+            let saved = match source {
+                Some(source) => source.pack(pages, &opts),
+                None => book::pack(pages.into_iter().map(|(_, title, doc)| book::PackInput::titled(doc, book::Localized::same(title))).collect(), &opts),
+            }.and_then(|b| b.save(&path));
             let _ = this.update(cx, |w, cx| match saved {
                 Ok(()) => {
                     w.toast = None;
                     cx.notify();
                 }
-                Err(_) => w.show_toast_kind(ToastKind::Error, crate::settings::text("导出失败，请重试"), cx),
+                Err(error) => w.show_toast_kind(ToastKind::Error, &crate::localized_format!("导出失败：{}", "Could not export: {}", crate::settings::diagnostic(&error.to_string())), cx),
             });
         })
         .detach();
@@ -489,11 +483,8 @@ impl Workspace {
     /// A `.mdxb`: unpack its chapters into the library as one page tree.
     pub(crate) fn import_book(&mut self, path: &Path) -> anyhow::Result<String> {
         let book = book::Book::load(path)?;
-        let english = book.chapters.iter().map(|c| c.content_en.clone()).collect();
         let rel = PathBuf::from("assets").join("books").join(uuid::Uuid::new_v4().to_string());
         let id = install_book(&mut self.store, &crate::store::Store::root_dir(), book, rel)?;
-        self.book_english = english;
-        self.book_english_id = Some(id.clone());
         Ok(id)
     }
 
@@ -512,14 +503,17 @@ impl Workspace {
             .map(|e| e.title.clone())
             .unwrap_or_else(|| root_doc.title.text.clone());
         let ids = crate::tree::Tree::new(&self.entries).subtree(id);
-        let english = if self.book_english_id.as_deref() == Some(id) {
-            self.book_english.clone()
-        } else {
-            Vec::new()
+        let source = match crate::book_source::Source::for_pages(&crate::store::Store::root_dir(), &ids) {
+            Ok(source) => source,
+            Err(error) => { self.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法保留翻译或资源：{}", "Could not preserve translations or assets: {}", crate::settings::diagnostic(&error.to_string())), cx); return; }
         };
+        let root_id = id.to_string();
         let mut chapters = Vec::with_capacity(ids.len());
         for child in ids {
-            let Some(doc) = self.doc_of(&child, cx) else { continue };
+            let Some(doc) = self.doc_of(&child, cx) else {
+                self.show_toast_kind(ToastKind::Error, crate::settings::text("导出失败，请重试"), cx);
+                return;
+            };
             let title = self
                 .entries
                 .iter()
@@ -542,7 +536,8 @@ impl Workspace {
             }
             let library = crate::store::Store::root_dir();
             let result = (|| -> anyhow::Result<()> {
-                std::fs::create_dir_all(&folder)?;
+                std::fs::create_dir(&folder)?;
+                let mut embedded = source.as_ref().map(|s| s.book.assets.clone()).unwrap_or_default();
                 let mut toc = format!("# {}\n\n", title.replace('\n', " "));
                 let index_dir = folder
                     .file_name()
@@ -553,25 +548,32 @@ impl Workspace {
                 for (i, (chapter_id, chapter, doc)) in chapters.into_iter().enumerate() {
                     let stem = format!("{:02}-{}", i + 1, chapter_slug(&chapter));
                     let name = format!("{stem}.md");
+                    let asset_dir = format!("content-assets/{stem}");
                     let out = crate::markdown::export(
                         &doc,
                         &crate::markdown::Options {
                             library_root: Some(&library),
-                            assets: Some("assets"),
+                            assets: Some(&asset_dir),
                             ..Default::default()
                         },
                     );
-                    let text = format!("# {}\n\n{}", chapter.replace('\n', " "), out.text);
-                    crate::workspace_fs::write_atomic(&folder.join(&name), text.as_bytes())?;
+                    anyhow::ensure!(out.missing == 0, "some chapter assets are unavailable");
+                    crate::workspace_fs::write_atomic(&folder.join(&name), out.text.as_bytes())?;
                     // Keep the lossless DocxXML next to the Markdown chapter. A later
                     // pack prefers it only while it is at least as fresh as the .md.
-                    let source = format!("{stem}.xml");
+                    let source_file = format!("{stem}.xml");
+                    let packed = book::pack_with_assets(vec![book::PackInput::new(doc.clone())],
+                        &book::PackOptions { assets_root: Some(library.clone()), ..Default::default() }, embedded)?;
                     crate::workspace_fs::write_atomic(
-                        &folder.join(&source),
-                        docxml::serialize(&doc).as_bytes(),
+                        &folder.join(&source_file),
+                        packed.chapters[0].content.as_bytes(),
                     )?;
-                    let english_name = format!("{stem}.en.md");
-                    let has_english = if let Some(Some(body)) = english.get(i) {
+                    embedded = packed.assets;
+                    let translation = source.as_ref().and_then(|s| s.translation(&chapter_id));
+                    let translated = translation.map(|(ch, _)| ch);
+                    let english_format = translated.map(|ch| ch.format_en.as_deref().unwrap_or(&ch.format)).unwrap_or("markdown");
+                    let english_name = format!("{stem}.en.{}", if english_format == "docxxml" { "xml" } else { "md" });
+                    let has_english = if let Some(body) = translated.and_then(|ch| ch.content_en.as_ref()) {
                         crate::workspace_fs::write_atomic(
                             &folder.join(&english_name),
                             body.as_bytes(),
@@ -585,31 +587,45 @@ impl Workspace {
                         if let Some(p) = to.parent() {
                             std::fs::create_dir_all(p)?;
                         }
-                        let Some(path) = crate::store::export_path(&src.to_string_lossy()) else { continue };
-                        let Ok(bytes) = crate::store::read_bounded(&path, crate::store::EXPORT_FILE_LIMIT) else {
-                            continue;
-                        };
+                        let path = crate::store::export_path(&src.to_string_lossy()).ok_or_else(|| anyhow::anyhow!("chapter asset is outside the library"))?;
+                        let bytes = crate::store::read_bounded(&path, crate::store::EXPORT_FILE_LIMIT)?;
                         std::fs::write(&to, bytes)?;
                     }
                     toc.push_str(&format!("{}. [{}]({}/{})\n", i + 1, chapter, index_dir, name));
                     let mut meta = serde_json::json!({
-                        "id": chapter_id,
-                        "title": { "zh": chapter, "en": chapter },
+                        "id": translated.map(|ch| ch.id.as_str()).unwrap_or(&chapter_id),
+                        "title": translation.map(|(ch, page)| crate::book_source::changed_title(&ch.title, &page.imported_title, &chapter)).unwrap_or_else(|| book::Localized::same(&chapter)),
                         "file": name,
-                        "source": source,
+                        "source": source_file,
                     });
                     if has_english {
                         meta["content_en_file"] = serde_json::json!(english_name);
+                        meta["format_en"] = serde_json::json!(english_format);
                     }
                     metas.push(meta);
                 }
-                let meta = serde_json::json!({
+                book::write_assets(&folder, &embedded)?;
+                let asset_mimes = embedded.iter().map(|(key, asset)| (key.clone(), asset.mime.clone())).collect::<std::collections::BTreeMap<_, _>>();
+                let mut meta = serde_json::json!({
                     "format": "markdownx.book",
                     "version": 1,
                     "title": { "zh": title, "en": title },
                     "chapters": metas,
                     "assets": "assets",
+                    "asset_mimes": asset_mimes,
                 });
+                if let Some(source) = source.as_ref().filter(|s| s.pages.first().is_some_and(|p| p.id == root_id)) {
+                    let book = &source.book;
+                    meta = serde_json::json!({
+                        "format": book.format, "version": book.version, "id": book.id,
+                        "title": crate::book_source::changed_title(&book.title, &source.pages[0].imported_title, &title),
+                        "subtitle": book.subtitle, "authors": book.authors, "languages": book.languages,
+                        "default_language": book.default_language, "cover": book.cover,
+                        "theme": book.theme, "reading": book.reading, "created": book.created,
+                        "modified": book.modified, "generator": book.generator,
+                        "chapters": meta["chapters"].take(), "assets": "assets", "asset_mimes": asset_mimes,
+                    });
+                }
                 crate::workspace_fs::write_atomic(
                     &folder.join("book.json"),
                     serde_json::to_string_pretty(&meta)?.as_bytes(),
@@ -622,7 +638,7 @@ impl Workspace {
                     w.toast = None;
                     cx.notify();
                 }
-                Err(_) => w.show_toast_kind(ToastKind::Error, crate::settings::text("导出失败，请重试"), cx),
+                Err(error) => w.show_toast_kind(ToastKind::Error, &crate::localized_format!("导出未完成，已生成文件保留：{}", "Export incomplete; generated files were retained: {}", crate::settings::diagnostic(&error.to_string())), cx),
             });
         })
         .detach();
@@ -776,6 +792,53 @@ impl Workspace {
     }
 }
 
+#[cfg(feature = "devtools")]
+pub(crate) fn check_book_languages(phase: &str, cx: &mut App) {
+    let root = PathBuf::from(std::env::var_os("MARKDOWNX_TEST_WORKSPACE_ROOT").expect("test root"));
+    assert!(root.starts_with(std::env::temp_dir()) && root.join(".markdownx-workspace-test").is_file());
+    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<Workspace>()).unwrap();
+    handle.update(cx, |w, window, cx| {
+        #[cfg(target_os = "windows")]
+        assert!(window.bounds().origin.x < px(-10000.), "test window must remain off-screen");
+        match phase {
+            "import" => {
+                let source = PathBuf::from(std::env::var_os("MARKDOWNX_BOOK_TEST_SOURCE").unwrap());
+                assert!(source.starts_with(&root));
+                let id = w.import_book(&source).unwrap();
+                w.entries = w.store.list();
+                w.sort();
+                w.open(&id, window, cx);
+            }
+            "reopen" => {
+                w.entries = w.store.list();
+                let id = w.entries.iter().find(|e| e.title == "Fixture Book").expect("imported book").id.clone();
+                w.open(&id, window, cx);
+            }
+            "export-book" => {
+                let id = w.current.clone().expect("book page");
+                w.export_book(&id, window, cx);
+            }
+            "export-folder" => {
+                let id = w.current.clone().expect("book page");
+                w.export_markdown_folder(&id, window, cx);
+            }
+            "activate-folder" => {
+                let folder = PathBuf::from(std::env::var_os("MARKDOWNX_BOOK_TEST_FOLDER").unwrap());
+                assert!(folder.starts_with(&root));
+                let workspace = w.workspace_roots.iter().find(|r| r.spec.path == folder).expect("exported workspace");
+                let id = workspace.id;
+                let file = workspace.tree.as_ref().expect("exported workspace tree").files().into_iter()
+                    .find(|node| node.name.ends_with(".md") && !node.name.ends_with(".en.md")).expect("chapter").path.clone();
+                w.open_workspace_file_now(id, file, window, cx);
+            }
+            "package-folder" => w.package_book(window, cx),
+            "status" => eprintln!("book-languages status: folder={:?}, toast={:?}", w.folder.as_ref().map(|f| &f.root), w.toast.as_ref().map(|(_, message, _)| message)),
+            _ => panic!("unknown book test phase"),
+        }
+    }).unwrap();
+    eprintln!("book-languages: {phase} PASS");
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -830,6 +893,57 @@ mod tests {
             }
             other => panic!("expected image, got {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn imported_translations_survive_restart_reordering_and_asset_collisions() {
+        let dir = std::env::temp_dir().join(format!("fdl-book-languages-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("assets/pic.png"), b"original image").unwrap();
+        let image = BlockKind::Image { src_kind: "path".into(), src: "assets/pic.png".into(), width: None, height: None, caption: None, crop: None };
+        let first = Document { title: RichText::plain("第一章"), blocks: vec![Block::new(image, RichText::default())], ..Default::default() };
+        let second = Document { title: RichText::plain("第二章"), ..Default::default() };
+        let third = Document { title: RichText::plain("第三章"), ..Default::default() };
+        let mut original = book::pack(vec![book::PackInput::new(first), book::PackInput::new(second), book::PackInput::new(third)],
+            &book::PackOptions { assets_root: Some(dir.clone()), ..Default::default() }).unwrap();
+        original.title = book::Localized::new("中文书名", "English book");
+        original.authors = vec!["Author".into()];
+        original.chapters[0].content_en = Some("# English first\n\n![image](assets/pic.png)".into());
+        original.chapters[0].format_en = Some("markdown".into());
+        original.chapters[1].content_en = Some("<title>English second</title><p>Second body</p>".into());
+        original.version = 2;
+        original.validate().unwrap();
+        let mut store = SharedStore::open_at(dir.clone()).unwrap();
+        let root = install_book(&mut store, &dir, original, PathBuf::from("assets/books/test")).unwrap();
+        drop(store);
+        let mut store = SharedStore::open_at(dir.clone()).unwrap();
+        let entries = store.list();
+        let second = entries.iter().find(|e| e.title == "第二章").unwrap().id.clone();
+        let third = entries.iter().find(|e| e.title == "第三章").unwrap().id.clone();
+        let ids = vec![root.clone(), third, second];
+        let source = crate::book_source::Source::for_pages(&dir, &ids).unwrap().unwrap();
+        let mut pages = ids.iter().map(|id| {
+            let doc = store.load(id).unwrap();
+            (id.clone(), doc.title.text.clone(), doc)
+        }).collect::<Vec<_>>();
+        std::fs::create_dir_all(dir.join("assets/replacement")).unwrap();
+        std::fs::write(dir.join("assets/replacement/pic.png"), b"new image").unwrap();
+        if let BlockKind::Image { src, .. } = &mut pages[0].2.blocks[0].kind { *src = "assets/replacement/pic.png".into(); }
+        pages[0].1 = "新书名".into();
+        let repacked = source.pack(pages, &book::PackOptions { assets_root: Some(dir.clone()), ..Default::default() }).unwrap();
+        assert_eq!(repacked.version, 2);
+        assert_eq!(repacked.title, book::Localized::new("新书名", "English book"));
+        assert_eq!(repacked.authors, vec!["Author"]);
+        assert!(repacked.chapters[0].content_en.as_deref().unwrap().contains("English first"));
+        assert_eq!(repacked.chapters[0].format_en.as_deref(), Some("markdown"));
+        assert!(repacked.chapters[1].content_en.is_none());
+        assert!(repacked.chapters[2].content_en.as_deref().unwrap().contains("English second"));
+        assert_eq!(repacked.assets.len(), 2);
+        assert!(repacked.chapters[0].content.contains("assets/pic-2.png"));
+        assert!(repacked.chapters[0].content_en.as_deref().unwrap().contains("assets/pic.png"));
+        let back = book::Book::from_json(&repacked.to_json().unwrap()).unwrap();
+        assert_eq!(back.chapters[2].id, "ch-2");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

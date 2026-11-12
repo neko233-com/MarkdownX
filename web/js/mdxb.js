@@ -1,13 +1,13 @@
 // `.mdxb` loading, normalization and asset resolution.
 //
-// The browser intentionally accepts only the documented v1 shape. Any extra
+// The browser accepts the documented v1 and v2 shapes. Any extra
 // fields are ignored, and malformed books fail with a readable message.
 
 import { parseDocxXml } from './docxml.js';
 import { parseMarkdown } from './markdown.js';
 
 export const FORMAT = 'markdownx.book';
-export const VERSION = 1;
+export const VERSION = 2;
 
 export async function readBookFile(file) {
   const text = await file.text();
@@ -22,7 +22,7 @@ export async function readBookFile(file) {
 
 export function normalizeBook(raw) {
   if (!raw || raw.format !== FORMAT) throw new Error('缺少 format: "markdownx.book" / Missing book format marker');
-  if (Number(raw.version) !== VERSION) throw new Error(`不支持的版本 ${raw.version} / Unsupported book version ${raw.version}`);
+  if (![1, 2].includes(Number(raw.version))) throw new Error(`不支持的版本 ${raw.version} / Unsupported book version ${raw.version}`);
   if (!Array.isArray(raw.chapters) || !raw.chapters.length) throw new Error('书里没有章节 / The book has no chapters');
   const seen = new Set();
   const chapters = raw.chapters.map((ch, index) => {
@@ -32,15 +32,15 @@ export function normalizeBook(raw) {
     const format = String(ch.format || 'docxxml').toLowerCase();
     const content = String(ch.content || '');
     const contentEn = String(ch.content_en || '');
-    let parsed;
-    let parsedEn;
-    if (format === 'docxxml' || format === 'docxml') {
-      parsed = parseDocxXml(content);
-      parsedEn = contentEn ? parseDocxXml(contentEn) : null;
-    } else if (format === 'markdown' || format === 'md') {
-      parsed = parseMarkdown(content);
-      parsedEn = contentEn ? parseMarkdown(contentEn) : null;
-    } else throw new Error('未知章节格式 / Unknown chapter format: ' + format);
+    const formatEn = String(ch.format_en || format).toLowerCase();
+    if (ch.format_en && Number(raw.version) < 2) throw new Error('翻译格式需要书籍版本 2 / Translation format requires book version 2');
+    const parse = (source, kind) => {
+      if (kind === 'docxxml' || kind === 'docxml') return parseDocxXml(source);
+      if (kind === 'markdown' || kind === 'md') return parseMarkdown(source);
+      throw new Error('未知章节格式 / Unknown chapter format: ' + kind);
+    };
+    const parsed = parse(content, format);
+    const parsedEn = contentEn ? parse(contentEn, formatEn) : null;
     return {
       id,
       titleRaw: ch.title,

@@ -524,6 +524,10 @@ impl Workspace {
             crate::ui::header_icon("home-folder", "folder-open")
                 .tip(crate::settings::tr("打开文件夹", "Open folder"), Some(crate::shortcuts::hint("workspace::OpenFolder", "⌘ + ⇧ + O")))
                 .on_click(cx.listener(|w, _, window, cx| w.open_folder(window, cx))).into_any_element()
+        ).child(
+            crate::ui::header_icon("home-feishu-import", "folder-input")
+                .tip(crate::settings::tr("从飞书导入", "Import from Feishu"), None)
+                .on_click(cx.listener(|w, _, window, cx| w.open_feishu_import(window, cx))).into_any_element()
         );
         // Tabs as segmented items: the current one on a quiet fill, no accent.
         let tab = |id: &'static str, label: &'static str, t: HomeTab| {

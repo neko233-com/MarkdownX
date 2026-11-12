@@ -53,10 +53,15 @@ fn log_pointer(x: f32, y: f32, what: &str) {
 #[cfg(target_os = "windows")]
 pub fn park_window(window: &Window) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW}};
+    use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::{SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW}};
     let RawWindowHandle::Win32(raw) = HasWindowHandle::window_handle(window).unwrap().as_raw() else { panic!("not a Windows window") };
-    let hwnd = HWND(raw.hwnd.get() as *mut std::ffi::c_void);
-    unsafe { SetWindowPos(hwnd, None, -32000, -32000, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW).expect("park test window"); }
+    let raw_hwnd = raw.hwnd.get();
+    // Posting from a separate thread avoids synchronous WM_WINDOWPOSCHANGED
+    // re-entering GPUI while its App is borrowed during window creation.
+    std::thread::spawn(move || {
+        let hwnd = HWND(raw_hwnd as *mut std::ffi::c_void);
+        unsafe { SetWindowPos(hwnd, None, -32000, -32000, 0, 0, SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW).expect("park test window"); }
+    });
 }
 
 fn ease(t: f32) -> f32 {
@@ -264,6 +269,18 @@ pub fn start(window: &mut Window, cx: &mut App) {
             }
             if cmd == "check-onboarding" {
                 cx.update(|cx| crate::app::check_onboarding(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            if cmd == "check-feishu-import" {
+                cx.update(|cx| crate::feishu_ui::check_feishu_import(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            if cmd == "check-native-experiment" {
+                cx.update(|cx| crate::feishu_ui::check_native_experiment(rest.trim(), cx)).unwrap();
+                continue;
+            }
+            if cmd == "check-book-languages" {
+                cx.update(|cx| crate::transfer::check_book_languages(rest.trim(), cx)).unwrap();
                 continue;
             }
             if cmd == "onboarding-language" {

@@ -18,11 +18,11 @@
 MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以推一把的单摆、可以点的测验、可以排序的表格，或者一整段 HTML 小实验。
 
 - **写一次，到处能读。** 一本书就是一个 `.mdxb` 文件，文字、图片和交互块都在里面，不需要服务器，也不怕资源散落。
-- **Markdown 与飞书 DocxXML。** 章节可以是任意一种；Markdown 导入即用，DocxXML 保留标题、表格、高亮块和颜色。
-- **交互块。** `canvas` 用声明式 JSON（Web 阅读器有二次函数、单位圆、抛体；桌面原生二次函数）；`html` 用沙箱 iframe 放任意 HTML/JS。
+- **Markdown 与飞书 DocxXML。** 工作目录可直接编辑常用 Markdown 和 `.docxxml`，也可以导入已授权的飞书文档。Typora 格式兼容仍在完善。
+- **交互块。** 二次函数、单位圆、抛体 Canvas 可在桌面和 Web 阅读器运行；HTML/JS 在阅读器的沙箱中运行，外部资源和脚本网络连接受到限制。
 - **原生中英双语。** 界面、书名和章节正文都可以同时带中文和英文。
 - **为屏幕而生的阅读器。** 手机单列，桌面目录 + 正文；无构建步骤，Chrome 直接打开。
-- **本地优先。** 不登录、不上传、不统计；桌面文档库就是你自己的文件夹。
+- **本地优先。** 本地编辑无需登录；飞书导入使用可选的 CLI 授权，工作目录保存在自己的电脑上。
 - **文件夹就是工作区。** 打开任意目录，直接编辑里面的 `.md`；同一个目录树也能放 `.mdxb`。侧栏是目录树，支持模糊路径搜索和可开关的内容搜索。
 - **批注在正文旁边。** 临时批注保存为 `.annotations.json` sidecar，可以隐藏、解决、批量操作和合并，不必改动正文。
 - **跟着你的电脑走。** 首次启动跟随系统语言（中文/English），也可以在设置里固定一种；应用启动后和每 12 小时检查 GitHub 发布页，发现新版本会提示下载地址。
@@ -75,7 +75,7 @@ pwsh -File scripts/install-windows.ps1
 
 不需要管理员权限。优先使用当前构建的 MSI；应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和工作区保留在 `%LOCALAPPDATA%\MarkdownX\server`，并在「应用和功能」中管理。安装脚本不会强制结束运行中的安装版应用或服务器。
 
-release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.16-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.17-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
 
 「我的文档」默认显示系统文档目录下的 `MarkDown-Demo`；Windows 通常为 `C:\Users\<用户名>\Documents\MarkDown-Demo`。目录不存在时自动创建。使用「我的文档」旁的加号、设置或 **文件 → 打开文件夹…** 添加多个目录，各目录树同时显示并在重启后恢复。目录旁的「…」可更改显示名称或目录、刷新、移除工作区；移除只影响列表，不删除磁盘文件。不可用的目录会保留提示，不影响其他目录。启动参数指定的文件夹仅本次生效。
 
@@ -99,6 +99,12 @@ python -m http.server 8765 --bind 127.0.0.1
 同一份阅读器也可以用 `vercel.json` 部署到 Vercel：`npx vercel deploy` 只把 `web/` 与 `examples/` 构建进 `.vercel-out`。不登录也可以先做一次可认领的临时部署：`npx vercel deploy --temporary`。
 
 首页自带五个示例，其中包括两本中国初中教材：**力与运动**（物理）和 **物质与变化**（化学）。也可以把任意 `.mdxb` 拖进页面。
+
+## 导入飞书文档
+
+在主页或文件菜单选择「从飞书导入」，粘贴文档或知识库链接。请先安装[飞书官方 CLI](https://github.com/larksuite/cli)，运行 `lark-cli config init` 和 `lark-cli auth login`，并授予目标文档的读取权限。MarkdownX 使用该授权将 DocxXML 正文保存到当前工作目录，不覆盖已有文件；完整响应保存在旁边的隐藏来源文件中。
+
+目前支持正文和已实现的 DocxXML 块，图片、附件、评论和嵌入应用不会自动下载或转换，原始引用保留在来源文件中。也可以离线打开飞书导出的 Markdown。`.docxxml` 是 XML 文本，不是 Word `.docx` 文件。
 
 ## 协作服务器
 
@@ -152,7 +158,7 @@ python tools/agent/mdxb.py search books/physics 速度 --content
 }
 ```
 
-每章是 `docxxml` 或 `markdown`；`content_en` 可选，让阅读器在不复制整本书的情况下切换语言。资源以 base64 内嵌，所以一本书真的只有一个文件。完整字段见 [docs/FORMAT.md](docs/FORMAT.md)。
+每章是 `docxxml` 或 `markdown`；`content_en` 可选。英文与主正文格式不同时使用 v2 的 `format_en`，旧版阅读器会拒绝 v2，避免误读。导入书的翻译和资源按页面 ID 保留，重启或章节重排后仍可导出；编辑一种语言不会自动翻译另一种。完整字段见 [docs/FORMAT.md](docs/FORMAT.md)。
 
 ### DocxXML 里的交互块
 
@@ -203,7 +209,7 @@ Web 阅读器没有构建步骤。改完 `web/js/` 后对每个文件跑 `node -
 
 ## 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、Typora 式文件夹工作区与目录树、模糊/内容搜索、直接编辑 `.md`、Markdown/DocxXML 互转、`.mdxb` 导入导出与打包、Markdown 文件夹导出、响应式 Web 阅读器、Canvas/HTML 交互块、`[[双链]]`、批注 sidecar（批量解决/删除/合并），以及带 Git 历史/diff/恢复的 Rust 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 在硬件 D3D11 不可用时会自动回退 WARP，VM/RDP 里也能打开桌面 UI，并已用窗口截图冒烟验证。Windows MSI 会注册 `.mdxb` 并在登录时启动后台 server；macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
+这是早期公开快照。现在可用：桌面编辑与文档库、Typora 式文件夹工作区与目录树、模糊/内容搜索、直接编辑 `.md`、Markdown/DocxXML 互转、`.mdxb` 导入导出与打包、Markdown 文件夹导出、响应式 Web 阅读器、Canvas/HTML 交互块、`[[双链]]`、批注 sidecar（批量解决/删除/合并），以及带 Git 历史/diff/恢复的 Rust 协作服务器。桌面端原生运行 `quadratic`、`unitcircle` 和 `projectile` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 在硬件 D3D11 不可用时会自动回退 WARP，VM/RDP 里也能打开桌面 UI，并已用窗口截图冒烟验证。Windows MSI 会注册 `.mdxb` 并在登录时启动后台 server；macOS/Linux 文件关联和移动端壳是下一步。见 [issues](https://github.com/neko233-com/MarkdownX/issues)。
 
 ## 许可
 

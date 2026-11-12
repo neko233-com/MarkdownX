@@ -428,7 +428,7 @@ html[data-theme="dark"] .chapter-body pre { background: #0f0e0c; border-color: v
   .widget-control { flex-basis: 100%; }
 }
 @media (max-width: 520px) {
-  .hero-art { transform: scale(.78); min-height: 300px; margin: -20px 0; }
+  .hero-art { transform: scale(.78); min-height: 300px; margin: -20px 0; overflow: hidden; }
   .book-stack { transform: scale(.92); }
   .hero-actions .button { width: 100%; }
   .landing-footer { flex-direction: column; justify-content: center; gap: 4px; height: 72px; }

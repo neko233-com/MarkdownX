@@ -69,6 +69,7 @@ pub struct WorkspaceDir {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocKind {
     Markdown,
+    DocxXml,
     Book,
 }
 
@@ -76,6 +77,7 @@ impl DocKind {
     pub fn of(path: &Path) -> Option<Self> {
         match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
             "md" | "markdown" | "mark" | "txt" => Some(DocKind::Markdown),
+            "docxxml" => Some(DocKind::DocxXml),
             "mdxb" => Some(DocKind::Book),
             _ => None,
         }

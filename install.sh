@@ -94,12 +94,10 @@ fi
 
 downloaded=0
 if [ -z "$package" ]; then
-    command -v osascript >/dev/null 2>&1 || fail 'macOS JavaScript for Automation is required to discover releases.'
     api='https://api.github.com/repos/neko233-com/MarkdownX/releases'
-    if ! curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' "$api" -o "$temp/releases.json"; then
-        fail 'Could not retrieve the GitHub release list; supply --package for an offline install.'
-    fi
-    if ! osascript -l JavaScript - "$temp/releases.json" "$allow_unsigned" > "$temp/release.txt" <<'JXA'
+    if curl --fail --silent --location --proto '=https' --proto-redir '=https' "$api" -o "$temp/releases.json"; then
+        command -v osascript >/dev/null 2>&1 || fail 'macOS JavaScript for Automation is required to discover releases.'
+        if ! osascript -l JavaScript - "$temp/releases.json" "$allow_unsigned" > "$temp/release.txt" <<'JXA'
 function run(argv) {
     ObjC.import('Foundation');
     const raw = $.NSString.stringWithContentsOfFileEncodingError($(argv[0]), $.NSUTF8StringEncoding, null);
@@ -118,7 +116,30 @@ function run(argv) {
     throw Error('No suitable DMG with checksum; unsigned test builds need --allow-unsigned');
 }
 JXA
-    then fail 'No suitable release was found. Unsigned test builds require --allow-unsigned.'; fi
+        then fail 'No suitable release was found. Unsigned test builds require --allow-unsigned.'; fi
+    else
+        # GitHub's unauthenticated API is shared and can be rate-limited even
+        # for public repositories. The public release feed has no API quota;
+        # probe both the package and checksum before selecting a release.
+        feed='https://github.com/neko233-com/MarkdownX/releases.atom'
+        curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' "$feed" -o "$temp/releases.atom" || fail 'Could not retrieve GitHub releases; supply --package for an offline install.'
+        sed -n 's#.*<id>tag:github.com,2008:Repository/[0-9][0-9]*/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)</id>.*#\1#p' "$temp/releases.atom" > "$temp/tags.txt"
+        found=0
+        while IFS= read -r candidate; do
+            printf '%s\n' "$candidate" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || continue
+            for name in markdownx-macos-arm64.dmg markdownx-macos-arm64-unsigned.dmg; do
+                [ "$name" != markdownx-macos-arm64-unsigned.dmg ] || [ "$allow_unsigned" -eq 1 ] || continue
+                base="https://github.com/neko233-com/MarkdownX/releases/download/$candidate"
+                if curl --head --fail --silent --location --proto '=https' --proto-redir '=https' "$base/$name" >/dev/null \
+                    && curl --head --fail --silent --location --proto '=https' --proto-redir '=https' "$base/$name.sha256" >/dev/null; then
+                    printf '%s\n%s\nunknown\n' "$candidate" "$name" > "$temp/release.txt"
+                    found=1
+                    break 2
+                fi
+            done
+        done < "$temp/tags.txt"
+        [ "$found" -eq 1 ] || fail 'No suitable release was found. Unsigned test builds require --allow-unsigned.'
+    fi
     tag=$(sed -n '1p' "$temp/release.txt")
     asset=$(sed -n '2p' "$temp/release.txt")
     prerelease=$(sed -n '3p' "$temp/release.txt")

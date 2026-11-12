@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const SAVE_MAX_DELAY: Duration = Duration::from_secs(2);
 
-actions!(workspace, [NewDoc, ImportDoc, OpenFolder, OpenFile, PackageBook, ToggleSidebar, FocusSearch, GlobalSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
+actions!(workspace, [NewDoc, ImportDoc, ImportFeishu, OpenFolder, OpenFile, PackageBook, ToggleSidebar, FocusSearch, GlobalSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
     HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
 /// The menu bar, in the interface language.
@@ -52,6 +52,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action(tr("新建文档", "New Document"), NewDoc),
                 MenuItem::action(tr("新建笔记窗口", "New Note Window"), crate::quick_note::QuickNew),
                 MenuItem::action(tr("导入为文档…", "Import as Document…"), ImportDoc),
+                MenuItem::action(tr("从飞书导入…", "Import from Feishu…"), ImportFeishu),
                 MenuItem::action(tr("打开文件夹…", "Open Folder…"), OpenFolder),
                 MenuItem::action(tr("打包成电子书…", "Package as E-book…"), PackageBook),
                 MenuItem::action(tr("打开文件…", "Open File…"), OpenFile),
@@ -236,7 +237,7 @@ pub struct Workspace {
     pub file: Option<std::path::PathBuf>,
     /// Bytes last read or saved, used to detect changes made by another app.
     file_snapshot: Option<String>,
-    file_source: Option<crate::markdown_source::Source>,
+    file_source: Option<FolderSource>,
     /// File saves run off the UI thread; revisions keep edits made during a save.
     file_saving: bool,
     pub(crate) file_revision: u64,
@@ -259,10 +260,6 @@ pub struct Workspace {
     pub folder_links: fdl_core::wiki::Index,
     folder_links_generation: u64,
     folder_links_loading: bool,
-    /// English chapter bodies from the last imported `.mdxb`, if any.
-    pub book_english: Vec<Option<String>>,
-    /// Root page id those bodies belong to; prevents leaking into other books.
-    pub book_english_id: Option<String>,
     /// Temporary annotations for the open page, stored beside its source.
     pub annotations: fdl_core::annotations::AnnotationStore,
     pub annotations_path: Option<std::path::PathBuf>,
@@ -324,6 +321,7 @@ pub struct Workspace {
     pub move_dlg: Option<crate::tree::MoveDialog>,
     /// 导出 Markdown 设置.
     pub export_md: Option<crate::transfer::ExportMd>,
+    pub(crate) feishu_import: Option<crate::feishu_ui::FeishuDialog>,
     /// 编辑 / 阅读 dropdown, and the mode button's last-frame bounds.
     pub mode_menu: bool,
     pub mode_btn_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -500,8 +498,6 @@ impl Workspace {
             folder_links: fdl_core::wiki::Index::default(),
             folder_links_generation: 0,
             folder_links_loading: false,
-            book_english: Vec::new(),
-            book_english_id: None,
             annotations: fdl_core::annotations::AnnotationStore::new(""),
             annotations_path: None,
             annotations_open: false,
@@ -550,6 +546,7 @@ impl Workspace {
             expanded: HashSet::new(),
             move_dlg: None,
             export_md: None,
+            feishu_import: None,
             focus: cx.focus_handle(),
             save_task: None,
             dirty_since: None,
@@ -597,7 +594,7 @@ impl Workspace {
         let prompt = picked.is_none().then(|| cx.prompt_for_paths(PathPromptOptions {
             files: true, directories: false, multiple: false,
             prompt: Some(crate::settings::tr("打开文件", "Open file").into()),
-            extensions: Some(["md", "markdown", "mark", "txt", "mdxb"].into_iter().map(SharedString::from).collect()),
+            extensions: Some(["md", "markdown", "mark", "txt", "docxxml", "mdxb"].into_iter().map(SharedString::from).collect()),
         }));
         cx.spawn_in(window, async move |this, cx| {
             let paths = match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked };
@@ -612,8 +609,8 @@ impl Workspace {
             self.open_book_path(path, window, cx);
             return;
         }
-        if crate::workspace_fs::DocKind::of(&path) != Some(crate::workspace_fs::DocKind::Markdown) || !path.is_file() {
-            self.show_toast_kind(ToastKind::Error, crate::settings::tr("请选择 Markdown 或文本文件", "Choose a Markdown or text file"), cx);
+        if !matches!(crate::workspace_fs::DocKind::of(&path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml)) || !path.is_file() {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("请选择 Markdown、DocxXML 或文本文件", "Choose a Markdown, DocxXML or text file"), cx);
             return;
         }
         let retry = path.clone();
@@ -1003,7 +1000,7 @@ impl Workspace {
                     self.show_toast_kind(ToastKind::Error, crate::settings::text("无法打开这本书"), cx);
                 }
             }
-            Some(crate::workspace_fs::DocKind::Markdown) => {
+            Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml) => {
                 let text = match std::fs::read_to_string(&path) {
                     Ok(t) => t,
                     Err(e) => {
@@ -1011,7 +1008,10 @@ impl Workspace {
                         return;
                     }
                 };
-                let (doc, source) = crate::markdown_source::parse(&path, &text);
+                let (doc, source) = match parse_folder_document(&path, &text) {
+                    Ok(parsed) => parsed,
+                    Err(_) => { self.show_toast_kind(ToastKind::Error, crate::settings::tr("文档格式无法读取", "The document format could not be read"), cx); return; }
+                };
                 let modified = file_modified(&path);
                 let editor = cx.new(|cx| {
                     let mut e = Editor::new(doc, modified, crate::store::PageWidth::default(), window, cx);
@@ -1601,7 +1601,15 @@ impl Workspace {
             if let Some(path) = self.file.clone() {
                 match std::fs::read_to_string(&path) {
                     Ok(text) => {
-                        let (doc, source) = crate::markdown_source::parse(&path, &text);
+                        let (doc, source) = match parse_folder_document(&path, &text) {
+                            Ok(parsed) => parsed,
+                            Err(_) => {
+                                self.status = SaveStatus::Failed(crate::settings::tr("无法重新载入文档格式", "Could not reload the document format").to_string());
+                                self.confirm = Some(Confirm::SaveFailed);
+                                cx.notify();
+                                return;
+                            }
+                        };
                         if let Some(ed) = &self.editor {
                             ed.update(cx, |e, cx| e.receive_document(&crate::editor::core::Core::new(doc), cx));
                         }
@@ -1964,23 +1972,45 @@ impl Workspace {
     }
 }
 
-struct FolderSaveOutcome { text: String, source: crate::markdown_source::Source, modified: u64, git_warning: Option<String> }
+#[derive(Clone)]
+enum FolderSource { Markdown(crate::markdown_source::Source), DocxXml }
 
-fn save_folder_document(path: &std::path::Path, snapshot: &str, doc: &crate::model::Document, source: &crate::markdown_source::Source) -> Result<FolderSaveOutcome, crate::workspace_fs::SaveFileError> {
+struct FolderSaveOutcome { text: String, source: FolderSource, modified: u64, git_warning: Option<String> }
+
+fn parse_folder_document(path: &std::path::Path, text: &str) -> anyhow::Result<(crate::model::Document, FolderSource)> {
+    if crate::workspace_fs::DocKind::of(path) == Some(crate::workspace_fs::DocKind::DocxXml) {
+        Ok((crate::docxml::parse(text)?, FolderSource::DocxXml))
+    } else {
+        let (doc, source) = crate::markdown_source::parse(path, text);
+        Ok((doc, FolderSource::Markdown(source)))
+    }
+}
+
+fn save_folder_document(path: &std::path::Path, snapshot: &str, doc: &crate::model::Document, source: &FolderSource) -> Result<FolderSaveOutcome, crate::workspace_fs::SaveFileError> {
     #[cfg(feature = "devtools")]
     if let Some(ms) = std::env::var("MARKDOWNX_TEST_SAVE_DELAY_MS").ok().and_then(|s| s.parse::<u64>().ok()) {
         std::thread::sleep(Duration::from_millis(ms.min(10_000)));
     }
-    if !source.matches(snapshot) { return Err(crate::workspace_fs::SaveFileError::Changed); }
-    let rendered = crate::markdown_source::render(path, source, doc)?;
-    let copied = crate::workspace_fs::write_export_if_unchanged(path, snapshot.as_bytes(), rendered.text.as_bytes(), &rendered.files)?;
+    let (text, next_source, copied) = match source {
+        FolderSource::Markdown(source) => {
+            if !source.matches(snapshot) { return Err(crate::workspace_fs::SaveFileError::Changed); }
+            let rendered = crate::markdown_source::render(path, source, doc)?;
+            let copied = crate::workspace_fs::write_export_if_unchanged(path, snapshot.as_bytes(), rendered.text.as_bytes(), &rendered.files)?;
+            (rendered.text, FolderSource::Markdown(rendered.source), copied)
+        }
+        FolderSource::DocxXml => {
+            let text = crate::docxml::serialize(doc);
+            crate::workspace_fs::write_if_unchanged(path, snapshot.as_bytes(), text.as_bytes())?;
+            (text, FolderSource::DocxXml, vec![])
+        }
+    };
     let mut touched = vec![path.to_path_buf()];
     touched.extend(copied);
     let git_warning = crate::git_workspace::repo_root(path).and_then(|root| {
         let message = format!("edit: {}", crate::git_workspace::relative(&root, path));
         crate::git_workspace::commit_paths(&root, &touched, &message).err().map(|e| e.to_string())
     });
-    Ok(FolderSaveOutcome { text: rendered.text, source: rendered.source, modified: file_modified(path), git_warning })
+    Ok(FolderSaveOutcome { text, source: next_source, modified: file_modified(path), git_warning })
 }
 
 fn file_modified(path: &std::path::Path) -> u64 {
@@ -2047,6 +2077,7 @@ impl Render for Workspace {
         };
         let move_dlg = self.render_move_dialog(cx);
         let export_md = self.render_export_md(cx);
+        let feishu_import = self.render_feishu_import(cx);
         // Only the note stands out: a white plane flush with the window's top,
         // right and bottom edges. The sidebar sits sunken on the window
         // surface beside it; the change of value is the only line between
@@ -2086,6 +2117,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|w, _: &GoHome, _, cx| w.show_view(View::Home, cx)))
             .on_action(cx.listener(|w, _: &NewDoc, window, cx| w.new_doc(window, cx)))
             .on_action(cx.listener(|w, _: &ImportDoc, window, cx| w.open_import(window, cx)))
+            .on_action(cx.listener(|w, _: &ImportFeishu, window, cx| w.open_feishu_import(window, cx)))
             .on_action(cx.listener(|w, _: &OpenFolder, window, cx| w.open_folder(window, cx)))
             .on_action(cx.listener(|w, _: &OpenFile, window, cx| w.open_file(window, cx)))
             .on_action(cx.listener(|w, _: &PackageBook, window, cx| w.package_book(window, cx)))
@@ -2181,6 +2213,7 @@ impl Render for Workspace {
             .children(confirm)
             .children(move_dlg)
             .children(export_md)
+            .children(feishu_import)
             .children(search)
             .children(resize_overlay)
             .children(toast)
@@ -2717,7 +2750,7 @@ pub(crate) fn check_folder_safety(args: &str, cx: &mut App) {
 
 #[cfg(test)]
 mod markdown_file_tests {
-    use super::{parse_markdown_file, save_folder_document};
+    use super::{FolderSource, parse_markdown_file, save_folder_document};
 
     #[test]
     fn saves_without_inserting_an_implicit_title() {
@@ -2727,7 +2760,7 @@ mod markdown_file_tests {
         let text = "\u{feff}First line\r\n\r\nSecond line\r\n";
         std::fs::write(&path, text).unwrap();
         let (doc, source) = crate::markdown_source::parse(&path, text);
-        let saved = save_folder_document(&path, text, &doc, &source).unwrap();
+        let saved = save_folder_document(&path, text, &doc, &FolderSource::Markdown(source)).unwrap();
         assert!(saved.text.starts_with("\u{feff}First line\r\n"));
         assert!(!saved.text.contains("# note"));
         let mut renamed = doc.clone();
@@ -2736,6 +2769,24 @@ mod markdown_file_tests {
         assert!(saved.text.starts_with("\u{feff}# New title\r\n"));
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn docxxml_workspace_save_preserves_external_changes() {
+        let dir = std::env::temp_dir().join(format!("markdownx-docxxml-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("feishu.docxxml");
+        let original = "<title>Title</title><p>Text</p>";
+        std::fs::write(&path, original).unwrap();
+        let (mut doc, source) = super::parse_folder_document(&path, original).unwrap();
+        doc.title = crate::model::RichText::plain("Updated");
+        let saved = save_folder_document(&path, original, &doc, &source).unwrap();
+        assert!(saved.text.contains("<title>Updated</title>"));
+        std::fs::write(&path, "external change").unwrap();
+        assert!(matches!(save_folder_document(&path, &saved.text, &doc, &saved.source), Err(crate::workspace_fs::SaveFileError::Changed)));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change");
+        assert!(dir.starts_with(std::env::temp_dir()));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

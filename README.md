@@ -18,11 +18,11 @@
 MarkdownX is a writing and reading environment for **dynamic books**: documents that can contain a draggable parabola, a pendulum you can push, a quiz, a table you can sort, or a whole HTML experiment.
 
 - **Write once, read anywhere.** A book is one `.mdxb` file. Text, images and interactive blocks travel together — no folder of loose assets, no server.
-- **Markdown and Feishu/Lark DocxXML.** Chapters can be either format. Existing Markdown imports cleanly; DocxXML keeps its block structure, tables, callouts and colors.
-- **Interactive blocks.** `canvas` blocks are declarative JSON (quadratic, unit circle, projectile in the web reader; quadratic natively on the desktop). `html` blocks are sandboxed HTML/JS for everything else.
+- **Markdown and Feishu/Lark DocxXML.** Edit common Markdown syntax and `.docxxml` files in a workspace, or import an authorized Feishu document. Typora compatibility is still a work in progress.
+- **Interactive blocks.** Declarative `canvas` blocks run the built-in quadratic, unit-circle and projectile experiments on desktop and in the web reader. HTML/JS runs in the reader's sandbox, with external resources and script connections blocked.
 - **Bilingual by design.** Interface, book metadata and chapter text can carry Chinese and English side by side.
 - **A reader that fits the screen.** The web reader is a build-free, responsive page: a single column on a phone, a table of contents and a comfortable measure on a desktop.
-- **Local first.** No account, no cloud, no telemetry. The desktop library is a folder you own.
+- **Local first.** Local editing needs no account; Feishu import uses your optional CLI authorization. Your workspace files stay on your computer.
 - **Your folders are your workspace.** Keep multiple folder trees open together and edit their `.md` files in place. Search across them; use each folder’s menu to manage its files and folders. Git-backed saves can create commits for touched files.
 - **Built for team workflows.** Game design, product, film and editorial starter templates live in `templates/`; the collaboration server exposes them to the browser. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Notes live beside the text.** Temporary comments are stored in `.annotations.json` sidecars, so reviewers can hide, resolve, batch-edit and merge them without touching the prose.
@@ -76,7 +76,7 @@ pwsh -File scripts/install-windows.ps1
 
 No administrator rights are needed. The local MSI is preferred. The app goes to `%LOCALAPPDATA%\Programs\MarkdownX`; the server token and workspace remain in `%LOCALAPPDATA%\MarkdownX\server`. The installation is registered in **Apps & features**. The helper refuses to force-close a running installed app or server.
 
-Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-0.1.16-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
+Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-0.1.17-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
 
 **My documents** shows `MarkDown-Demo` inside the system Documents folder by default; on Windows this is normally `C:\Users\<user>\Documents\MarkDown-Demo`. The app creates the default folder if it is missing. Use the **+** beside My documents, **Settings → Documents**, or **File → Open Folder…** to add folders. Their trees stay visible together and are restored on the next launch. Each root’s **…** menu can change its display name or folder, refresh it, or remove it from the list without deleting files. An unavailable folder remains listed without blocking the others. A folder passed on the command line is temporary.
 
@@ -100,6 +100,12 @@ python -m http.server 8765 --bind 127.0.0.1
 The same reader deploys to Vercel with `vercel.json`; `npx vercel deploy` builds `.vercel-out` from `web/` and `examples/` only. A temporary, claimable deployment can be made without an account: `npx vercel deploy --temporary`.
 
 The landing page ships with five examples, including two Chinese middle-school books: **力与运动** (physics) and **物质与变化** (chemistry). You can also drag any `.mdxb` onto the page.
+
+## Import from Feishu
+
+Open **Import from Feishu** on Home or in the File menu and paste a document or wiki link. Install the [official Feishu CLI](https://github.com/larksuite/cli), run `lark-cli config init` and `lark-cli auth login`, and grant read access to the document first. MarkdownX uses that authorization to fetch the full DocxXML into the active workspace, without overwriting files; the original response is kept in an adjacent hidden sidecar.
+
+The current import covers document text and supported DocxXML blocks. Images, attachments, comments and embedded applications are not downloaded or converted automatically; their source references are retained. Markdown exported from Feishu can also be opened offline. `.docxxml` is an XML document, not a Word `.docx` file.
 
 ## For agents
 
@@ -155,7 +161,7 @@ The server is single-tenant and protected by one shared token; put it behind TLS
 }
 ```
 
-Every chapter is either `docxxml` or `markdown`; `content_en` is optional and lets the reader switch languages without duplicating the book. Assets are embedded as base64, so a book is genuinely one file.
+Every chapter is either `docxxml` or `markdown`; `content_en` is optional. When its format differs from the main chapter, v2 adds `format_en`; v1 readers reject v2 instead of misreading it. Imported translations and their assets survive restarts and chapter reordering, but editing one language does not translate the other.
 
 ### Markdown ↔ book
 
@@ -221,7 +227,7 @@ cargo clippy -p markdownx-server --all-targets -- -D warnings
 
 ## Status
 
-This is an early public snapshot. Working today: the desktop editor and library, multiple folder workspaces with directory trees and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic` Canvas explorer natively; HTML stays sandboxed in the reader. On Windows it falls back to WARP when a hardware D3D11 device is unavailable, so the installed app opens even on VMs and RDP sessions; the fallback is covered by a captured window smoke test. The Windows MSI registers `.mdxb` and starts the collaboration server at sign-in; macOS Info.plist and the Linux MIME package register `.mdxb`, while double-click behavior on macOS/Linux still needs a real desktop check. Mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
+This is an early public snapshot. Working today: the desktop editor and library, multiple folder workspaces with directory trees and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic`, `unitcircle` and `projectile` Canvas experiments natively; HTML stays sandboxed in the reader. On Windows it falls back to WARP when a hardware D3D11 device is unavailable, so the installed app opens even on VMs and RDP sessions; the fallback is covered by a captured window smoke test. The Windows MSI registers `.mdxb` and starts the collaboration server at sign-in; macOS Info.plist and the Linux MIME package register `.mdxb`, while double-click behavior on macOS/Linux still needs a real desktop check. Mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
 
 ## License
 
@@ -241,10 +247,10 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 
 - **写一次，到处能读。** 一本书就是一个 `.mdxb` 文件，文字、图片和交互块都在里面，不需要服务器。
 - **Markdown 与飞书 DocxXML。** 章节可以是任意一种；Markdown 导入即用，DocxXML 保留标题、表格、高亮块和颜色。
-- **交互块。** `canvas` 用声明式 JSON（Web 阅读器有二次函数、单位圆、抛体；桌面原生二次函数）；`html` 用沙箱 iframe 放任意 HTML/JS。
+- **交互块。** 二次函数、单位圆、抛体 Canvas 可在桌面和 Web 阅读器运行；HTML/JS 在阅读器的沙箱中运行，外部资源和脚本网络连接受到限制。
 - **原生中英双语。** 界面、书名和章节正文都可以同时带中文和英文。
 - **为屏幕而生的阅读器。** 手机单列，桌面目录 + 正文；无构建步骤，Chrome 直接打开。
-- **本地优先。** 不登录、不上传、不统计；桌面文档库就是你自己的文件夹。
+- **本地优先。** 本地编辑无需登录；飞书导入使用可选的 CLI 授权，工作目录保存在自己的电脑上。
 - **选择自己的文件夹。** 目录树直接编辑所选目录里的 `.md`；文件属于 Git 仓库时，保存可为改动的文件生成提交。同一个树里也能放 `.mdxb`，支持模糊路径搜索、内容搜索、`[[双链]]` 和行内批注。
 - **团队工作流开箱即用。** `templates/` 里有游戏策划、产品 PRD、影视 treatment、内容选题等模板；浏览器协作端会直接列出这些模板。见 [docs/WORKFLOWS.md](docs/WORKFLOWS.md)。
 - **跟着你的电脑走。** 首次启动跟随系统语言（中文/English），也可以在设置里固定一种；应用启动后和每 12 小时检查 GitHub 发布页，发现新版本会提示下载地址。
@@ -281,7 +287,7 @@ pwsh -File scripts/install-windows.ps1
 
 不需要管理员权限。优先使用当前构建的 MSI；应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和工作区保留在 `%LOCALAPPDATA%\MarkdownX\server`，并在「应用和功能」中管理。安装脚本不会强制结束运行中的安装版应用或服务器。
 
-release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.16-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-0.1.17-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
 
 ```sh
 cargo run --release
@@ -365,7 +371,7 @@ cargo clippy -p markdownx-server --all-targets -- -D warnings
 
 ### 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块，以及带 Git 历史和 diff 的 Rust 协作服务器。桌面端原生运行内置的 `quadratic` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 在硬件 D3D11 不可用时会自动回退 WARP，VM/RDP 里也能打开桌面 UI，并已用窗口截图冒烟验证。Windows MSI 会注册 `.mdxb` 并在登录时启动协作服务器；macOS Info.plist 和 Linux MIME 包也会注册 `.mdxb`，但双击行为仍待真机验证，移动端壳是下一步。
+这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块，以及带 Git 历史和 diff 的 Rust 协作服务器。桌面端原生运行 `quadratic`、`unitcircle` 和 `projectile` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 在硬件 D3D11 不可用时会自动回退 WARP，VM/RDP 里也能打开桌面 UI，并已用窗口截图冒烟验证。Windows MSI 会注册 `.mdxb` 并在登录时启动协作服务器；macOS Info.plist 和 Linux MIME 包也会注册 `.mdxb`，但双击行为仍待真机验证，移动端壳是下一步。
 
 ### 许可
 
