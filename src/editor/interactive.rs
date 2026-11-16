@@ -1,14 +1,16 @@
 //! Interactive blocks in the desktop editor.
 //!
 //! Canvas blocks carry a small JSON spec. Built-in quadratic, unit-circle and
-//! projectile runtimes are native; HTML blocks run in the Web reader.
+//! projectile runtimes are native; HTML blocks use a sandboxed WebView2 on
+//! Windows and the Web reader elsewhere.
 
 use super::render::R;
 use super::view::Editor;
 use crate::editor_theme::Theme;
 use crate::model::*;
-use gpui::*;
+use gpui::{prelude::FluentBuilder, *};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::sync::Arc;
 use std::time::Instant;
 
 const GRAPH_H: f32 = 240.;
@@ -128,9 +130,114 @@ pub(super) struct IxUi {
     experiments: Rc<RefCell<HashMap<BlockId, (String, Rc<RefCell<Experiment>>)>>>,
     tracks: Rc<RefCell<HashMap<(BlockId, usize), Bounds<Pixels>>>>,
     drag: Rc<RefCell<Option<(BlockId, usize)>>>,
+    models: Rc<RefCell<HashMap<BlockId, Rc<RefCell<InlineModel>>>>>,
+    #[cfg(target_os = "windows")]
+    html: Rc<RefCell<HashMap<BlockId, Rc<RefCell<InlineHtml>>>>>,
+    #[cfg(target_os = "windows")]
+    html_workspace_visible: Rc<std::cell::Cell<bool>>,
+    #[cfg(target_os = "windows")]
+    html_editor_visible: Rc<std::cell::Cell<bool>>,
+}
+
+#[cfg(target_os = "windows")]
+struct InlineHtml {
+    source: String,
+    seen: bool,
+    starting: bool,
+    native: Option<crate::native_widget::NativeWidget>,
+    error: Option<String>,
+    #[cfg(feature = "devtools")]
+    geometry: Option<(Bounds<Pixels>, Bounds<Pixels>, f32)>,
+}
+
+struct InlineModel {
+    src: String,
+    mesh: Option<Arc<fdl_core::media::model::Mesh>>,
+    image: Option<Arc<RenderImage>>,
+    error: Option<String>,
+    yaw: f32,
+    pitch: f32,
+    zoom: f32,
+    drag: Option<(f32, f32)>,
+    generation: u64,
+    rendering: bool,
+    dirty: bool,
+    used: Instant,
+    bounds: Option<Bounds<Pixels>>,
 }
 
 impl IxUi {
+    #[cfg(target_os = "windows")]
+    fn html(&self, id: BlockId, source: &str) -> Rc<RefCell<InlineHtml>> {
+        if let Some(state) = self.html.borrow().get(&id).cloned()
+            && state.borrow().source == source { return state; }
+        let state = Rc::new(RefCell::new(InlineHtml { source: source.into(), seen: false, starting: false, native: None, error: None, #[cfg(feature = "devtools")] geometry: None }));
+        self.html.borrow_mut().insert(id, state.clone());
+        state
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(super) fn begin_html_frame(&self) { for state in self.html.borrow().values() { state.borrow_mut().seen = false; } }
+
+    #[cfg(target_os = "windows")]
+    pub(super) fn end_html_frame(&self) { self.html.borrow_mut().retain(|_, state| state.borrow().seen); }
+
+    #[cfg(target_os = "windows")]
+    pub(super) fn set_html_editor_visible(&self, visible: bool) {
+        self.html_editor_visible.set(visible);
+        if !visible { self.hide_html(); }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn hide_html(&self) { for state in self.html.borrow().values() { if let Some(native) = &state.borrow().native { native.hide(); } } }
+
+    #[cfg(target_os = "windows")]
+    fn html_visible(&self) -> bool { self.html_workspace_visible.get() && self.html_editor_visible.get() }
+
+    fn model(&self, id: BlockId, src: &str, cx: &mut Context<Editor>) -> Rc<RefCell<InlineModel>> {
+        let cached = self.models.borrow().get(&id).cloned();
+        if let Some(state) = cached {
+            let same = state.borrow().src == src;
+            if same { state.borrow_mut().used = Instant::now(); return state; }
+        }
+        let state = Rc::new(RefCell::new(InlineModel { src: src.into(), mesh: None, image: None, error: None,
+            yaw: 0., pitch: 0., zoom: 1., drag: None, generation: 0, rendering: true, dirty: false, used: Instant::now(), bounds: None }));
+        {
+            let mut models = self.models.borrow_mut();
+            if models.len() >= 8 && !models.contains_key(&id)
+                && let Some(oldest) = models.iter().min_by_key(|(_, state)| state.borrow().used).map(|(id, _)| *id)
+            { models.remove(&oldest); }
+            models.insert(id, state.clone());
+        }
+        let source = src.to_string();
+        let path = crate::store::image_path(src);
+        let task = cx.background_executor().spawn(async move {
+            let path = path.ok_or_else(|| "Model path is unavailable".to_string())?;
+            let mesh = Arc::new(fdl_core::media::model::load(&path).map_err(|e| e.to_string())?);
+            let png = crate::media_ui::model_png(&mesh, 0., 0., 1.)?;
+            Ok::<_, String>((mesh, png))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |editor, cx| {
+                let state = editor.ix.models.borrow().get(&id).cloned();
+                let Some(state) = state else { return };
+                let mut state = state.borrow_mut();
+                if state.src != source { return; }
+                state.rendering = false;
+                match result {
+                    Ok((mesh, png)) => { state.mesh = Some(mesh); state.image = crate::media_ui::decoded_image(&png); }
+                    Err(error) => state.error = Some(error),
+                }
+                let dirty = state.dirty;
+                state.dirty = false;
+                drop(state);
+                if dirty { editor.rerender_inline_model(id, cx); }
+                cx.notify();
+            });
+        }).detach();
+        state
+    }
     fn quad(&self, id: BlockId, i: &Interactive) -> Option<Rc<RefCell<Quad>>> {
         if let Some((source, q)) = self.quads.borrow().get(&id)
             && source == &i.source {
@@ -173,13 +280,130 @@ impl IxUi {
     }
 }
 
+impl Editor {
+    #[cfg(all(target_os = "windows", feature = "devtools"))]
+    pub(crate) fn check_inline_html_state(&self, phase: &str) {
+        let states = self.ix.html.borrow();
+        if phase == "offscreen" { assert!(states.is_empty(), "offscreen HTML was not released"); }
+        else if matches!(phase, "denied" | "missing") {
+            let state = states.values().next().expect("HTML block is absent").borrow();
+            assert!(state.native.is_none(), "invalid HTML resource started a native viewer");
+            let error = state.error.as_deref().expect("HTML resource error was not shown");
+            let valid = if phase == "denied" { error.contains("不在工作区内") || error.contains("outside the workspace") }
+                else { error.contains("不存在或无法读取") || error.contains("missing or inaccessible") };
+            assert!(valid, "unexpected HTML resource error: {error}");
+        }
+        else {
+            let state = states.values().next().expect("HTML block is absent").borrow();
+            let native = state.native.as_ref().expect("HTML control is not loaded");
+            let (shown, width, height) = native.shown_and_size();
+            if phase == "shown" {
+                assert!(shown && width > 20 && height > 20, "HTML is not positioned or visible: {width}x{height}");
+                let (bounds, clip, scale) = state.geometry.expect("HTML layout was not recorded");
+                assert!(native.geometry_matches(bounds, clip, scale), "HTML native window does not match its clipped document bounds");
+            }
+            else if phase == "hidden" { assert!(!shown, "HTML covers an open menu"); }
+            else { panic!("unknown HTML state phase"); }
+        }
+        crate::logging::write(&format!("inline-html-state: {phase} PASS"));
+    }
+
+    #[cfg(all(target_os = "windows", feature = "devtools"))]
+    pub(crate) fn inline_html_frame(&self) -> Result<(webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2, webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Frame2), String> {
+        let state = self.ix.html.borrow().values().next().cloned().ok_or("interactive block was not rendered")?;
+        let state = state.borrow();
+        if let Some(error) = &state.error { return Err(error.clone()); }
+        let native = state.native.as_ref().ok_or("interactive block is still loading")?;
+        Ok((native.web()?, native.frame()?))
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn set_html_workspace_visible(&self, visible: bool) -> bool {
+        let previous = self.ix.html_workspace_visible.replace(visible);
+        if !visible { self.ix.hide_html(); }
+        visible && !previous
+    }
+
+    #[cfg(target_os = "windows")]
+    fn start_inline_html(&mut self, id: BlockId, source: String, parent: usize, cx: &mut Context<Self>) {
+        let Some(state) = self.ix.html.borrow().get(&id).cloned() else { return };
+        if state.borrow().source != source { return; }
+        let input = source.clone();
+        let root = self.asset_root.clone().unwrap_or_else(crate::store::Store::root_dir);
+        let base = self.asset_base.clone().unwrap_or_else(|| root.clone());
+        let task = cx.background_executor().spawn(async move { crate::widget_server::WidgetServer::start(&input, &base, &root).map_err(|error| error.to_string()) });
+        cx.spawn(async move |this, cx| {
+            let result = match task.await {
+                Ok(server) => crate::native_widget::NativeWidget::create(parent, server, cx).await,
+                Err(error) => Err(error),
+            };
+            let _ = this.update(cx, |editor, cx| {
+                let current = editor.ix.html.borrow().get(&id).cloned();
+                let Some(current) = current else { return };
+                if !Rc::ptr_eq(&current, &state) || current.borrow().source != source { return; }
+                let mut current = current.borrow_mut();
+                current.starting = false;
+                match result { Ok(native) => current.native = Some(native), Err(error) => current.error = Some(error) }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn check_inline_model(&self, phase: &str) -> Bounds<Pixels> {
+        let state = self.ix.models.borrow().values().next().cloned().expect("inline model was not rendered");
+        let state = state.borrow();
+        assert!(state.mesh.is_some() && state.image.is_some() && !state.rendering && state.error.is_none(), "inline model has not finished rendering");
+        if phase == "rotated" { assert!(state.yaw.abs() > 0.1 && state.generation > 0, "drag did not rotate the inline model"); }
+        if phase == "zoomed" { assert!(state.zoom > 1.0 && state.generation > 1, "wheel did not zoom the inline model"); }
+        if phase == "reset" { assert!(state.yaw == 0.0 && state.pitch == 0.0 && state.zoom == 1.0, "double-click did not reset the inline model"); }
+        let bounds = state.bounds.expect("inline model has no layout bounds");
+        crate::logging::write(&format!("inline-model: {phase} PASS"));
+        bounds
+    }
+
+    fn rerender_inline_model(&mut self, id: BlockId, cx: &mut Context<Self>) {
+        let state = self.ix.models.borrow().get(&id).cloned();
+        let Some(state) = state else { return };
+        let (mesh, source, generation, yaw, pitch, zoom) = {
+            let mut state = state.borrow_mut();
+            if state.rendering { state.dirty = true; return; }
+            let Some(mesh) = state.mesh.clone() else { return };
+            state.rendering = true;
+            state.generation = state.generation.wrapping_add(1);
+            (mesh, state.src.clone(), state.generation, state.yaw, state.pitch, state.zoom)
+        };
+        let task = cx.background_executor().spawn(async move { crate::media_ui::model_png(&mesh, yaw, pitch, zoom) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |editor, cx| {
+                let state = editor.ix.models.borrow().get(&id).cloned();
+                let Some(state) = state else { return };
+                let mut state = state.borrow_mut();
+                if state.src != source || state.generation != generation { return; }
+                state.rendering = false;
+                match result {
+                    Ok(png) => state.image = crate::media_ui::decoded_image(&png),
+                    Err(error) => state.error = Some(error),
+                }
+                let dirty = state.dirty;
+                state.dirty = false;
+                drop(state);
+                if dirty { editor.rerender_inline_model(id, cx); }
+                cx.notify();
+            });
+        }).detach();
+    }
+}
+
 impl R<'_> {
     pub(super) fn interactive(&self, b: &Block, i: &Interactive, cx: &mut Context<Editor>) -> AnyElement {
         let id = b.id;
-        let kind = match i.kind {
+        let model = (i.kind == InteractiveKind::Html).then(|| fdl_core::html_assets::standalone_model(&i.source)).flatten();
+        let kind = if model.is_some() { "3D" } else { match i.kind {
             InteractiveKind::Canvas => "Canvas",
             InteractiveKind::Html => "HTML",
-        };
+        } };
         let title = if i.title.trim().is_empty() { crate::settings::text("交互内容") } else { i.title.as_str() };
         let header = div()
             .h(px(38.))
@@ -202,7 +426,9 @@ impl R<'_> {
                     .child(kind),
             );
 
-        let body = if i.kind == InteractiveKind::Canvas && self.ed.ix.quad(id, i).is_some() {
+        let body = if let Some(src) = model {
+            self.inline_model(id, &src, i, cx)
+        } else if i.kind == InteractiveKind::Canvas && self.ed.ix.quad(id, i).is_some() {
             let q = self.ed.ix.quad(id, i).unwrap();
             let ui = self.ed.ix.clone();
             let q2 = q.clone();
@@ -268,6 +494,8 @@ impl R<'_> {
                 }
             }
             div().flex().flex_col().child(graph).child(controls).into_any_element()
+        } else if cfg!(target_os = "windows") && i.kind == InteractiveKind::Html && !self.ghost {
+            self.inline_html(id, i, cx)
         } else {
             let note = match i.kind {
                 InteractiveKind::Canvas => crate::settings::text("这个 Canvas 需要 Web 阅读器"),
@@ -283,6 +511,15 @@ impl R<'_> {
                 .gap(px(6.))
                 .child(crate::editor_ui::icon("circle-play", 28., Theme::text_caption()))
                 .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(note))
+                .child(
+                    div().id(("open-local-reader", id.0)).cursor_pointer().px(px(10.)).py(px(5.))
+                        .rounded(px(5.)).bg(Theme::fill_hover()).text_size(px(12.)).text_color(Theme::primary())
+                        .child(crate::settings::tr("打开本机阅读器（需先打包书籍）", "Open local reader (package the book first)"))
+                        .on_click(cx.listener(|editor, _, _, cx| match crate::reader_server::url() {
+                            Ok(url) => cx.open_url(&url),
+                            Err(error) => editor.toast(&crate::localized_format!("无法打开本机阅读器：{}", "Could not open local reader: {}", crate::settings::diagnostic(&error)), cx),
+                        }))
+                )
                 .into_any_element()
         };
 
@@ -295,6 +532,103 @@ impl R<'_> {
             .overflow_hidden()
             .child(header)
             .child(body)
+            .into_any_element()
+    }
+
+    #[cfg(target_os = "windows")]
+    fn inline_html(&self, id: BlockId, interactive: &Interactive, cx: &mut Context<Editor>) -> AnyElement {
+        let state = self.ed.ix.html(id, &interactive.source);
+        let error = state.borrow().error.clone();
+        let source = interactive.source.clone();
+        let ui = self.ed.ix.clone();
+        let editor = cx.entity();
+        let surface = canvas(move |bounds, window, _| {
+            let mut state = state.borrow_mut();
+            state.seen = true;
+            if !ui.html_visible() { if let Some(native) = &state.native { native.hide(); } return; }
+            let clip = window.content_mask().bounds;
+            let scale = window.scale_factor();
+            #[cfg(feature = "devtools")]
+            { state.geometry = Some((bounds, clip, scale)); }
+            if let Some(native) = &state.native { native.layout(bounds, clip, scale); }
+            else if !state.starting && state.error.is_none() {
+                state.starting = true;
+                let parent = crate::printing::parent_of(window);
+                window.on_next_frame(move |_, cx| editor.update(cx, |editor, cx| editor.start_inline_html(id, source, parent, cx)));
+            }
+        }, |_, _, _, _| {}).absolute().inset_0();
+        div().relative().w_full().h(px(interactive.height().min(520) as f32)).bg(Theme::bg_body())
+            .flex().items_center().justify_center()
+            .children(error.map(|error| div().text_size(px(12.)).text_color(Theme::text_caption()).child(format!("{}: {error}", crate::settings::tr("互动内容无法显示", "Unable to show interactive content")))))
+            .child(surface).into_any_element()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn inline_html(&self, _id: BlockId, _interactive: &Interactive, _cx: &mut Context<Editor>) -> AnyElement {
+        div().into_any_element()
+    }
+
+    fn inline_model(&self, id: BlockId, src: &str, i: &Interactive, cx: &mut Context<Editor>) -> AnyElement {
+        let model_state = self.ed.ix.model(id, src, cx);
+        let state = model_state.borrow();
+        let image = state.image.clone();
+        let error = state.error.clone();
+        drop(state);
+        div().id(("inline-model", id.0)).w_full().h(px(i.height().min(520) as f32)).relative().overflow_hidden()
+            .bg(Theme::fill_hover()).flex().items_center().justify_center().cursor_pointer()
+            .children(image.map(|image| img(image).w_full().h_full().object_fit(ObjectFit::Contain)))
+            .child(canvas(move |bounds, _, _| { model_state.borrow_mut().bounds = Some(bounds); }, |_, _, _, _| {}).absolute().inset_0())
+            .when(error.is_some(), |d| d.child(div().px(px(16.)).text_size(px(12.)).text_color(Theme::text_caption())
+                .child(crate::settings::tr("无法读取模型", "Could not read model"))))
+            .child(div().absolute().left(px(12.)).bottom(px(8.)).text_size(px(11.)).text_color(Theme::text_caption())
+                .child(crate::settings::tr("拖动旋转 · 双击重置 · 滚轮缩放", "Drag to rotate · double-click to reset · scroll to zoom")))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |editor, event: &MouseDownEvent, _, cx| {
+                let state = editor.ix.models.borrow().get(&id).cloned();
+                if let Some(state) = state {
+                    let mut state = state.borrow_mut();
+                    if event.click_count == 2 { state.yaw = 0.; state.pitch = 0.; state.zoom = 1.; }
+                    else { state.drag = Some((f32::from(event.position.x), f32::from(event.position.y))); }
+                    drop(state);
+                    if event.click_count == 2 { editor.rerender_inline_model(id, cx); }
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .on_mouse_move(cx.listener(move |editor, event: &MouseMoveEvent, _, cx| {
+                let state = editor.ix.models.borrow().get(&id).cloned();
+                let mut changed = false;
+                if let Some(state) = state {
+                    let mut state = state.borrow_mut();
+                    if let Some((x, y)) = state.drag {
+                        let next = (f32::from(event.position.x), f32::from(event.position.y));
+                        state.yaw += (next.0 - x) * 0.012;
+                        state.pitch = (state.pitch + (next.1 - y) * 0.012).clamp(-1.45, 1.45);
+                        state.drag = Some(next);
+                        changed = true;
+                    }
+                }
+                if changed { editor.rerender_inline_model(id, cx); cx.notify(); }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(move |editor, _: &MouseUpEvent, _, cx| {
+                if let Some(state) = editor.ix.models.borrow().get(&id) { state.borrow_mut().drag = None; }
+                cx.notify();
+            }))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(move |editor, _: &MouseUpEvent, _, cx| {
+                if let Some(state) = editor.ix.models.borrow().get(&id) { state.borrow_mut().drag = None; }
+                cx.notify();
+            }))
+            .on_scroll_wheel(cx.listener(move |editor, event: &ScrollWheelEvent, _, cx| {
+                let dy = match event.delta { ScrollDelta::Pixels(p) => f32::from(p.y), ScrollDelta::Lines(l) => l.y * 40. };
+                if dy != 0. {
+                    if let Some(state) = editor.ix.models.borrow().get(&id).cloned() {
+                        let mut state = state.borrow_mut();
+                        state.zoom = (state.zoom * if dy > 0. { 1.1 } else { 1. / 1.1 }).clamp(0.25, 4.);
+                    }
+                    editor.rerender_inline_model(id, cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .into_any_element()
     }
 

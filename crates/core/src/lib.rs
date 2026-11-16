@@ -3,9 +3,13 @@
 //! and Markdown / HTML import plus Markdown export.
 
 pub mod book;
+pub mod anchors;
+pub mod css_assets;
 pub mod docxml;
 pub mod editor;
 pub mod extensions;
+pub mod html_assets;
+pub mod js_assets;
 pub mod extension_rpc;
 pub mod extension_host;
 pub mod emoji;
@@ -16,6 +20,7 @@ pub mod model;
 pub mod palette;
 pub mod paste;
 pub mod protocol;
+pub mod research;
 pub mod store;
 pub mod spreadsheet;
 pub mod spreadsheet_edit;

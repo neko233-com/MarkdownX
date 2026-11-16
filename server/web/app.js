@@ -1,6 +1,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
+fetch('/reader/index.html', { method: 'HEAD' }).then((response) => { if (response.ok) $('reader-link').hidden = false; }).catch(() => {});
 const state = {
   docs: [],
   doc: null,

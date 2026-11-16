@@ -7,9 +7,10 @@
 //   {"kind":"projectile","angle":45,"speed":14}
 
 import { escapeHTML } from './docxml.js';
+import { assetURL, mediaAssetURL, scriptAssetURL } from './mdxb.js';
 
 export function mountInteractive(block, book, lang) {
-  if (block.kind === 'html') return mountHtml(block);
+  if (block.kind === 'html') return mountHtml(block, book);
   return mountCanvas(block, book, lang);
 }
 
@@ -19,7 +20,7 @@ export function disposeInteractive(root) {
 
 function shell(block, lang, body) {
   const title = block.title || (lang === 'zh' ? '交互内容' : 'Interactive');
-  const tag = block.kind === 'html' ? 'HTML' : 'Canvas';
+  const tag = block.kind === 'model' ? '3D' : block.kind === 'html' ? 'HTML' : 'Canvas';
   const fig = document.createElement('figure');
   fig.className = 'widget';
   fig.innerHTML = `
@@ -32,21 +33,101 @@ function shell(block, lang, body) {
   return fig;
 }
 
-function mountHtml(block) {
+// Parse in an inert template, then replace only declared resource attributes with book
+// data URLs. Script text is untouched and the iframe still has no network.
+export function rewriteSrcset(source, resolve) {
+  const changes = [];
+  let p = 0;
+  while (p < source.length) {
+    while (p < source.length && /[\t\n\f\r ,]/.test(source[p])) p++;
+    const start = p;
+    while (p < source.length && !/[\t\n\f\r ]/.test(source[p])) p++;
+    let end = p;
+    while (end > start && source[end - 1] === ',') end--;
+    if (start < end) {
+      const value = resolve(source.slice(start, end));
+      if (/^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+$/i.test(value)) changes.push([start, end, value]);
+    }
+    if (end !== p) continue;
+    let depth = 0;
+    while (p < source.length) {
+      const ch = source[p++];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth = Math.max(0, depth - 1);
+      else if (ch === ',' && depth === 0) break;
+    }
+  }
+  for (const [start, end, value] of changes.reverse()) source = source.slice(0, start) + value + source.slice(end);
+  return source;
+}
+
+export function htmlWithAssets(source, book) {
+  const template = document.createElement('template');
+  template.innerHTML = source || '';
+  const pending = [template.content];
+  for (let index = 0; index < pending.length; index++) {
+    const root = pending[index];
+    for (const element of root.querySelectorAll('img[src],video[src],video[poster],audio[src],source[src],track[src],script[src],link[rel][href]')) {
+      if (element.localName === 'link' && !element.rel.toLowerCase().split(/\s+/).includes('stylesheet')) continue;
+      for (const attr of ['src', 'poster', 'href']) {
+        if (!element.hasAttribute(attr)) continue;
+        const media = attr === 'src' && ['video', 'audio', 'source'].includes(element.localName);
+        const script = element.localName === 'script' && attr === 'src';
+        const value = script ? scriptAssetURL(book, element.getAttribute(attr), element.type.trim().toLowerCase() === 'module')
+          : media ? mediaAssetURL(book, element.getAttribute(attr)) : assetURL(book, element.getAttribute(attr));
+        const kind = element.localName === 'script' ? '(?:text|application)/(?:java|ecma)script' : element.localName === 'link' ? 'text/css'
+          : attr === 'poster' || element.localName === 'img' ? 'image/[a-z0-9.+-]+' : element.localName === 'track' ? 'text/[a-z0-9.+-]+' : '(?:audio|video)/[a-z0-9.+-]+';
+        const allowed = new RegExp(`^data:${kind};base64,[a-z0-9+/=]+${media ? '(?:#t=(?:npt:)?[0-9:.,]+)?' : script ? '(?:#%3F(?:%[0-9a-f]{2})*)?' : ''}$`, 'i');
+        if (allowed.test(value)) element.setAttribute(attr, value);
+      }
+    }
+    for (const element of root.querySelectorAll('img[srcset],source[srcset]')) {
+      element.setAttribute('srcset', rewriteSrcset(element.getAttribute('srcset'), value => assetURL(book, value)));
+    }
+    for (const child of root.querySelectorAll('template')) pending.push(child.content);
+  }
+  return template.innerHTML;
+}
+
+function mountHtml(block, book) {
+  const probe = document.createElement('template');
+  probe.innerHTML = block.source || '';
+  const meaningful = [...probe.content.childNodes].filter((node) => node.nodeType !== 3 || node.textContent.trim());
+  const model = meaningful.length === 1 && meaningful[0].nodeType === 1 && meaningful[0].localName === 'model-viewer' && !meaningful[0].querySelector('script') ? meaningful[0] : null;
+  if (model) return mountModelWidget(block, book, model.getAttribute('src') || '');
   const frame = document.createElement('iframe');
   frame.className = 'widget-frame';
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.setAttribute('title', block.title || 'HTML widget');
   frame.style.height = `${Math.max(140, block.height)}px`;
   const src = `<!doctype html><html><head><meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"><style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; connect-src data:; frame-src 'none'; form-action 'none'; base-uri 'none'"><style>
     html,body{margin:0;height:100%;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:#22201c;background:#fff}
     body{display:grid;place-items:center;padding:16px;box-sizing:border-box}
     button{font:inherit;padding:7px 12px;border:1px solid #cfc8ba;border-radius:8px;background:#f7f3ea;cursor:pointer}
     button:hover{background:#efe8da}
-  </style></head><body>${block.source || ''}</body></html>`;
+    video,img{max-width:100%;max-height:100%} audio{max-width:100%}
+  </style></head><body>${htmlWithAssets(block.source, book)}</body></html>`;
   frame.srcdoc = src;
   return shell(block, document.documentElement.lang, frame);
+}
+
+function mountModelWidget(block, book, src) {
+  const body = document.createElement('div');
+  body.className = 'model-view';
+  body.style.height = `${Math.max(160, Math.min(600, Number(block.height) || 360))}px`;
+  const lang = document.documentElement.lang.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+  const fig = shell({ ...block, kind: 'model' }, lang, body);
+  let disposed = false, cleanup = null;
+  import('./model3d.js').then(async (module) => {
+    if (disposed) return;
+    const stop = await module.mountModel(body, src, book, lang);
+    if (disposed) stop(); else cleanup = stop;
+  }).catch(() => {
+    if (!disposed) { body.textContent = lang === 'zh' ? '无法显示模型；请检查文件与浏览器的 3D 支持。' : 'Could not display the model; check the file and browser 3D support.'; }
+  });
+  fig.dispose = () => { disposed = true; cleanup?.(); };
+  return fig;
 }
 
 function mountCanvas(block, book, lang) {

@@ -115,14 +115,14 @@
   --token-danger-bar: #ff7570;
   --token-danger-cell: #fef0f0;
   --token-danger: #f54a45;
-  --token-sidebar-text: #1f2225d9;
+  --token-sidebar-text: #171717d9;
   --token-sidebar-hover: #0000000b;
   --token-sidebar-selected: #00000012;
   --token-sidebar-section: #333739;
   --token-button-border: #00000013;
   --token-code-gutter-line: #e8e8e8;
   --token-caption: #7e8287;
-  --token-menu-highlight: #3a85f7;
+  --token-menu-highlight: #0070f3;
   --token-popover-bg: #fafafa;
 }
 
@@ -257,7 +257,7 @@ blockquote {
 }
 
 hr {
-  border-top-color: #1f222580;
+  border-top-color: #17171780;
 }
 
 table {

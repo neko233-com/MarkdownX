@@ -110,6 +110,8 @@ impl Source {
             let chapter = &mut result.chapters[index];
             if let Some((original, page)) = self.translation(id) {
                 chapter.id = original.id.clone();
+                chapter.source_path = original.source_path.clone();
+                chapter.source_en_path = original.source_en_path.clone();
                 chapter.title = changed_title(&original.title, &page.imported_title, title);
                 chapter.content_en = original.content_en.clone();
                 let en_format = original.format_en.as_deref().unwrap_or(&original.format);
@@ -127,6 +129,12 @@ impl Source {
         }
         result.validate()?;
         Ok(result)
+    }
+
+    pub fn relative_page(&self, page_id: &str, href: &str) -> Option<&str> {
+        let (chapter, _) = self.translation(page_id)?;
+        let target = self.book.resolve_relative_chapter(&chapter.id, href, false)?;
+        self.book.chapters.iter().position(|ch| ch.id == target.id).and_then(|i| self.pages.get(i)).map(|page| page.id.as_str())
     }
 }
 

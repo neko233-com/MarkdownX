@@ -9,6 +9,8 @@ MarkdownX 的桌面端是一个单进程 GPUI 应用（Rust，约 4 万行）；
 
 依赖只能从应用指向 core。core 里的模块只引用 core 里的模块。
 
+工作区 Markdown 的阅读模式先完成待保存编辑，再保留原编辑器实体并显示独立只读视图；脚注只在临时视图中转换，原文件来源和撤销栈保持不变。脚注可跳转并返回引用；阅读视图禁用批注，回到编辑模式后恢复原批注面板。保存失败或文件被外部修改时不会进入阅读视图，亦不会把临时视图写回 Markdown。
+
 ## 文件扩展机制
 
 `crates/core/src/extensions.rs` 集中登记内置格式和外部扩展的版本化清单。匹配按文件名后缀、不区分 ASCII 大小写，复合后缀优先；重复后缀或保留的内置标识会被拒绝，注册失败不会留下部分映射。清单中的程序路径必须相对扩展目录，登记清单本身不会启动程序。`discover` 读取扩展目录下每个子目录的 `plugin.json`，坏清单单独返回错误，不影响其他扩展。
@@ -16,6 +18,30 @@ MarkdownX 的桌面端是一个单进程 GPUI 应用（Rust，约 4 万行）；
 `crates/core/src/extension_rpc.rs` 提供 LSP 风格的 `Content-Length` JSON-RPC 消息分帧，并限制消息与头部大小。`extension_host.rs` 拥有外部进程的生命周期：`initialize` 校验协议版本和扩展声明的后缀必须与清单一致，`textDocument/open` 返回 Markdown，`textDocument/save` 交回 Markdown，超时、响应错乱或传输中断都会停止该进程。`crates/core/src/bin/mdx_plugin_fixture.rs` 是可运行的参考扩展，集成测试用它覆盖握手、打开、保存和失败路径。
 
 内置媒体预览也走同一张后缀表：`builtin.image`、`builtin.audio`、`builtin.video`、`builtin.model`。`media_ui.rs` 是预览弹层，`media_thumb.rs` 在 Windows 上取资源管理器同款缩略图；core 的 `media/audio.rs` 用 symphonia 解码波形，`media/video.rs` 只读 ISO 容器头，`media/model.rs` 解析 OBJ/STL/glTF/GLB 并软件光栅化，全部有独立测试。插件与内置媒体后缀冲突时整体被拒绝。
+
+Markdown 中完整的媒体标签或包含媒体的平衡 `div` 容器转换为互动块，识别时忽略注释、脚本及样式中的伪标签；原始文件保持不变。
+
+Windows 文档内 HTML 使用 `native_widget.rs` 的 WebView2 子窗口：它按 GPUI 内容裁剪区域定位，在菜单覆盖时隐藏，滚动出视口时关闭。`widget_server.rs` 为每个可见块创建短生命周期的 loopback 服务，仅映射块中明确引用的本地媒体，支持 HTTP Range；WebView2 内的无同源权限 iframe 运行脚本，禁止外部导航、下载、权限请求和脚本网络连接。媒体解析仍以 Markdown 文件所在目录为基准。macOS 和 Linux 桌面当前使用 Web 阅读器运行 HTML。
+
+本地 Markdown 图片与 HTML 媒体的查询参数仅用于引用，不参与文件查找；解析与打包基于文档目录，原始 Markdown 保留查询文本。音视频 src 的时间片段在预览、打包和 HTML 导出时保留；本地脚本查询在查找文件时忽略，但会按浏览器 URL 规则规范化后通过 data URL 片段保留 ES 模块身份；旧书中未规范化的身份也会在读取时转换。SVG 图片片段保留到书籍和 HTML，桌面渲染将命名视图、`svgView` 视口与支持的 `:target` 选择器转换为静态 SVG；不支持的 CSS 和视图规格仍受底层引擎限制，源文件不改写。
+
+HTML 互动块中图片与 `<source>` 的 `srcset` 候选资源按各自路径打包并在桌面和 Web 阅读器解析，保留密度或宽度描述符和已有 data URL；CLI 内置 HTML/PDF 导出使用相同的书籍资源转换。普通 Markdown 图片的行为不受影响。
+
+从目录打包书籍时，DocxXML 正文与译文分别以各自文件目录解析标题、封面、图片、附件和互动资源，书籍清单封面以书籍根目录解析；资源嵌入前检查真实路径是否仍在书籍目录内。相同资源复用书籍资源表，不改写源文件。
+
+Windows 的 PDF 与受支持的 CAJ 预览由系统 PDF 渲染器逐页显示；CAJ 在内存转换。按页查找使用 `pdf_text.rs` 的独立子进程通过管道读取 PDF，限制文件、页数、提取文本、运行时间和子进程内存；关闭预览时取消，进程异常不会终止编辑器。原文件不写入，文件变化或提取失败会提示。扫描件需要 OCR，特殊字体可能导致文字不完整，匹配页定位不等于页面内文字高亮。
+
+Windows 的文档卡片和行内 PDF 附件通过工作区事件打开同一只读预览；工作区 DocxXML 的相对附件优先按文件所在目录查找，省略 `./` 时允许根目录 `assets/` 回退，并在解析后校验工作区边界。文档模型与原文件保持原始引用。
+
+Windows 的旧版 Word `.doc` 文本预览使用 `doc_text.rs`：父进程以 32 MiB 为上限读取一次文件，子进程只通过管道接收文件快照，在现有 Windows Job 内执行、限制内存和时间，并限制输出大小。解析结果包含正文、脚注、尾注及部分页眉页脚，作为只读文本显示；原版排版、图片与批注可能缺失，文件加密、损坏或不受支持时会报告失败，不修改原件。
+
+Windows 的 EPUB 只读预览由 `epub_preview.rs` 在同一套受限子进程机制中解析；压缩包先限大小、条目数和解压总量，并拒绝带 `META-INF/encryption.xml` 的文件。按 spine 顺序读取章节，将可支持的正文、图片、MathML 和静态 SVG 过滤为惰性 HTML，在 WebView2 沙箱显示；脚本、远程资源及不支持的内容不会执行或加载，文本回退与版式预览来自同一快照。原文件从不写回。
+
+Windows x64 的 Pandoc 与 Typst 在对应转换首次需要且 PATH 中缺失时，从固定官方发布地址下载并验证 SHA-256，只提取可执行文件及许可证到独立的用户工具目录；跨进程锁避免并发下载，先暂存再原子发布，已有不完整目录不会覆盖。离线开关 `MARKDOWNX_FORMATS_OFFLINE=1` 阻止下载。
+
+本地图床默认使用文档旁的 `assets`；PicGo 地址保存在偏好设置中，仅允许回环 HTTP。非空环境变量可覆盖地址，认证令牌只从环境读取。上传只由用户触发；响应按 HTTP 长度或分块结束读取，无需等待本机服务关闭连接。
+
+CSS 的资源由 `css_assets.rs` 解析：外置样式以样式表所在目录为基准，HTML `style` 属性及 `<style>` 块以章节目录为基准；`url()` 和 `@import` 的本地依赖在工作区边界内转换为 data URL。书籍打包与桌面临时服务共用该逻辑，原始 Markdown 不变。读取大小、总量与导入深度受限，缺失、循环引用或越界会失败，外部地址仍受 CSP 限制。Python 打包器实现相同的常用 CSS 引用解析。`js_assets.rs` 为模块脚本递归嵌入相对静态导入、重导出及字符串字面量动态导入；Python 打包器使用独立扫描器实现相同的常见语法。字面量 `new URL(..., import.meta.url)` 也会嵌入模块目录下的图片与媒体，保留资源片段并忽略查询参数。内联及外置 JavaScript 的字面量 fetch 路径以 Markdown 所在目录为基准嵌入，`new URL(..., import.meta.url)` 仍以模块目录为基准；同一代码块中显式创建的不可变 Image/音视频元素，其字面量 src 属性赋值或 setAttribute，以及 new Audio 的字面量参数，按文档目录嵌入；保留普通对象、跨作用域或计算式赋值。脚本 CSP 只允许请求 data URL，不允许网络请求。模块和资源均限定在根目录，循环、越界、过深或过大的依赖报错；计算式 fetch 路径及导入仍不支持。
 
 应用层 `src/extensions.rs` 从 `MARKDOWNX_PLUGIN_DIR` 或应用数据目录的 `markdownx/plugins` 读取扩展；设置 › 扩展的「安装扩展…」把选中的文件夹原子校验后复制进来，已存在的 id 不会被覆盖，也可以逐个开关，关闭的扩展只保留清单、不占用后缀。工作区里匹配扩展后缀的文件在打开时启动扩展，返回的 Markdown 以只读文档显示；预览不写回原格式。外部扩展目前提供只读预览和协议级保存，尚未接入 MarkdownX 自己的可编辑扩展界面。
 
@@ -157,7 +183,7 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 `.mdxb` 是 JSON 单文件（格式见 [FORMAT.md](FORMAT.md)）。`transfer.rs` 导入章节并改写资源路径；`book_source.rs` 用页面 ID 关联原书翻译和资源，`book_folder.rs` 按 `book.json` 重新打包。Feishu 在线导入由 `feishu.rs` 调用官方 CLI，`feishu_ui.rs` 将 DocxXML 和原始响应写入当前工作目录；授权由 CLI 管理。Windows 安装器注册 `.mdxb`；启动时 `main.rs` 从 argv 取第一本书，交给 `open_book_path` 走同一条导入并打开路径。
 
-`web/` 是独立的无构建阅读器：`mdxb.js` 校验并归一化书，`docxml.js` / `markdown.js` 把章节转成同一套块对象，`app.js` 负责目录、章节、语言、主题和进度，`widgets.js` 挂载 Canvas / HTML 交互块。它不依赖 Rust 构建产物，也不嵌入桌面应用；两边共享的契约是 `.mdxb` 和 DocxXML，而不是代码。
+`web/` 是独立的无构建阅读器：`mdxb.js` 校验并归一化书，`docxml.js` / `markdown.js` 把章节转成同一套块对象，`app.js` 负责目录、章节、语言、主题和进度，`widgets.js` 挂载 Canvas / HTML 交互块。它不依赖 Rust 构建产物；桌面发行版同时内嵌只读本机阅读器资源。阅读器以离线 KaTeX 生成 MathML；两边共享的契约是 `.mdxb` 和 DocxXML，而不是界面代码。
 
 ## 协作服务器
 
@@ -174,6 +200,8 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 | `server/web` | 浏览器编辑器（纯文本编辑、版本面板、diff、冲突提示） |
 
 一致性模型是乐观并发，不是 CRDT：客户端带 `base` revision 保存；`base` 落后时，服务器用 Git 的 `merge-file` 对 base/current/incoming 做三方合并，干净就提交，重叠就返回冲突且不写文件。revision 只在房间内存中有效，服务重启后从磁盘重新开始；持久历史以 Git 提交为准。协议类型放在 core，文档模型本身不依赖网络。
+
+桌面当前以单机模式运行，没有远程协作连接或服务器地址、密钥设置界面。后续桌面客户端应允许用户自定义服务器地址，并将认证密钥交给系统凭据存储，不放进 Markdown、书籍或普通偏好文件；连接必须由用户主动配置和启用。该段描述预留方向，不代表远程客户端已经实现或测试。
 
 `server/README.md` 记录启动参数、HTTP/WebSocket 消息、安全边界和 Docker 用法。
 
@@ -203,6 +231,6 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 更新检查与安装
 
-`update::init` 在启动 10 秒后查询 GitHub `releases/latest`，之后每 12 小时一次；窗口重新获得焦点且距上次检查超过 1 小时也会补查。没有发布时 API 返回 404，视为已是最新。这里只提示版本号与 release 页面，不下载、不执行文件。签名更新器（`ENABLED = true` 且配置公钥）保留为后续发布通道。
+`update::init` 在启动 10 秒后查询 GitHub `releases/latest`，之后每 12 小时一次；窗口重新获得焦点且距上次检查超过 1 小时也会补查。没有正式发布时 API 返回 404，明确显示「暂无正式发布版本」。自动和手动检查共用持久状态，防重复请求，限时与限响应大小；手动检查不受自动检查开关与间隔限制。设置 › 关于显示检查中、已是最新、可用正式版本和可重试的失败结果；发现新版时侧栏与关于页提供发布下载页入口。下载地址由受校验的版本号构造，只指向本仓库 GitHub Releases，不下载、不执行安装包。签名更新器（`ENABLED = true` 且配置公钥）保留为后续发布通道。
 
-Windows 使用 WiX MSI 安装到 `%LOCALAPPDATA%\Programs\MarkdownX`，注册 `.mdxb`、快捷方式、卸载项和登录时启动的协作服务器；重装保留用户文档与服务器 token。`install.ps1` 校验包并请求应用正常保存退出，仅在没有活动连接且控制台未共享时正常停止服务器；安装后恢复服务和窗口。macOS Apple Silicon 使用 DMG，`install.sh` 挂载、验证后复制到当前用户的 Applications；未签名测试包需显式选择。
+Windows 使用 WiX MSI 安装到 `%LOCALAPPDATA%\Programs\MarkdownX`，注册 `.mdxb`、快捷方式和卸载项；协作服务器仅由用户按需启动，重装保留用户文档与服务器 token。`install.ps1` 校验包并请求应用正常保存退出，仅在没有活动连接且控制台未共享时正常停止已有服务器；安装后恢复之前运行的服务和窗口，不在全新安装时启动协作服务。本机阅读器使用按需启动的随机 loopback 地址，只提供编译进程序的静态资源，不依赖协作服务。macOS Apple Silicon 使用 DMG，`install.sh` 挂载、验证后复制到当前用户的 Applications；未签名测试包需显式选择。

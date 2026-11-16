@@ -14,11 +14,11 @@ fn file_kind(path: &Path) -> FileKind {
     match ext.as_str() {
         "md" | "markdown" | "mark" => FileKind::Markdown,
         "mdxb" | "docxxml" => FileKind::Book,
-        "txt" => FileKind::Text,
+        "txt" | "rtf" => FileKind::Text,
         "rs" | "go" | "js" | "jsx" | "ts" | "tsx" | "py" | "sh" | "ps1" | "html" | "css" | "c" | "h" | "cpp" | "cs" | "java" => FileKind::Code,
         "json" | "yaml" | "yml" | "toml" | "xml" | "csv" => FileKind::Data,
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" => FileKind::Image,
-        "pdf" => FileKind::Pdf,
+        "pdf" | "ofd" | "caj" => FileKind::Pdf,
         "zip" | "7z" | "rar" | "gz" | "tar" => FileKind::Archive,
         "mp3" | "wav" | "ogg" | "flac" | "m4a" => FileKind::Audio,
         "mp4" | "mov" | "webm" | "mkv" => FileKind::Video,

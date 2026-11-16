@@ -241,7 +241,7 @@ impl Workspace {
             self.open_spreadsheet_preview(path, window, cx);
             return;
         }
-        if crate::workspace_fs::DocKind::of(&path).is_none() && !crate::extensions::is_external(&path) && !crate::media_ui::is_media(&path) {
+        if crate::workspace_fs::DocKind::of(&path).is_none() && !crate::extensions::is_external(&path) && !crate::extensions::is_research(&path) && !crate::media_ui::is_media(&path) {
             self.show_toast_kind(ToastKind::Info, crate::settings::tr("请从文件菜单选择「使用系统应用打开」", "Use the file menu to open this with your system app"), cx);
             return;
         }

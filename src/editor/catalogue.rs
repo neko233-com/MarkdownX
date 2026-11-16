@@ -138,7 +138,7 @@ pub fn entries(doc: &Document) -> Vec<CatEntry> {
     let mut levels: Vec<u8> = raw.iter().map(|r| r.2).collect();
     levels.sort();
     levels.dedup();
-    let title = crate::settings::display_title(&doc.title.text);
+    let title = crate::settings::display_title(&doc.title.plain_text());
     // The 文档图标 leads the title entry.
     let title = match &doc.icon {
         Some(icon) => format!("{icon} {title}"),
@@ -269,7 +269,7 @@ impl Editor {
         cx.notify();
     }
 
-    fn jump_to_heading(&mut self, id: BlockId, cx: &mut Context<Self>) {
+    pub(crate) fn jump_to_heading(&mut self, id: BlockId, cx: &mut Context<Self>) {
         self.cat_active = Some(id);
         self.cat_jump = Some(id);
         if id == TITLE {

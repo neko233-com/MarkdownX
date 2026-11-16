@@ -6,14 +6,34 @@ pub(crate) const APP_ID: &str = "com.neko233.markdownx";
 mod app;
 mod book_source;
 mod book_folder;
+mod cli;
+#[cfg(target_os = "windows")]
+mod format_tools;
+mod footnotes;
 mod feishu;
 mod feishu_ui;
 mod spreadsheet_ui;
 mod spreadsheet_save;
+mod svg_view;
 mod shared_store;
 mod quick_note;
 mod assets;
 mod changelog;
+#[cfg(target_os = "windows")]
+mod widget_server;
+mod reader_server;
+#[cfg(target_os = "windows")]
+mod docx_preview;
+#[cfg(target_os = "windows")]
+mod doc_text;
+#[cfg(target_os = "windows")]
+mod document_worker;
+#[cfg(target_os = "windows")]
+mod epub_preview;
+#[cfg(target_os = "windows")]
+mod ofd_preview;
+#[cfg(target_os = "windows")]
+mod native_widget;
 mod guides;
 mod clipboard;
 #[cfg(feature = "devtools")]
@@ -38,6 +58,9 @@ mod logging;
 mod modes;
 mod markdown_source;
 mod media_ui;
+#[cfg(target_os = "windows")]
+mod pdf_text;
+mod picgo;
 mod media_thumb;
 #[cfg(target_os = "macos")]
 mod native_header;
@@ -157,6 +180,19 @@ fn open_main_window(scripted: bool, first_run: bool, legacy_welcome: bool, cx: &
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--internal-epub-preview-worker")) {
+        std::process::exit(if epub_preview::worker().is_ok() { 0 } else { 1 });
+    }
+    #[cfg(target_os = "windows")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--internal-doc-text-worker")) {
+        std::process::exit(if doc_text::worker().is_ok() { 0 } else { 1 });
+    }
+    #[cfg(target_os = "windows")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--internal-pdf-text-worker")) {
+        std::process::exit(if pdf_text::worker().is_ok() { 0 } else { 1 });
+    }
+    if let Some(code) = cli::dispatch(&std::env::args_os().skip(1).collect::<Vec<_>>()) { std::process::exit(code); }
     logging::init();
     let scripted = devtools::scripted();
     // No single-instance guard: copies may share a library (builds tested

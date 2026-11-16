@@ -103,6 +103,7 @@ fn thumb_blocks(blocks: &[crate::model::Block], budget: &mut usize, depth: usize
             let label = marks.inline.as_ref().map(|inline| match &inline.kind {
                 crate::model::InlineKind::Equation(_) => unreachable!(),
                 crate::model::InlineKind::File(file) => file.name.clone(),
+                crate::model::InlineKind::Image(image) => image.alt.clone(),
                 crate::model::InlineKind::Button(button) => button.text.clone(),
                 crate::model::InlineKind::Reminder(reminder) => {
                     if crate::settings::english() {

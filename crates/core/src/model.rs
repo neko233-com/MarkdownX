@@ -60,6 +60,8 @@ pub enum InlineKind {
     Equation(String),
     /// `<source>` in a paragraph (文本视图); the card it becomes as a block.
     File(FileBlock),
+    /// An image embedded in a paragraph or table-cell text.
+    Image(InlineImage),
     Button(InlineButton),
     Reminder(InlineReminder),
     DocLink(InlineDocLink),
@@ -90,9 +92,21 @@ impl Inline {
         }
     }
 
+    /// Markdown display equations retain their layout across DocxXML round trips.
+    pub fn is_display_equation(&self) -> bool {
+        self.equation().is_some() && self.xml.split_once('>').is_some_and(|(head, _)| head.split_whitespace().any(|attr| attr == "display=\"block\""))
+    }
+
     pub fn file(&self) -> Option<&FileBlock> {
         match &self.kind {
             InlineKind::File(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn image(&self) -> Option<&InlineImage> {
+        match &self.kind {
+            InlineKind::Image(image) => Some(image),
             _ => None,
         }
     }
@@ -117,6 +131,13 @@ impl Inline {
             _ => None,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineImage {
+    pub src_kind: String,
+    pub src: String,
+    pub alt: String,
 }
 
 /// 按钮 (`<button action src background-color>文字</button>`).
@@ -223,7 +244,11 @@ impl RichText {
                         out.push_str(src);
                     }
                 }
-                None => out.push_str(&self.text[r].replace('\u{fffc}', "")),
+                None => {
+                    if let Some(image) = m.inline.as_ref().and_then(Inline::image) {
+                        for _ in self.text[r].chars() { out.push_str(&image.alt); }
+                    } else { out.push_str(&self.text[r].replace('\u{fffc}', "")); }
+                }
             }
         }
         out
@@ -1136,19 +1161,27 @@ impl Document {
     /// Sources of the images and attachments (blocks and inline files).
     pub fn asset_sources(&self) -> Vec<String> {
         let mut out = vec![];
-        self.for_each_block(|b| {
-            match &b.kind {
-                BlockKind::Image { src, .. } => out.push(src.clone()),
-                BlockKind::File(f) if f.src_kind == "path" => out.push(f.src.clone()),
-                _ => {}
-            }
-            for r in &b.text.runs {
+        fn inline_sources(text: &RichText, out: &mut Vec<String>) {
+            for r in &text.runs {
                 if let Some(f) = r.marks.inline.as_ref().and_then(Inline::file)
                     && f.src_kind == "path"
                 {
                     out.push(f.src.clone());
                 }
+                if let Some(image) = r.marks.inline.as_ref().and_then(Inline::image) {
+                    out.push(image.src.clone());
+                }
             }
+        }
+        inline_sources(&self.title, &mut out);
+        self.for_each_block(|b| {
+            match &b.kind {
+                BlockKind::Image { src, .. } => out.push(src.clone()),
+                BlockKind::File(f) if f.src_kind == "path" => out.push(f.src.clone()),
+                BlockKind::Interactive(i) if i.kind == InteractiveKind::Html => out.extend(crate::html_assets::references(&i.source).into_iter().map(|r| r.media_time().or_else(|| r.script_parts()).map_or_else(|| r.value.clone(), |(path, _)| path.to_string()))),
+                _ => {}
+            }
+            inline_sources(&b.text, &mut out);
         });
         out
     }

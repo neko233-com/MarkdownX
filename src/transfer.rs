@@ -55,7 +55,7 @@ fn open_paths(cx: &mut App) -> impl std::future::Future<Output = Option<Vec<Path
 
 /// The page title as a file name.
 fn file_name(doc: &Document) -> String {
-    display_title(&doc.title.text).replace(['/', ':', '\\'], "_")
+    display_title(&doc.title.plain_text()).replace(['/', ':', '\\'], "_")
 }
 
 /// A chapter file name that survives every common filesystem.
@@ -76,6 +76,10 @@ fn chapter_slug(title: &str) -> String {
 }
 
 /// The modal mask (the window dimmed) and its dialog.
+pub(crate) fn preview_pane(id: &'static str, content: impl IntoElement, left: f32) -> AnyElement {
+    deferred(div().id(id).absolute().top_0().bottom_0().left(px(left)).right_0().bg(Theme::bg_body()).child(content)).with_priority(3).into_any_element()
+}
+
 pub(crate) fn mask(id: &'static str, dialog: impl IntoElement, close: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static, cx: &mut Context<Workspace>) -> AnyElement {
     deferred(
         div()
@@ -108,7 +112,7 @@ pub(crate) fn radio(on: bool) -> Div {
 }
 
 /// Percent-escapes in a Markdown link (`%20` and friends).
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -129,23 +133,95 @@ fn percent_decode(s: &str) -> String {
 
 /// Relative and `file://` image links of an imported file, made absolute.
 pub(crate) fn resolve_images(blocks: &mut [Block], base: &Path) {
-    for b in blocks.iter_mut() {
-        resolve_images(&mut b.children, base);
-        if let BlockKind::Table(t) = &mut b.kind {
-            for cell in t.rows.iter_mut().flatten() {
-                resolve_images(&mut cell.blocks, base);
+    resolve_assets(blocks, base, None);
+}
+
+pub(crate) fn resolve_book_assets(blocks: &mut [Block], base: &Path, root: &Path) {
+    resolve_assets(blocks, base, Some(root));
+}
+
+/// Resolve all document-owned resources using the chapter's directory.
+pub(crate) fn resolve_book_document_assets(doc: &mut Document, base: &Path, root: &Path) {
+    resolve_rich_assets(&mut doc.title, base, Some(root));
+    if let Some(cover) = &mut doc.cover && let Some(path) = resolve_asset_src(&cover.src, base, Some(root)) { cover.src = path; }
+    resolve_book_assets(&mut doc.blocks, base, root);
+}
+
+fn resolve_rich_assets(text: &mut RichText, base: &Path, root: Option<&Path>) {
+    for run in &mut text.runs {
+        if let Some(inline) = &mut run.marks.inline {
+            match &inline.kind {
+                crate::model::InlineKind::Image(image) if image.src_kind != "token" => {
+                    if let Some(path) = resolve_asset_src(&image.src, base, root) {
+                        let mut image = image.clone(); image.src = path;
+                        if let Err(error) = crate::docxml::remap_inline_image(inline, image) { log::warn!("inline image could not be resolved: {error}"); }
+                    }
+                }
+                crate::model::InlineKind::File(file) if file.src_kind == "path" => {
+                    if let Some(path) = resolve_asset_src(&file.src, base, root) {
+                        let mut file = file.clone(); file.src = path;
+                        if let Err(error) = crate::docxml::remap_inline_file(inline, file) { log::warn!("inline attachment could not be resolved: {error}"); }
+                    }
+                }
+                _ => {}
             }
         }
-        let BlockKind::Image { src, .. } = &mut b.kind else { continue };
-        if src.starts_with("http://") || src.starts_with("https://") || src.starts_with("data:") {
-            continue;
-        }
-        let path = match src.strip_prefix("file://") {
-            Some(p) => PathBuf::from(percent_decode(p)),
-            None => base.join(percent_decode(src)),
-        };
-        *src = path.to_string_lossy().to_string();
     }
+}
+
+fn resolve_assets(blocks: &mut [Block], base: &Path, root: Option<&Path>) {
+    for b in blocks.iter_mut() {
+        resolve_assets(&mut b.children, base, root);
+        if let BlockKind::Table(t) = &mut b.kind {
+            for cell in t.rows.iter_mut().flatten() {
+                resolve_assets(&mut cell.blocks, base, root);
+            }
+        }
+        resolve_rich_assets(&mut b.text, base, root);
+        if let BlockKind::Image { src_kind, src, .. } = &mut b.kind
+            && src_kind != "token"
+            && let Some(path) = resolve_asset_src(src, base, root) { *src = path; }
+        if let BlockKind::File(file) = &mut b.kind && file.src_kind == "path"
+            && let Some(path) = resolve_asset_src(&file.src, base, root) { file.src = path; }
+        if let BlockKind::Interactive(interactive) = &mut b.kind
+            && interactive.kind == crate::model::InteractiveKind::Html
+        {
+            interactive.source = fdl_core::html_assets::rewrite_references(&interactive.source, |reference| {
+                if let Some((path, suffix)) = reference.script_parts() {
+                    return Ok::<_, std::convert::Infallible>(resolve_asset_src(path, base, root).map(|resolved| format!("{resolved}{suffix}")));
+                }
+                if let Some((path, fragment)) = reference.media_time() {
+                    return Ok(resolve_asset_src(path, base, root).map(|resolved| format!("{resolved}{fragment}")));
+                }
+                Ok(resolve_asset_src(&reference.value, base, root))
+            }).unwrap();
+        }
+    }
+}
+
+fn resolve_asset_src(src: &str, base: &Path, root: Option<&Path>) -> Option<String> {
+    let literal = if Path::new(src).is_absolute() { PathBuf::from(src) } else { base.join(percent_decode(src)) };
+    if !literal.is_file() && let Some((path, fragment)) = fdl_core::html_assets::svg_fragment(src) {
+        return resolve_asset_src(path, base, root).map(|resolved| format!("{resolved}{fragment}"));
+    }
+    let path = if src.contains('#') || Path::new(src).is_absolute() && Path::new(src).is_file() { src } else { src.split_once('?').map_or(src, |(path, _)| path) };
+    if path.is_empty() { return None; }
+    let decoded = percent_decode(path);
+    if !path.starts_with("./") && decoded.starts_with("assets/") && !base.join(&decoded).is_file()
+        && let Some(root) = root
+        && root.join(&decoded).is_file()
+    { return Some(root.join(decoded).to_string_lossy().to_string()); }
+    resolve_image_src(src, base)
+}
+
+fn resolve_image_src(src: &str, base: &Path) -> Option<String> {
+    if src.starts_with("http://") || src.starts_with("https://") || src.starts_with("data:") { return None; }
+    let src = if src.contains('#') || Path::new(src).is_absolute() && Path::new(src).is_file() { src } else { src.split_once('?').map_or(src, |(path, _)| path) };
+    if src.is_empty() { return None; }
+    if !Path::new(src).is_absolute() && !src.starts_with("file://") && (src.starts_with('#') || src.contains(':')) { return None; }
+    let path = if src.starts_with("file://") { url::Url::parse(src).ok()?.to_file_path().ok()? }
+        else { if src.contains("://") { return None; } base.join(percent_decode(src)) };
+    Some(path.to_string_lossy().to_string())
 }
 
 /// A `.mdxb` asset key (`assets/...`) as a path relative to the library root.
@@ -155,10 +231,17 @@ fn book_asset_src(rel: &Path, src: &str) -> String {
 
 /// A chapter's embedded assets were written under `rel`; point its images,
 /// attachments and cover at the files on disk.
-fn rewrite_book_assets(doc: &mut Document, rel: &Path) -> anyhow::Result<()> {
-    fn blocks(bs: &mut [Block], rel: &Path) -> anyhow::Result<()> {
-        for b in bs {
-            for run in &mut b.text.runs {
+fn rewrite_book_assets(doc: &mut Document, rel: &Path, assets: &std::collections::BTreeMap<String, book::Asset>) -> anyhow::Result<()> {
+    fn rich(text: &mut RichText, rel: &Path, assets: &std::collections::BTreeMap<String, book::Asset>) -> anyhow::Result<()> {
+        for run in &mut text.runs {
+                if let Some(link) = &mut run.marks.link && let Some((path, page)) = book::pdf_link_target(link) {
+                    let raw = path.to_string_lossy().replace('\\', "/");
+                    let key = raw.trim_start_matches("./");
+                    if key.starts_with("assets/") && assets.get(key).is_some_and(|asset| asset.mime.eq_ignore_ascii_case("application/pdf")) {
+                        *link = crate::book_folder::markdown_asset_url(&book_asset_src(rel, key));
+                        if let Some(page) = page { link.push_str(&format!("#page={page}")); }
+                    }
+                }
                 if let Some(inline) = &mut run.marks.inline
                     && let crate::model::InlineKind::File(file) = &inline.kind
                     && file.src.starts_with("assets/")
@@ -167,8 +250,24 @@ fn rewrite_book_assets(doc: &mut Document, rel: &Path) -> anyhow::Result<()> {
                     file.src = book_asset_src(rel, &file.src);
                     crate::docxml::remap_inline_file(inline, file)?;
                 }
+                if let Some(inline) = &mut run.marks.inline
+                    && let crate::model::InlineKind::Image(image) = &inline.kind
+                    && image.src.starts_with("assets/")
+                {
+                    let mut image = image.clone();
+                    image.src = book_asset_src(rel, &image.src);
+                    crate::docxml::remap_inline_image(inline, image)?;
+                }
             }
+        Ok(())
+    }
+    fn blocks(bs: &mut [Block], rel: &Path, assets: &std::collections::BTreeMap<String, book::Asset>) -> anyhow::Result<()> {
+        for b in bs {
+            rich(&mut b.text, rel, assets)?;
             match &mut b.kind {
+                BlockKind::Interactive(i) if i.kind == crate::model::InteractiveKind::Html => {
+                    i.source = fdl_core::html_assets::rewrite(&i.source, |src| Ok::<_, anyhow::Error>(src.starts_with("assets/").then(|| book_asset_src(rel, src))))?;
+                }
                 BlockKind::Image { src, .. } if src.starts_with("assets/") => {
                     let next = book_asset_src(rel, src);
                     *src = next;
@@ -180,13 +279,13 @@ fn rewrite_book_assets(doc: &mut Document, rel: &Path) -> anyhow::Result<()> {
                 BlockKind::Table(t) => {
                     for row in &mut t.rows {
                         for cell in row {
-                            blocks(&mut cell.blocks, rel)?;
+                            blocks(&mut cell.blocks, rel, assets)?;
                         }
                     }
                 }
                 _ => {}
             }
-            blocks(&mut b.children, rel)?;
+            blocks(&mut b.children, rel, assets)?;
         }
         Ok(())
     }
@@ -195,7 +294,8 @@ fn rewrite_book_assets(doc: &mut Document, rel: &Path) -> anyhow::Result<()> {
     {
         cover.src = book_asset_src(rel, &cover.src);
     }
-    blocks(&mut doc.blocks, rel)
+    rich(&mut doc.title, rel, assets)?;
+    blocks(&mut doc.blocks, rel, assets)
 }
 
 /// A Markdown / TXT file as a page: titled after the file, its leading
@@ -230,10 +330,10 @@ fn install_book(store: &mut crate::shared_store::SharedStore, root: &Path, book:
         anyhow::bail!("empty book");
     }
     for chapter in &mut chapters {
-        rewrite_book_assets(&mut chapter.document, &rel)?;
+        rewrite_book_assets(&mut chapter.document, &rel, &book.assets)?;
     }
     let mut root_doc = chapters.remove(0).document;
-    if !book.title.is_empty() {
+    if !book.title.is_empty() && book.title.primary() != root_doc.title.plain_text() {
         root_doc.title = RichText::plain(book.title.primary());
     }
     if root_doc.cover.is_none()
@@ -243,11 +343,11 @@ fn install_book(store: &mut crate::shared_store::SharedStore, root: &Path, book:
         root_doc.cover = Some(Cover { src, x: 0., y: 0. });
     }
     let id = store.create_from(&root_doc)?;
-    let mut pages = vec![crate::book_source::Page { id: id.clone(), imported_title: root_doc.title.text.clone() }];
+    let mut pages = vec![crate::book_source::Page { id: id.clone(), imported_title: root_doc.title.plain_text() }];
     for chapter in chapters {
         let child = store.create_from(&chapter.document)?;
         store.set_parent(&child, Some(&id))?;
-        pages.push(crate::book_source::Page { id: child, imported_title: chapter.document.title.text.clone() });
+        pages.push(crate::book_source::Page { id: child, imported_title: chapter.document.title.plain_text() });
     }
     crate::book_source::Source::write(root, pages, book)?;
     Ok(id)
@@ -392,6 +492,7 @@ impl Workspace {
                 assets_root: Some(crate::store::Store::root_dir()),
                 id: None,
                 title: Some(book::Localized::same(title)),
+                embed_linked_pdfs: true,
                 ..Default::default()
             };
             let saved = match source {
@@ -425,7 +526,7 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let Some(path) = path.await else { return };
             let _ = this.update(cx, |w, cx| w.show_toast_kind(ToastKind::Info, crate::settings::text("正在导出文档"), cx));
-            let html = crate::html::to_html(&doc, &crate::html::Options { sub_pages: &subs });
+            let html = crate::html::to_html(&doc, &crate::html::Options { sub_pages: &subs, asset_root: None });
             let _ = std::fs::remove_file(&path);
             let res = printing::run(html, name, Job::Pdf(path.clone()), view, cx).await;
             let ok = matches!(res, Ok(true)) && path.is_file();
@@ -451,7 +552,7 @@ impl Workspace {
         let Some(doc) = self.doc_of(id, cx) else { return };
         let subs = self.sub_page_titles(id);
         let name = file_name(&doc);
-        let html = crate::html::to_html(&doc, &crate::html::Options { sub_pages: &subs });
+        let html = crate::html::to_html(&doc, &crate::html::Options { sub_pages: &subs, asset_root: None });
         let view = printing::parent_of(window);
         self.show_toast_kind(ToastKind::Info, crate::settings::text("文档打印中"), cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -501,7 +602,7 @@ impl Workspace {
             .iter()
             .find(|e| e.id == id)
             .map(|e| e.title.clone())
-            .unwrap_or_else(|| root_doc.title.text.clone());
+            .unwrap_or_else(|| root_doc.title.plain_text());
         let ids = crate::tree::Tree::new(&self.entries).subtree(id);
         let source = match crate::book_source::Source::for_pages(&crate::store::Store::root_dir(), &ids) {
             Ok(source) => source,
@@ -519,7 +620,7 @@ impl Workspace {
                 .iter()
                 .find(|e| e.id == child)
                 .map(|e| e.title.clone())
-                .unwrap_or_else(|| doc.title.text.clone());
+                .unwrap_or_else(|| doc.title.plain_text());
             chapters.push((child, title, doc));
         }
         let path = save_path(&format!("{}.md", file_name(&root_doc)), cx);
@@ -554,6 +655,8 @@ impl Workspace {
                         &crate::markdown::Options {
                             library_root: Some(&library),
                             assets: Some(&asset_dir),
+                            dot_relative: true,
+                            copy_linked_pdfs: true,
                             ..Default::default()
                         },
                     );
@@ -563,7 +666,7 @@ impl Workspace {
                     // pack prefers it only while it is at least as fresh as the .md.
                     let source_file = format!("{stem}.xml");
                     let packed = book::pack_with_assets(vec![book::PackInput::new(doc.clone())],
-                        &book::PackOptions { assets_root: Some(library.clone()), ..Default::default() }, embedded)?;
+                        &book::PackOptions { assets_root: Some(library.clone()), embed_linked_pdfs: true, ..Default::default() }, embedded)?;
                     crate::workspace_fs::write_atomic(
                         &folder.join(&source_file),
                         packed.chapters[0].content.as_bytes(),
@@ -598,6 +701,8 @@ impl Workspace {
                         "file": name,
                         "source": source_file,
                     });
+                    if let Some(path) = translated.and_then(|ch| ch.source_path.as_deref()) { meta["source_path"] = serde_json::json!(path); }
+                    if let Some(path) = translated.and_then(|ch| ch.source_en_path.as_deref()) { meta["source_en_path"] = serde_json::json!(path); }
                     if has_english {
                         meta["content_en_file"] = serde_json::json!(english_name);
                         meta["format_en"] = serde_json::json!(english_format);
@@ -779,7 +884,7 @@ impl Workspace {
         let image = crate::docxml::parse(&format!("<img href=\"{}\"/>", outside.display())).unwrap();
         assert!(image.blocks.iter().any(|b| matches!(b.kind, BlockKind::Image { .. })));
         doc.blocks.extend(image.blocks);
-        let html = crate::html::to_html(&doc, &crate::html::Options { sub_pages: &[] });
+        let html = crate::html::to_html(&doc, &crate::html::Options { sub_pages: &[], asset_root: None });
         assert!(!html.contains("PRIVATE-MUST-NOT-EXPORT"));
         assert!(!html.contains("UFJJVkFURS1NVVNULU5PVC1FWFBPUlQ="));
         assert!(!html.contains(&*outside.to_string_lossy()));
@@ -875,15 +980,19 @@ mod tests {
             ..Default::default()
         };
         let second = Document { title: RichText::plain("Chapter 2"), ..Default::default() };
-        let book = book::pack(
+        let mut book = book::pack(
             vec![book::PackInput::new(first), book::PackInput::new(second)],
             &book::PackOptions { assets_root: Some(dir.clone()), ..Default::default() },
         )
         .unwrap();
+        book.chapters[0].source_path = Some("chapter/first.md".into());
+        book.chapters[1].source_path = Some("chapter/second.md".into());
         let root = install_book(&mut store, &dir, book, PathBuf::from("assets/books/test")).unwrap();
         let entries = store.list();
         assert_eq!(entries.len(), 2);
         let child = entries.iter().find(|e| e.id != root).unwrap();
+        let origin = crate::book_source::Source::for_pages(&dir, std::slice::from_ref(&root)).unwrap().unwrap();
+        assert_eq!(origin.relative_page(&root, "./second.md"), Some(child.id.as_str()));
         assert_eq!(child.meta.parent.as_deref(), Some(root.as_str()));
         let doc = store.load(&root).unwrap();
         match &doc.blocks[0].kind {
@@ -925,7 +1034,7 @@ mod tests {
         let source = crate::book_source::Source::for_pages(&dir, &ids).unwrap().unwrap();
         let mut pages = ids.iter().map(|id| {
             let doc = store.load(id).unwrap();
-            (id.clone(), doc.title.text.clone(), doc)
+            (id.clone(), doc.title.plain_text(), doc)
         }).collect::<Vec<_>>();
         std::fs::create_dir_all(dir.join("assets/replacement")).unwrap();
         std::fs::write(dir.join("assets/replacement/pic.png"), b"new image").unwrap();
@@ -963,5 +1072,30 @@ mod tests {
         assert!(matches!(doc.blocks[4].kind, BlockKind::Heading { level: 2, .. }));
         assert_eq!(percent_decode("a%20b%E5%9B%BE.png"), "a b图.png");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn query_parameters_resolve_relative_to_the_document_without_changing_urls() {
+        let root = std::env::temp_dir().join(format!("markdownx-query-resolve-{}", uuid::Uuid::new_v4()));
+        let base = root.join("chapter");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(root.join("frame.svg"), "root").unwrap();
+        std::fs::write(base.join("frame.svg"), "chapter").unwrap();
+        for src in ["./frame.svg?v=1", "frame.svg?version=2"] {
+            let resolved = super::resolve_asset_src(src, &base, Some(&root)).unwrap();
+            assert_eq!(std::fs::read_to_string(resolved).unwrap(), "chapter");
+        }
+        assert!(super::resolve_asset_src("?v=1", &base, Some(&root)).is_none());
+        assert!(super::resolve_asset_src("https://example.invalid/frame.svg?v=1", &base, Some(&root)).is_none());
+        assert!(super::resolve_asset_src("./frame.svg#icon", &base, Some(&root)).unwrap().ends_with("frame.svg#icon"));
+        std::fs::write(base.join("frame#take.svg"), "take").unwrap();
+        let resolved = super::resolve_asset_src("./frame%23take.svg?v=1#view", &base, Some(&root)).unwrap();
+        let (path, fragment) = fdl_core::html_assets::svg_fragment(&resolved).unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "take");
+        assert_eq!(fragment, "#view");
+        std::fs::write(base.join("frame.svg#icon"), "literal").unwrap();
+        let literal = super::resolve_asset_src("./frame.svg%23icon", &base, Some(&root)).unwrap();
+        assert_eq!(std::fs::read_to_string(literal).unwrap(), "literal");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

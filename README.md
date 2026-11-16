@@ -19,14 +19,14 @@ MarkdownX is a writing and reading environment for **dynamic books**: documents 
 
 - **Write once, read anywhere.** A book is one `.mdxb` file. Text, images and interactive blocks travel together — no folder of loose assets, no server.
 - **Markdown and Feishu/Lark DocxXML.** Edit common Markdown syntax and `.docxxml` files in a workspace, or import an authorized Feishu document. Typora compatibility is still a work in progress.
-- **Interactive blocks.** Declarative `canvas` blocks run the built-in quadratic, unit-circle and projectile experiments on desktop and in the web reader. HTML/JS runs in the reader's sandbox, with external resources and script connections blocked.
+- **Interactive blocks.** Declarative `canvas` blocks run the built-in quadratic, unit-circle and projectile experiments on desktop and in the web reader. HTML/JS runs in a sandbox on Windows desktop and in the web reader; local data can be embedded while external network connections are blocked.
 - **Bilingual by design.** Interface, book metadata and chapter text can carry Chinese and English side by side.
 - **A reader that fits the screen.** The web reader is a build-free, responsive page: a single column on a phone, a table of contents and a comfortable measure on a desktop.
 - **Local first.** Local editing needs no account; Feishu import uses your optional CLI authorization. Your workspace files stay on your computer.
 - **Your folders are your workspace.** Keep multiple folder trees open together and edit their `.md` files in place. Search across them; use each folder’s menu to manage its files and folders. Git-backed saves can create commits for touched files.
 - **Built for team workflows.** Game design, product, film and editorial starter templates live in `templates/`; the collaboration server exposes them to the browser. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Notes live beside the text.** Temporary comments are stored in `.annotations.json` sidecars, so reviewers can hide, resolve, batch-edit and merge them without touching the prose.
-- **Follows your computer.** The first launch follows the system language (Chinese or English) and the setting can pin either one. The app checks the GitHub releases page after launch and every 12 hours, and announces a newer version with its download page.
+- **Follows your computer.** The first launch follows the system language (Chinese or English) and the setting can pin either one. The app checks the GitHub releases page after launch and every 12 hours, and announces a newer version with its download page. **Settings → About → Check Now** works even when automatic checks are disabled, keeps the result visible, and offers a download-page button when an update is available. Failed checks can be retried; pre-releases are excluded.
 
 ## Two ways to use it
 
@@ -40,7 +40,7 @@ MarkdownX is a writing and reading environment for **dynamic books**: documents 
 
 ## Install a release
 
-The commands below require the corresponding GitHub Release to be published. The current release is a **test pre-release**: the macOS Apple Silicon DMG is ad-hoc signed and not notarized. The in-app update checker follows stable releases and does not announce test pre-releases.
+The commands below require the corresponding GitHub Release to be published. The Windows stable release contains an x86_64 MSI. Older macOS test pre-releases contain an ad-hoc signed, unnotarized Apple Silicon DMG. The in-app update checker follows stable releases and does not announce test pre-releases.
 
 Windows x86_64 (PowerShell 7, current user):
 
@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/neko233-com/MarkdownX/main/install.
 
 The installer verifies the package checksum; Windows requests normal save/exit and preserves the collaboration server and library. macOS installs to `~/Applications/MarkdownX.app`: close an existing copy first. For the unsigned test build, macOS may block the first launch; review the warning and approve opening it in **System Settings → Privacy & Security** if you trust this build. The installer does not change Gatekeeper settings. For offline installs, download the MSI or DMG and its `.sha256`, then use `pwsh -File ./install.ps1 -MsiPath <file>` or `sh ./install.sh --package <file> --allow-unsigned`. Add `-DryRun` or `--dry-run` to inspect without installing. In Windows Git Bash, `sh ./install.sh` delegates to PowerShell 7.
 
-Pushing a version tag automatically starts the release workflow. Both platform builds and checksum checks must pass before the test release is published; the workflow then verifies the public installers. The workflow never creates or pushes a tag. A manual retry in **Actions → Release** accepts an existing tag and `PUBLISH vX.Y.Z` as the confirmation.
+Releases are verified and packaged locally, then uploaded directly to GitHub Releases. Pushing a tag does not start an automatic publisher. The optional **Actions → Release** workflow is an explicit fallback for cross-platform test builds and requires an existing tag and `PUBLISH vX.Y.Z` confirmation.
 
 ## Quick start
 
@@ -68,7 +68,7 @@ cargo run --release
 
 On Windows, run the build from a Visual Studio developer prompt, or call `vcvars64.bat` first.
 
-To install the built app for the current Windows user, with Start Menu/desktop shortcuts, `.mdxb` registration, and the collaboration server running at sign-in:
+To install the built app for the current Windows user, with Start Menu/desktop shortcuts and `.mdxb` registration:
 
 ```powershell
 pwsh -File scripts/install-windows.ps1
@@ -76,15 +76,66 @@ pwsh -File scripts/install-windows.ps1
 
 No administrator rights are needed. The local MSI is preferred. The app goes to `%LOCALAPPDATA%\Programs\MarkdownX`; the server token and workspace remain in `%LOCALAPPDATA%\MarkdownX\server`. The installation is registered in **Apps & features**. The helper refuses to force-close a running installed app or server.
 
-Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-<version>-x64.msi`. The MSI installs the app, collaboration server, web UI, templates, shortcuts, `.mdxb` association and the sign-in server launcher; it needs WiX Toolset 3.14 only at build time.
+Run `pwsh -File scripts/build-msi.ps1` after the release build to create `dist\MarkdownX-<version>-x64.msi`. The MSI installs the app, optional collaboration server, web UI, templates, shortcuts and `.mdxb` association; collaboration starts only when its Start Menu shortcut is selected. The local reader starts on demand and serves only assets embedded in the app. WiX Toolset 3.14 is needed only at build time.
 
 **My documents** shows `MarkdownX-Demo` inside the system Documents folder by default; on Windows this is normally `C:\Users\<user>\Documents\MarkdownX-Demo`. The app creates the default folder if it is missing. Use the **+** beside My documents, **Settings → Documents**, or **File → Open Folder…** to add folders. Their trees stay visible together and are restored on the next launch. Each root’s **…** menu can change its display name or folder, refresh it, or remove it from the list without deleting files. An unavailable folder remains listed without blocking the others. A folder passed on the command line is temporary.
 
 On first launch, an empty default folder receives an editable sample in the interface language, and the same file opens in the editor and appears in the folder tree. The library guides use that language too. Existing files are never replaced; opening an explicit file or folder takes priority. Changing the interface language does not translate or overwrite documents you already have. The last opened file in a saved workspace is restored when it is still available.
 
+To create the samples in an existing installation, use **Settings → Documents → Create demo** and choose a location. MarkdownX creates a separate folder with a new name if necessary, without overwriting an existing folder.
+
 Settings → **Extensions** lists built-in formats and installed external extensions. A plugin is a folder with `plugin.json` under the app data `markdownx/plugins` directory (override with `MARKDOWNX_PLUGIN_DIR`); its executable stays inside that folder. A matching file starts the plugin, asks it for Markdown, and shows the result as a read-only preview, so the original format is never rewritten. **Install extension…** copies a selected folder into that directory, and plugins can be switched off individually; a manifest that conflicts with a built-in or another plugin is skipped as a whole. The repository's `MarkdownX-Demo` folder contains Markdown and Excel samples plus a reference plugin.
 
 Images (including animated GIFs), audio, video and 3D models open in a preview: images zoom, audio shows a decoded waveform and duration, video shows the shell thumbnail plus metadata, and OBJ/STL/glTF/GLB models can be rotated and zoomed. Audio and video also offer **Open with system app**. These are built-in providers in the same suffix registry as extensions, so a plugin cannot silently take over their suffixes.
+
+On Windows, PDF files open in a read-only, page-by-page preview using Windows' PDF renderer. Zoom and scroll to inspect details, and use the first, previous, next and last page buttons or Page Up, Page Down, Home and End. Ctrl with `+`, `-` or `0` changes or resets the zoom. Ctrl+F or Find text searches extracted text and navigates matching pages; it does not highlight words on the page. Scans, unusual fonts and pages that fail extraction may not be searchable; the preview reports pages with no text or extraction failures. Ordinary CAJ files and PDFs with a CAJ extension are converted in memory for preview and search; the original is unchanged. Support depends on the CAJ variant; KDH, HN/C8, protected and damaged files require another application. Text selection, OCR and annotation are not yet available. The demo workspace includes a three-page PDF.
+
+On Windows, PDF attachment cards and inline attachments open in the same read-only viewer. DocxXML workspace attachments resolve from their document directory first; `./` keeps that lookup explicit. The demo includes `论文附件示例.docxxml` with both forms.
+
+In workspace Markdown, local image paths are resolved from the Markdown file's own directory. Both `./shots/01.svg` and `shots/01.svg` work; `./` is recommended. Paragraphs and table cells display text mixed with images, including SVG storyboard frames and single-line `<img src="./shots/01.svg" alt="frame">` tags. Standalone HTML image tags may span lines and support pixel dimensions; inline images use the inline layout. Simple text edits preserve original references and HTML attributes, and image event handlers are not executed. Standalone embedded audio, video, models and HTML games also render in the Windows desktop. Media inside a balanced HTML `div`, including nested containers, is supported as an interactive block. Table cells accept complete single-line audio, video or Canvas tags, media containers and their scripts; escape pipes inside a cell as `\|`. Other embedded forms are not yet fully supported.
+
+The desktop also displays Base64 `data:image/...` images (PNG, JPEG, GIF, WebP, BMP and SVG), including images mixed into text and tables; each decoded image is limited to 20 MB. Markdown export preserves the original data, and the built-in HTML/PDF exporter uses the same image validation. External file references inside embedded SVG are not loaded; SVG text requires available system fonts.
+
+Research Markdown supports inline `$...$` and single- or multi-line `$$...$$` display equations. Desktop preview, books and built-in HTML/PDF export retain their TeX source; editing a display equation preserves its block layout. The web reader uses bundled KaTeX to generate native MathML for nested fractions, roots, subscripts, sums and integrals; a browser with MathML support is required. Invalid web equations or those over 16,384 characters show their source, and code examples stay literal. Image, link and footnote syntax inside equations remains literal rather than being collected as a resource.
+
+PDF is static: the built-in exporter shows a standalone video's poster when provided, adds playback notes for video and audio, and attempts to preserve the initial appearance of HTML canvases. Use the HTML export or the MarkdownX document for interaction.
+
+Image destinations can contain balanced parentheses, as in `![frame](./shots/take(1).svg)`. Enclose paths containing spaces in angle brackets, as in `![frame](<./shots/take 1.svg>)`. These forms also package into books and display in the web reader.
+
+SVG URL fragments can select a named `<view>` or `svgView(viewBox(...))`, for example `![view](./shots/frames.svg#closeup)` or `![view](<./shots/frames.svg#svgView(viewBox(50,0,50,50))>)`. A literal `#` in a filename must be written as `%23`. Desktop rendering and the built-in standalone exporter support view boxes, `preserveAspectRatio`, and `:target` in selectors supported by the desktop SVG engine. Other SVG view-spec features and unsupported CSS selectors remain limited. The browser reader uses the browser's SVG implementation.
+
+The command line can export a Markdown file as HTML or PDF:
+
+```sh
+markdownx convert ./story.md --to html
+markdownx convert ./story.md -o ./story.pdf --strategy builtin
+markdownx convert ./story.md -o ./story-pandoc.pdf --strategy pandoc --pdf-engine typst
+markdownx convert ./paper.md -o ./paper.html --citeproc
+markdownx convert ./paper.md -o ./paper.pdf --citeproc
+markdownx convert ./paper.md -o ./paper.docx --citeproc --bibliography ./refs.bib --csl ./journal.csl --reference-doc ./paper-template.docx
+```
+
+`auto` uses the built-in HTML renderer; PDF tries installed Chromium browsers and then Pandoc, trying Typst for the fallback when `pdflatex` is unavailable or fails. DOCX, ODT, RTF and EPUB use Pandoc. On Windows x64, MarkdownX uses programs on `PATH` first and otherwise downloads pinned, SHA-256-verified Pandoc and, when needed for PDF, Typst into the current user’s local application data. The default cache is `%LOCALAPPDATA%/markdownx/format-tools`; `MARKDOWNX_FORMAT_TOOLS_DIR` can override it. Set `MARKDOWNX_FORMATS_OFFLINE=1` to disable downloads; other platforms require separate installations. With `--citeproc`, `auto` uses Pandoc to render citations to HTML and, for PDF, prints that HTML through Chromium when available. `--pdf-engine typst` or another engine selects Pandoc's direct PDF route. `builtin` selects the MarkdownX renderer; `pandoc` explicitly selects Pandoc and needs a PDF engine for PDF output. Use `--browser PATH` to select a browser; it cannot be combined with `--pdf-engine`. For auto PDF, `--no-browser` chooses the Pandoc fallback even when a browser exists. For DOCX/ODT, `--reference-doc` selects a matching style template; `--citeproc` processes citations from document metadata or files given with `--bibliography` and `--csl`, whose paths are relative to the command's working directory. Pandoc warnings during citation processing fail the conversion to prevent silently missing references. The built-in strategy embeds local images and HTML widget resources. The web reader preserves nested list structure and starting numbers, including local audio, video and Canvas inside list items. Desktop parsing preserves Chinese-numbered and tab-indented hierarchy; simple nested text edits, including plain text alongside emphasis and reference-style images, keep original image markup when the source mapping is unambiguous. Image examples in indented or fenced code remain literal, while real images in footnotes and lists are embedded. Its HTML and browser-printed PDF exports render referenced top-level Markdown footnotes with backlinks; the web reader also renders these notes in Markdown-format book chapters. Built-in HTML/PDF and web chapters retain source heading fragments when headings contain footnotes, including duplicate headings. Web Markdown and DocxXML heading anchors use image alt text and equation source, matching desktop navigation. Desktop Markdown reading mode renders top-level footnotes with links and returns, and preserves original heading fragments when headings contain footnotes; desktop editing and DocxXML-format book chapters still display the footnote syntax as text. Open reading mode with the eye button or Ctrl+Alt+V and return with the pencil button or E; changes are saved before switching, annotations are temporarily unavailable, and edit history is retained. Unsupported or unreferenced definitions remain in the output. HTML links to files within the asset root are rebased against the output directory, including links to files that have not been created yet, using relative paths when possible; links outside the asset root or through symlinks fail conversion, and `--root` can widen the boundary; built-in and Pandoc HTML use file URLs pointing to the original local files across volumes. PDF viewers may restrict local file links. PDF is a static print result, and built-in `mdxb-canvas` blocks currently show a placeholder; Pandoc exports do not retain MarkdownX's interactive runtime. Local assets are limited to the Markdown directory by default; `--root DIR` widens that boundary. Pandoc follows its own resource rules and uses `--root` as a secondary search directory. Existing output requires `--force`. On Windows, the installer provides a console entry point; open a new terminal after installation.
+
+Local Markdown images and HTML media can carry a query such as `./frame.svg?v=1`; the query is ignored when reading the local file, and the original Markdown stays unchanged. HTML video and audio sources also support time fragments such as `./clip.mp4?v=1#t=2,5` in desktop preview, packaged books and built-in HTML export; playback depends on the media and viewer. Literal `?` and `#` in filenames should be percent-encoded. Local script URLs also accept queries such as `./game.mjs?v=1`; module queries follow browser URL normalization in desktop preview, packaged books and built-in HTML export, so equivalent Unicode and percent-encoded queries share one module instance. Local SVG fragments are not supported here.
+
+Reference-style images such as `![frame][shot]` with a single-line `[shot]: ./shots/01.svg` definition also work, including forward references, collapsed and shortcut forms. Editing retains definitions; uploading one referenced image changes that use to a direct URL without changing other uses of the definition.
+
+Network reference links also support single-line definitions, for example `[paper][source]` and `[source]: https://example.com/`. In a desktop workspace, direct and reference links can open supported files relative to the current Markdown file, with or without `./`; targets must exist within the workspace. Markdown and DocxXML headings can be reached with `#heading` or `./chapter.md#heading`; repeated headings use `-1`, `-2`, and so on. On Windows, PDF and supported CAJ files accept one-based page links such as `./paper.pdf#page=2`; an out-of-range page reports an error and shows the first page. Books packaged from folders retain chapter source paths so imported desktop books and the web reader can follow links to included chapters and headings. Older books without source paths cannot resolve other chapters automatically. New folder-packaged books also embed local PDF links from chapters and translations, preserving optional `#page=2` fragments; each PDF is limited to 16 MiB and must remain inside the book folder. Imported books open them in the Windows read-only preview, while the web reader opens an embedded copy in the browser PDF viewer. The source PDF is unchanged. Other non-chapter file links, query strings and other PDF fragments are not supported in books yet.
+
+Images inserted, pasted or dropped into workspace Markdown are stored in an `assets` folder beside the document, with new links written as `./assets/...`; existing links are retained. Select a local image and choose **Upload to PicGo** in its toolbar to use the current configuration of a locally running PicGo server. Images mixed with text in paragraphs or table cells can also be clicked and uploaded. A successful upload replaces that image link and keeps the local image; if the image or its surrounding text changes during the upload, the new edit is not overwritten. The default endpoint is `http://127.0.0.1:36677/upload`; change the local address and its configuration parameters in **Settings → General → Image upload**. A nonempty `MARKDOWNX_PICGO_ENDPOINT` overrides this setting. `PICGO_SERVER_SECRET` supplies an optional server token, which is not stored in preferences. Uploads happen only when requested.
+
+`.docx`, `.docm`, `.dotx`, `.dotm`, `.odt`, `.ott` and `.rtf` open as read-only text previews. On Windows, eligible DOCX, DOCM, DOTX and DOTM files also get a sandboxed layout preview with common tables and images, followed by extracted text; archives over 16 MiB, expanded content over 128 MiB, excessive entries or unsupported structure fall back to text. The layout is approximate; macros and embedded external HTML do not run. Extracted text labels recognizable inserted and deleted revisions and includes referenced notes, comments, headers and footers where recognized; missing related content is reported. RTF supports common encodings and includes hidden text, with an 8 MiB input limit and a complexity limit. `.ofd` extracts read-only page text; on Windows, eligible files also get an offline sandboxed layout preview with page navigation, subject to the same archive limits. Complex objects and digital seals may be missing, and diagnostics appear in the preview; `.tex`, `.ltx`, `.sty`, `.cls`, `.bst`, `.bib`, `.ris`, `.enw`, `.nbib`, `.csl`, `.rmd`, `.qmd` and `.typ` open as read-only UTF-8 source. OFD pages may contain only images or use special font mappings; extracted text can be missing or out of order. Previews can omit layout, images, comments and seals and do not verify digital signatures, so check the original when fidelity matters. On Windows, legacy `.doc` and `.dot` open as read-only text previews in a time- and memory-limited helper process, including body text, notes, recognizable revisions and some headers and footers; input is limited to 32 MiB. Protected, damaged or unsupported files require another application. Text, ordering and formatting may be incomplete; consult the original. The demo workspace includes DOC, DOCX, RTF, OFD, Quarto, a Markdown paper with a relative bibliography, and storyboard examples; the paper and citation are fictional.
+
+On Windows, EPUB files have a read-only preview of spine-ordered text, local images, common tables, MathML and sanitized static SVG; input is limited to 32 MiB. Scripts do not run, and styles, links, animation or other content may be omitted. EPUB files containing `META-INF/encryption.xml`, including those with obfuscated fonts, currently require another reader. The original is never modified; the demo workspace includes `电子书论文示例.epub`.
+
+Inside an HTML widget, relative image candidates in `img` and `source` `srcset` attributes are resolved from the chapter directory in desktop, packaged books and built-in HTML/PDF export. Descriptors are preserved; both `./frame.svg` (recommended) and `frame.svg` work.
+
+Standalone Markdown HTML blocks such as `<video src="./clip.mp4" controls></video>`, `<audio>` and `<canvas>`, with immediately following scripts and styles, run in the Windows desktop and web reader sandboxes. Local `<script src="./game.js"></script>` and `<link rel="stylesheet" href="./game.css">` references resolve relative to the Markdown file. Local `url()` images and fonts and nested `@import` files in external CSS resolve relative to their stylesheet and are bundled with it; references in HTML `style` attributes and `<style>` blocks resolve relative to the chapter. Missing, circular or out-of-workspace dependencies are rejected. Inline and external `<script type="module">` blocks bundle static relative imports, re-exports and literal `import()` dependencies recursively, relative to the importing module. Literal dynamic `import()` in classic scripts is also bundled relative to the script; ES module specifiers require `./` or `../`. Literal `new URL("./frame.svg", import.meta.url)` references also embed module-relative local assets for images and media; both `frame.svg` and `./frame.svg` work. Asset query parameters do not change embedded bytes, and SVG fragments are retained. Literal `fetch("./data.json")` and `fetch("data.json")` in inline or external JavaScript embed local data relative to the Markdown document; `fetch(new URL("./data.json", import.meta.url))` uses the module directory. Common Canvas scripts can also embed literal local media for `const image = new Image(); image.src = "./frame.svg"`, equivalent `document.createElement("img")`/`setAttribute("src", ...)` assignments in the same block, and `new Audio("./sound.mp3")`. These paths are relative to the Markdown document; computed paths and assignments across blocks are not resolved, and potentially shadowed built-in names are conservatively skipped. Only embedded data URLs are available to script requests; external network connections remain blocked. Computed fetch paths, circular imports, escaped paths and computed dynamic imports are not supported. Windows desktop uses WebView2; HTML on macOS and Linux still requires the web reader. The Windows MSI includes a local web reader at `http://127.0.0.1:8877/reader/` when the collaboration server is running. Package a document as `.mdxb` and select it in the reader.
+
+Standalone `<model-viewer src="./model.glb"></model-viewer>` blocks support OBJ, STL, glTF and GLB. Models can be rotated and zoomed inside desktop documents and in the web reader. Local glTF/GLB buffers and textures are embedded alongside the model when packaging. Desktop uses a simplified geometry preview without materials, textures or animation; OBJ material libraries and formats requiring extra Draco/KTX2 decoders are not yet supported in the web reader.
+
+When packaging folder chapters, recognized Markdown images in translations are resolved beside the translation and embedded into the book. The agent CLI also embeds recognized chapter-relative images and rejects missing or out-of-folder local images; code examples remain literal. In the web reader, embedded Markdown images display in paragraphs and table cells. DocxXML chapter and translation images, covers and attachments are resolved relative to their own source files and embedded when they are inside the book folder.
 
 Workspace `.xlsx`, `.xlsm`, and `.xlam` files open in the spreadsheet editor; create a new `.xlsx` from a workspace folder. You can edit cells, use local formula calculation where supported, undo and redo, copy and fill ranges, manage worksheets, and search the current sheet or replace text, formula source, and values separately. Replacement can match case or the entire cell. Value replacement uses the underlying number (for example, 50% is `0.5`); dates use `YYYY-MM-DD`. For selection arithmetic, enter a number or percentage and choose +, −, ×, or ÷; text, booleans, and calendar dates are skipped. Formulas are optional: when included, selected formulas and their selected input cells are both changed. The grid displays common workbook colors, font emphasis, alignment and borders, plus supported conditional colors and number formats. Large conditional-format ranges are skipped with a notice; dashed and double borders are approximated. Selection number formats include integer, decimal, grouped, percentage, scientific and date formats, with undo and redo. Protected worksheets allow cells known to be unlocked; locked or ambiguous cells cannot be saved. Protected hidden formulas are omitted from the editor and formula search; copy their calculated results using Copy values. Worksheet protection does not encrypt the file. This support is still in development: some structures cannot be edited safely, and local formula calculation is unavailable for workbooks using the 1904 date system.
 
@@ -171,7 +222,9 @@ Every chapter is either `docxxml` or `markdown`; `content_en` is optional. When 
 
 ### Markdown ↔ book
 
-`文件 → 打包成电子书…` turns a folder of Markdown chapters into one `.mdxb`. `下载为 → Markdown 文件夹 (.md)` goes the other way: it writes `NN-title.md` chapters, a same-stem `.xml` DocxXML source per chapter, `book.json` and copied assets beside a small index file. Tables, headings, chapter order and interactive `mdxb-canvas` / `mdxb-html` sources survive; callout tints, grids and other editor-only presentation may degrade to plain Markdown. The XML source keeps the full structure, so packing the folder again recreates the book; if you edit a `.md`, the newer Markdown wins over its XML.
+`文件 → 打包成电子书…` turns a folder of Markdown chapters into one `.mdxb`. `下载为 → Markdown 文件夹 (.md)` goes the other way: it writes `NN-title.md` chapters, a same-stem `.xml` DocxXML source per chapter, `book.json` and copied assets beside a small index file. Tables, headings, chapter order and interactive `mdxb-canvas` / `mdxb-html` sources survive; callout tints, grids and other editor-only presentation may degrade to plain Markdown. The XML source keeps the full structure, so packing the folder again recreates the book; if you edit a `.md`, the newer Markdown wins over its XML. XML chapters and translations resolve title images, covers and attachments relative to their own files; a local manifest cover resolves from the book root. Local assets must stay within that root. PDF links from the library are copied into the exported folder, including page fragments; both the Markdown and DocxXML sources remain portable.
+
+The browser reader displays embedded DocxXML attachments as downloads; attachments not embedded in the book show their names only.
 
 ### Interactive blocks in DocxXML
 
@@ -233,7 +286,7 @@ cargo clippy -p markdownx-server --all-targets -- -D warnings
 
 ## Status
 
-This is an early public snapshot. Working today: the desktop editor and library, multiple folder workspaces with directory trees and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic`, `unitcircle` and `projectile` Canvas experiments natively; HTML stays sandboxed in the reader. On Windows it falls back to WARP when a hardware D3D11 device is unavailable, so the installed app opens even on VMs and RDP sessions; the fallback is covered by a captured window smoke test. The Windows MSI registers `.mdxb` and starts the collaboration server at sign-in; macOS Info.plist and the Linux MIME package register `.mdxb`, while double-click behavior on macOS/Linux still needs a real desktop check. Mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
+This is an early public snapshot. Working today: the desktop editor and library, multiple folder workspaces with directory trees and fuzzy/full-text search, direct `.md` editing, Markdown/DocxXML interchange, `.mdxb` import/export and packaging, Markdown-folder export with retained interactive sources, the responsive web reader, Canvas/HTML blocks, `[[wiki links]]`, annotation sidecars with batch resolve/delete, and a self-hosted Rust collaboration server with live presence, three-way merge conflict handling, and Git history/diff/restore. The desktop app runs the built-in `quadratic`, `unitcircle` and `projectile` Canvas experiments natively; Windows desktop and the web reader run HTML in a sandbox. On Windows it falls back to WARP when a hardware D3D11 device is unavailable, so the installed app opens even on VMs and RDP sessions; the fallback is covered by a captured window smoke test. The Windows MSI registers `.mdxb` and starts collaboration only on request; macOS Info.plist and the Linux MIME package register `.mdxb`, while double-click behavior on macOS/Linux still needs a real desktop check. Mobile shells are a later milestone. See [issues](https://github.com/neko233-com/MarkdownX/issues).
 
 ## License
 
@@ -253,7 +306,7 @@ MarkdownX 用来写和读**动态书**：一本可以拖动的抛物线、可以
 
 - **写一次，到处能读。** 一本书就是一个 `.mdxb` 文件，文字、图片和交互块都在里面，不需要服务器。
 - **Markdown 与飞书 DocxXML。** 章节可以是任意一种；Markdown 导入即用，DocxXML 保留标题、表格、高亮块和颜色。
-- **交互块。** 二次函数、单位圆、抛体 Canvas 可在桌面和 Web 阅读器运行；HTML/JS 在阅读器的沙箱中运行，外部资源和脚本网络连接受到限制。
+- **交互块。** 二次函数、单位圆、抛体 Canvas 可在桌面和 Web 阅读器运行；HTML/JS 在 Windows 桌面和阅读器的沙箱中运行，外部资源和脚本网络连接受到限制。
 - **原生中英双语。** 界面、书名和章节正文都可以同时带中文和英文。
 - **为屏幕而生的阅读器。** 手机单列，桌面目录 + 正文；无构建步骤，Chrome 直接打开。
 - **本地优先。** 本地编辑无需登录；飞书导入使用可选的 CLI 授权，工作目录保存在自己的电脑上。
@@ -285,7 +338,7 @@ curl -fsSL https://raw.githubusercontent.com/neko233-com/MarkdownX/main/install.
 
 需要 Rust 1.99.1；Windows 还需要 Visual Studio 2022 的 C++ 生成工具和 Windows SDK。Python 3 只用于示例和本地静态服务器。
 
-在当前 Windows 用户下安装构建好的版本（开始菜单/桌面快捷方式、`.mdxb` 文件关联、登录时启动协作服务器）：
+在当前 Windows 用户下安装构建好的版本（开始菜单/桌面快捷方式、`.mdxb` 文件关联）：
 
 ```powershell
 pwsh -File scripts/install-windows.ps1
@@ -293,7 +346,7 @@ pwsh -File scripts/install-windows.ps1
 
 不需要管理员权限。优先使用当前构建的 MSI；应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和工作区保留在 `%LOCALAPPDATA%\MarkdownX\server`，并在「应用和功能」中管理。安装脚本不会强制结束运行中的安装版应用或服务器。
 
-release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-<version>-x64.msi`。MSI 会装好应用、协作服务器、Web UI、模板、快捷方式、`.mdxb` 关联和登录启动项；构建时只需要 WiX Toolset 3.14。
+release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-<version>-x64.msi`。MSI 会装好应用、可选协作服务器、Web UI、模板、快捷方式和 `.mdxb` 关联；协作服务仅在主动打开「MarkdownX Collaboration」时启动，不随登录启动。本机阅读器按需启动，仅提供应用内置的静态资源。构建时只需要 WiX Toolset 3.14。
 
 ```sh
 cargo run --release
@@ -311,6 +364,8 @@ cargo run --release
 
 首次启动时，空的默认目录会生成与界面语言一致、可直接编辑的示例，并同时在编辑区和目录树中显示；文档库指南也使用相同语言。已有文件不会被覆盖，启动参数指定的文件或目录优先打开。切换界面语言不会翻译或覆盖已有文档；已保存工作区中最后打开的文件仍然可用时会在重启后恢复。
 
+已有工作区的用户可在 **设置 → 文档 → 创建演示** 选择保存位置。应用会创建一个独立的 `MarkdownX-Demo` 文件夹；如果同名文件夹已存在，会使用新名称，不覆盖现有内容。
+
 启动 MarkdownX 时传入文件夹路径会直接显示目录树，不会自动打开文件。目录树显示普通文件，并用适配深浅主题的图标区分文件夹、Markdown、文本、书籍、代码和图片等类型；其他类型可从文件菜单或全局搜索结果选择「使用系统应用打开」。文件名搜索覆盖可见文件，正文搜索只读取支持的文档。外部增删文件后可点「刷新」，窗口重新获得焦点时也会刷新。名称以点开头的项、符号链接、`target`、`node_modules` 和 `__pycache__` 不显示。保存时 Markdown 会重新导出，原有排版和未支持的语法可能变化；UTF-8 BOM 和主要的 CRLF 换行会保留。检测到文件已被其他程序修改、导出会丢失标题或正文、资源无法导出或同名资源内容不同时，未保存内容会保留，源文件不会被替换。
 
 「文件 → 打开文件…」（Windows 为 `Ctrl+O`）或启动参数可直接编辑 Markdown 和文本文件，并显示所在目录树；侧栏目录名旁的加号可新建 Markdown 文件，目录和文件旁的「…」提供其他文件管理操作。文件保存与双链索引在后台进行，切换或关闭前会等待最新修改保存。若同一文件已有 Git 暂存内容，自动提交会跳过并提示，文件保存结果仍保留。
@@ -325,6 +380,8 @@ python -m http.server 8765 --bind 127.0.0.1
 ```
 
 首页自带五个示例，也可以把任意 `.mdxb` 拖进页面。
+
+SVG 片段可选择命名 `<view>` 或 `svgView(viewBox(...))`，例如 `![视图](./shots/frames.svg#closeup)` 或 `![视图](<./shots/frames.svg#svgView(viewBox(50,0,50,50))>)`。文件名中的 `#` 要写成 `%23`。桌面渲染与内置独立导出支持视口、`preserveAspectRatio`，以及桌面 SVG 引擎支持的选择器中的 `:target`；其他视图规格和未支持的 CSS 选择器仍有限制。浏览器阅读器使用浏览器自己的 SVG 实现。
 
 ### 格式与交互块
 
@@ -385,7 +442,7 @@ cargo clippy -p markdownx-server --all-targets -- -D warnings
 
 ### 状态
 
-这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块，以及带 Git 历史和 diff 的 Rust 协作服务器。桌面端原生运行 `quadratic`、`unitcircle` 和 `projectile` Canvas 实验；HTML 仍在阅读器里沙箱运行。Windows 在硬件 D3D11 不可用时会自动回退 WARP，VM/RDP 里也能打开桌面 UI，并已用窗口截图冒烟验证。Windows MSI 会注册 `.mdxb` 并在登录时启动协作服务器；macOS Info.plist 和 Linux MIME 包也会注册 `.mdxb`，但双击行为仍待真机验证，移动端壳是下一步。
+这是早期公开快照。现在可用：桌面编辑与文档库、文件夹工作区、Markdown/DocxXML 互转、`.mdxb` 导入导出、Markdown 文件夹导出、批注 sidecar、`[[双链]]`、响应式 Web 阅读器、Canvas/HTML 交互块，以及带 Git 历史和 diff 的 Rust 协作服务器。桌面端原生运行 `quadratic`、`unitcircle` 和 `projectile` Canvas 实验；HTML 在 Windows 桌面和 Web 阅读器里沙箱运行。Windows 在硬件 D3D11 不可用时会自动回退 WARP，VM/RDP 里也能打开桌面 UI，并已用窗口截图冒烟验证。Windows MSI 会注册 `.mdxb`，协作服务按需启动；macOS Info.plist 和 Linux MIME 包也会注册 `.mdxb`，但双击行为仍待真机验证，移动端壳是下一步。
 
 ### 许可
 

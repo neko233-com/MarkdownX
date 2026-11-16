@@ -76,12 +76,63 @@ fn section(title: &'static str) -> Div {
 impl Workspace {
     /// The open document is in 阅读模式.
     pub fn reading(&self) -> bool {
-        self.current.as_ref().and_then(|id| self.entries.iter().find(|e| &e.id == id)).is_some_and(|e| e.meta.reading)
+        self.file_read_editor.is_some() || self.current.as_ref().and_then(|id| self.entries.iter().find(|e| &e.id == id)).is_some_and(|e| e.meta.reading)
     }
 
     pub fn set_mode(&mut self, reading: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.mode_menu = false;
         cx.notify();
+        if self.current.is_none() && matches!(self.file_source, Some(crate::app::FolderSource::Markdown(_))) {
+            if self.reading() == reading { return; }
+            // An editor change event can still be queued when the mode action
+            // arrives. Compare the live document before detaching its listener.
+            if reading && let (Some(crate::app::FolderSource::Markdown(source)), Some(editor)) = (&self.file_source, &self.editor)
+                && !source.matches_document(&editor.read(cx).core.doc) && !self.unsaved {
+                self.unsaved = true;
+                self.file_revision = self.file_revision.wrapping_add(1);
+            }
+            if !self.save_before(cx, move |w, window, cx| w.set_mode(reading, window, cx)) { return; }
+            if reading {
+                let (Some(path), Some(source), Some(original)) = (self.file.clone(), self.file_snapshot.clone(), self.editor.clone()) else { return };
+                let preview = crate::footnotes::prepare(&source).reading_document(&path, &source, &original.read(cx).core.doc);
+                let (doc, back, aliases) = preview.map_or_else(|| (original.read(cx).core.doc.clone(), None, Default::default()),
+                    |preview| (preview.document, Some(preview.return_anchor), preview.heading_aliases));
+                let (image_base, asset_root, asset_base) = {
+                    let editor = original.read(cx);
+                    (editor.image_base.clone(), editor.asset_root.clone(), editor.asset_base.clone())
+                };
+                #[cfg(target_os = "windows")]
+                { let _ = original.read(cx).set_html_workspace_visible(false); }
+                let preview = cx.new(|cx| {
+                    let mut editor = crate::editor::view::Editor::new(doc, crate::app::file_modified(&path), crate::store::PageWidth::default(), window, cx);
+                    editor.image_base = image_base; editor.asset_root = asset_root; editor.asset_base = asset_base;
+                    editor.cat_pinned = true;
+                    editor.set_read_only(true, cx);
+                    editor
+                });
+                self.file_read_annotations = self.annotations_open;
+                self.annotations_open = false;
+                self.file_read_return_anchor = back;
+                self.file_read_heading_aliases = aliases;
+                self.file_read_returns.clear();
+                self.file_read_editor = Some(original);
+                self.bind_editor(preview.clone(), window, cx);
+                self.editor = Some(preview.clone());
+                preview.read(cx).focus(window);
+            } else if let Some(original) = self.file_read_editor.take() {
+                self.bind_editor(original.clone(), window, cx);
+                self.editor = Some(original.clone());
+                self.annotations_open = self.file_read_annotations;
+                self.file_read_annotations = false;
+                self.file_read_return_anchor = None;
+                self.file_read_heading_aliases.clear();
+                self.file_read_returns.clear();
+                original.read(cx).focus(window);
+            }
+            self.show_toast_kind(ToastKind::Info, if reading { crate::settings::text("已切换为阅读模式") } else { crate::settings::text("已切换为编辑模式") }, cx);
+            cx.notify();
+            return;
+        }
         let Some(id) = self.current.clone() else { return };
         if self.reading() == reading {
             return;

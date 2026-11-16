@@ -9,12 +9,14 @@ use std::fmt::Write;
 pub struct Options<'a> {
     /// Titles of the document's child pages (what 子页面列表 shows).
     pub sub_pages: &'a [String],
+    /// Local workspace root for self-contained exports; None uses the library.
+    pub asset_root: Option<&'a std::path::Path>,
 }
 
 const CSS: &str = r#"
 * { box-sizing: border-box; }
 html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-body { margin: 0; color: #1f2225; font: 15px/22px -apple-system, "SF Pro Text", "PingFang SC", sans-serif; word-wrap: break-word; }
+body { margin: 0; color: #1f2225; font: 15px/22px -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; word-wrap: break-word; }
 .cover { height: 200px; margin-bottom: 24px; background-size: cover; background-position: center; border-radius: 12px; }
 .icon { font-size: 48px; line-height: 56px; margin-bottom: 8px; }
 h1.title { font-size: 21px; line-height: 27px; font-weight: 700; margin: 0 0 16px; padding-bottom: 16px; border-bottom: 1px solid rgba(0,0,0,0.045); }
@@ -50,6 +52,7 @@ pre { margin: 16px 0; padding: 12px 16px; background: #fbfbfb; border: 1px solid
 hr { border: none; height: 2px; margin: 11px 0; background: radial-gradient(circle, rgba(31,34,37,0.5) 0.75px, transparent 1px) 0 0 / 5px 2px repeat-x; }
 .img { margin: 13px 0; }
 .img img { max-width: 100%; vertical-align: top; border-radius: 5px; }
+.inline-image { display: inline-block; max-width: 100%; max-height: 180px; vertical-align: middle; }
 .img .cap { margin-top: 6px; }
 .crop { display: inline-block; overflow: hidden; max-width: 100%; vertical-align: top; border-radius: 5px; }
 .crop img { max-width: none; border-radius: 0; }
@@ -75,25 +78,40 @@ code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.875e
 a { color: #0f5492; text-decoration: underline; text-underline-offset: 2px; }
 .mathb { margin: 13px 0; text-align: center; }
 .bgb { border-radius: 3px; margin: 0 -7px; padding: 9px 7px; }
+.interactive-print-media { display: none; }
+@media print {
+  .interactive { break-inside: avoid; page-break-inside: avoid; }
+  .interactive-print-replacement iframe { display: none; }
+  .interactive-print-media { display: block; padding: 8px; color: #666; font-size: 12px; }
+  .interactive-print-media img { display: block; max-width: 100%; max-height: 220px; object-fit: contain; }
+  .interactive-native-placeholder { height: auto !important; min-height: 48px; }
+}
 "#;
 
 /// The document as a standalone page, always in the light colours (it is printed or opened elsewhere).
-pub fn to_html(doc: &Document, opts: &Options) -> String { crate::theme::light(|| page(doc, opts)) }
+pub fn to_html(doc: &Document, opts: &Options) -> String { crate::theme::light(|| page(doc, opts, None, None)) }
 
-fn page(doc: &Document, opts: &Options) -> String {
-    let title = crate::settings::display_title(&doc.title.text);
+pub(crate) fn to_html_with_anchors(doc: &Document, opts: &Options, anchors: fdl_core::anchors::Targets, local_links: &std::collections::HashSet<String>) -> String {
+    crate::theme::light(|| page(doc, opts, Some(anchors), Some(local_links)))
+}
+
+fn page(doc: &Document, opts: &Options, anchors: Option<fdl_core::anchors::Targets>, local_links: Option<&std::collections::HashSet<String>>) -> String {
+    let title = crate::settings::display_title(&doc.title.plain_text());
+    let anchors = anchors.unwrap_or_else(|| fdl_core::anchors::targets(doc));
     let mut out = String::new();
     let _ = write!(out, "<!DOCTYPE html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>{}</title><style>{CSS}</style></head><body>", esc(&title));
     if let Some(c) = &doc.cover
-        && let Some(uri) = data_uri(&c.src)
+        && let Some(uri) = data_uri(&c.src, opts.asset_root)
     {
         let _ = write!(out, "<div class=\"cover\" style=\"background-image:url('{uri}')\"></div>");
     }
     if let Some(i) = &doc.icon {
         let _ = write!(out, "<div class=\"icon\">{}</div>", esc(i));
     }
-    let _ = write!(out, "<h1 class=\"title\">{}</h1>", esc(&title));
-    let w = Writer { opts, headings: crate::editor::core::heading_orders(&doc.blocks) };
+    let id = anchors.title.as_ref().map(|id| format!(" id=\"{}\"", esc(id))).unwrap_or_default();
+    let title_html = if doc.title.text.trim().is_empty() { esc(&title) } else { inline(&doc.title, opts.asset_root, local_links) };
+    let _ = write!(out, "<h1 class=\"title\"{id}>{title_html}</h1>");
+    let w = Writer { opts, local_links, headings: crate::editor::core::heading_orders(&doc.blocks), anchors: anchors.headings.into_iter().collect() };
     w.blocks(&doc.blocks, 0, &mut out);
     out.push_str("</body></html>\n");
     out
@@ -101,7 +119,9 @@ fn page(doc: &Document, opts: &Options) -> String {
 
 struct Writer<'a> {
     opts: &'a Options<'a>,
+    local_links: Option<&'a std::collections::HashSet<String>>,
     headings: rustc_hash::FxHashMap<BlockId, String>,
+    anchors: rustc_hash::FxHashMap<BlockId, String>,
 }
 
 impl Writer<'_> {
@@ -132,18 +152,20 @@ impl Writer<'_> {
         match &b.kind {
             BlockKind::Text => {
                 // A paragraph holding just a display equation.
-                if let Some(src) = lone_equation(&b.text)
-                    && crate::editor::math::is_block(&src)
+                if let Some((src, display)) = lone_equation(&b.text)
+                    && (display || crate::editor::math::is_block(&src))
                 {
-                    let _ = write!(out, "<div class=\"mathb\">{}</div>", math(&src));
+                    let rendered = crate::editor::math::mathml_mode(&src, true).unwrap_or_else(|| format!("<code>{}</code>", esc(&src)));
+                    let _ = write!(out, "<div class=\"mathb\">{rendered}</div>");
                 } else {
-                    let _ = write!(out, "<div class=\"b\"{align}>{}</div>", inline(&b.text));
+                    let _ = write!(out, "<div class=\"b\"{align}>{}</div>", inline(&b.text, self.opts.asset_root, self.local_links));
                 }
                 self.kids(b, depth, out);
             }
             BlockKind::Heading { level, .. } => {
                 let n = self.headings.get(&b.id).map(|n| format!("<span class=\"hn\">{}</span>", esc(n))).unwrap_or_default();
-                let _ = write!(out, "<div class=\"b h h{}\"{align}>{n}{}</div>", level.clamp(&1, &9), inline(&b.text));
+                let id = self.anchors.get(&b.id).map(|id| format!(" id=\"{}\"", esc(id))).unwrap_or_default();
+                let _ = write!(out, "<div class=\"b h h{}\"{id}{align}>{n}{}</div>", level.clamp(&1, &9), inline(&b.text, self.opts.asset_root, self.local_links));
                 self.kids(b, depth, out);
             }
             BlockKind::Bullet | BlockKind::Ordered { .. } | BlockKind::Todo { .. } => {
@@ -159,7 +181,7 @@ impl Writer<'_> {
                     BlockKind::Todo { done } => (format!("<span class=\"box{}\"></span>", if done { " on" } else { "" }), if done { " done" } else { "" }),
                     _ => unreachable!(),
                 };
-                let _ = write!(out, "<div class=\"li\">{marker}<div class=\"lb\"><div class=\"{}\"{align}>{}</div>", body_class.trim(), inline(&b.text));
+                let _ = write!(out, "<div class=\"li\">{marker}<div class=\"lb\"><div class=\"{}\"{align}>{}</div>", body_class.trim(), inline(&b.text, self.opts.asset_root, self.local_links));
                 if !b.children.is_empty() {
                     out.push_str("<div>");
                     self.blocks(&b.children, depth + 1, out);
@@ -200,7 +222,7 @@ impl Writer<'_> {
             BlockKind::Divider => out.push_str("<hr>"),
             BlockKind::Image { src, width, height, caption, crop, .. } => {
                 let _ = write!(out, "<div class=\"img\"{align}>");
-                match data_uri(src) {
+                match data_uri(src, self.opts.asset_root) {
                     Some(uri) => out.push_str(&image(&uri, *width, *height, *crop)),
                     None => {
                         let _ = write!(out, "<div class=\"raw\">{}</div>", esc(crate::settings::tr("图片不可用", "Image unavailable")));
@@ -243,26 +265,45 @@ impl Writer<'_> {
             }
             BlockKind::Interactive(i) => {
                 let title = if i.title.is_empty() { crate::settings::tr("交互内容", "Interactive") } else { &i.title };
+                let video = if i.kind == InteractiveKind::Html { standalone_video(&i.source) } else { None };
+                let audio = i.kind == InteractiveKind::Html && standalone_audio(&i.source);
+                let model = i.kind == InteractiveKind::Html && fdl_core::html_assets::standalone_model(&i.source).is_some();
                 let _ = write!(
                     out,
-                    "<div class=\"interactive\" style=\"border:1px solid #ddd;border-radius:8px;overflow:hidden;margin:8px 0\"><div style=\"padding:8px 12px;font-size:12px;color:#666;background:#f7f7f7\">{}</div>",
+                    "<div class=\"interactive{}\" style=\"border:1px solid #ddd;border-radius:8px;overflow:hidden;margin:8px 0\"><div style=\"padding:8px 12px;font-size:12px;color:#666;background:#f7f7f7\">{}</div>",
+                    if video.is_some() || audio || model { " interactive-print-replacement" } else { "" },
                     esc(title)
                 );
                 match i.kind {
                     InteractiveKind::Canvas => {
                         let _ = write!(
                             out,
-                            "<div style=\"height:{}px;display:flex;align-items:center;justify-content:center;color:#888;font-size:12px\">{}</div>",
+                            "<div class=\"interactive-native-placeholder\" style=\"height:{}px;display:flex;align-items:center;justify-content:center;color:#888;font-size:12px\">{}</div>",
                             i.height(),
                             esc(crate::settings::tr("可交互画布 · 在 MarkdownX 阅读器中运行", "Interactive canvas · runs in the MarkdownX reader"))
                         );
                     }
                     InteractiveKind::Html => {
+                        if let Some(poster) = video {
+                            out.push_str("<div class=\"interactive-print-media\">");
+                            if let Some(uri) = poster.as_deref().and_then(|src| data_uri(src, self.opts.asset_root)) {
+                                let _ = write!(out, "<img src=\"{}\" alt=\"{}\">", esc(&uri), esc(crate::settings::tr("视频封面", "Video poster")));
+                            }
+                            let _ = write!(out, "<span>{}</span></div>", esc(crate::settings::tr("视频 · 请在 HTML 或 MarkdownX 中播放", "Video · play in HTML or MarkdownX")));
+                        } else if audio {
+                            let _ = write!(out, "<div class=\"interactive-print-media\">{}</div>", esc(crate::settings::tr("音频 · 请在 HTML 或 MarkdownX 中播放", "Audio · play in HTML or MarkdownX")));
+                        } else if model {
+                            let _ = write!(out, "<div class=\"interactive-print-media\">{}</div>", esc(crate::settings::tr("三维模型 · 请在 MarkdownX 中查看", "3D model · view in MarkdownX")));
+                        }
+                        let print_style = "<style>@media print { html { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }</style>";
+                        let source = if self.opts.asset_root.is_some() {
+                            format!("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline' data:; script-src 'unsafe-inline' data:; font-src data:; connect-src data:\">{print_style}{}", i.source)
+                        } else { format!("{print_style}{}", i.source) };
                         let _ = write!(
                             out,
                             "<iframe sandbox=\"allow-scripts\" style=\"width:100%;height:{}px;border:0\" srcdoc=\"{}\"></iframe>",
                             i.height(),
-                            esc(&i.source)
+                            esc(&source)
                         );
                     }
                 }
@@ -339,6 +380,26 @@ impl Writer<'_> {
     }
 }
 
+/// Only replace a simple standalone video in print; mixed interactive HTML
+/// keeps its iframe so other content remains visible.
+fn standalone_video(source: &str) -> Option<Option<String>> {
+    let source = source.trim();
+    let lower = source.to_ascii_lowercase();
+    let rest = lower.strip_prefix("<video")?;
+    if !rest.starts_with('>') && !rest.chars().next().is_some_and(char::is_whitespace) { return None; }
+    if !lower.ends_with("</video>") || lower.matches("<video").count() != 1
+        || ["<script", "<canvas", "<iframe", "<audio", "<model-viewer"].iter().any(|tag| lower.contains(tag)) { return None; }
+    Some(fdl_core::html_assets::references(source).into_iter().find(|r| r.tag == "video" && r.attribute == "poster").map(|r| r.value))
+}
+
+fn standalone_audio(source: &str) -> bool {
+    let lower = source.trim().to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("<audio") else { return false };
+    (rest.starts_with('>') || rest.chars().next().is_some_and(char::is_whitespace))
+        && lower.ends_with("</audio>") && lower.matches("<audio").count() == 1
+        && !["<script", "<canvas", "<iframe", "<video", "<model-viewer"].iter().any(|tag| lower.contains(tag))
+}
+
 fn image(uri: &str, width: Option<f32>, height: Option<f32>, crop: Option<[f32; 4]>) -> String {
     match (crop, width, height) {
         (Some([l, t, r, b]), Some(w), Some(h)) if r > l && b > t => {
@@ -358,16 +419,15 @@ fn image(uri: &str, width: Option<f32>, height: Option<f32>, crop: Option<[f32; 
 
 /// An image source as a data URI: local files, and remote images already
 /// downloaded for display. Other remote images stay links.
-fn data_uri(src: &str) -> Option<String> {
+fn data_uri(src: &str, root: Option<&std::path::Path>) -> Option<String> {
     use base64::Engine;
     if src.starts_with("data:") {
-        let encoded = ["data:image/png;base64,", "data:image/jpeg;base64,", "data:image/gif;base64,", "data:image/webp;base64,"]
-            .iter().find_map(|prefix| src.strip_prefix(prefix))?;
-        return (encoded.len() <= 28 * 1024 * 1024 && base64::engine::general_purpose::STANDARD.decode(encoded).is_ok())
-            .then(|| src.to_string());
+        let (ext, bytes) = crate::editor::image::decode_embedded_image(src)?;
+        let mime = match ext { "svg" => "image/svg+xml", "jpg" => "image/jpeg", "png" => "image/png", "gif" => "image/gif", "webp" => "image/webp", "bmp" => "image/bmp", _ => return None };
+        return Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)));
     }
     let remote = src.starts_with("http://") || src.starts_with("https://");
-    let path = if remote { crate::editor::image::cached_remote(src) } else { crate::store::export_path(src) };
+    let path = if remote { crate::editor::image::cached_remote(src) } else if let Some(root) = root { crate::store::export_path_in(root, src) } else { crate::store::export_path(src) };
     let Some(bytes) = path.and_then(|p| crate::store::read_bounded(&p, 20 * 1024 * 1024).ok()) else {
         return remote.then(|| src.replace('"', "%22"));
     };
@@ -397,9 +457,9 @@ fn code(lang: &str, text: &str) -> String {
     out
 }
 
-fn lone_equation(t: &RichText) -> Option<String> {
+fn lone_equation(t: &RichText) -> Option<(String, bool)> {
     match t.runs.as_slice() {
-        [run] if t.text == "\u{fffc}" => run.marks.inline.as_ref().and_then(Inline::equation).map(str::to_string),
+        [run] if t.text == "\u{fffc}" => run.marks.inline.as_ref().and_then(|obj| obj.equation().map(|src| (src.to_string(), obj.is_display_equation()))),
         _ => None,
     }
 }
@@ -408,12 +468,17 @@ fn math(src: &str) -> String {
     crate::editor::math::mathml(src).unwrap_or_else(|| format!("<code>{}</code>", esc(src)))
 }
 
-fn inline(t: &RichText) -> String {
+fn inline(t: &RichText, root: Option<&std::path::Path>, local_links: Option<&std::collections::HashSet<String>>) -> String {
     let mut out = String::new();
     for (r, m) in t.spans() {
         let s = &t.text[r];
         let mut x = match &m.inline {
             Some(Inline { kind: InlineKind::File(f), .. }) => s.chars().map(|_| esc(&f.name)).collect(),
+            Some(Inline { kind: InlineKind::Image(image), .. }) => {
+                let html = data_uri(&image.src, root).map(|uri| format!("<img class=\"inline-image\" src=\"{}\" alt=\"{}\"/>", esc(&uri), esc(&image.alt)))
+                    .unwrap_or_else(|| esc(&image.alt));
+                s.chars().map(|_| html.clone()).collect()
+            }
             Some(obj) => match obj.equation() {
                 Some(src) => s.chars().map(|_| math(src)).collect(),
                 None => {
@@ -455,7 +520,8 @@ fn inline(t: &RichText) -> String {
         if m.bold {
             x = format!("<b>{x}</b>");
         }
-        if let Some(url) = m.link.as_ref().filter(|url| crate::paste::link_ok(url)) {
+        if let Some(url) = m.link.as_ref().filter(|url| crate::paste::link_ok(url) || crate::paste::relative_link_ok(url)
+            || url.starts_with("file:") && local_links.is_some_and(|links| links.contains(*url))) {
             x = format!("<a href=\"{}\">{x}</a>", esc(url));
         }
         out.push_str(&x);
@@ -479,18 +545,44 @@ mod tests {
 
     #[test]
     fn exports_reject_active_data_and_unsafe_links() {
-        assert!(data_uri("data:text/html;base64,PHNjcmlwdD4=").is_none());
-        assert!(data_uri("data:image/svg+xml;base64,PHN2Zz4=").is_none());
-        assert!(data_uri("data:image/png;base64,\" onerror=\"alert(1)").is_none());
-        assert!(data_uri("data:image/png;base64,aGVsbG8=").is_some());
+        use base64::Engine;
+        assert!(data_uri("data:text/html;base64,PHNjcmlwdD4=", None).is_none());
+        assert!(data_uri("data:image/svg+xml;base64,PHN2Zz4=", None).is_none());
+        assert!(data_uri("data:image/png;base64,\" onerror=\"alert(1)", None).is_none());
+        assert!(data_uri("data:image/png;base64,aGVsbG8=", None).is_none());
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><image href="file:///secret.png" width="10" height="10"/><rect width="10" height="10"/><text x="10" y="30">镜头 01</text></svg>"#.as_bytes();
+        let input = format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(svg));
+        let result = data_uri(&input, None).unwrap();
+        let safe = base64::engine::general_purpose::STANDARD.decode(result.split_once(',').unwrap().1).unwrap();
+        assert!(!String::from_utf8_lossy(&safe).contains("secret.png"));
+        assert!(String::from_utf8_lossy(&safe).contains("镜头 01"), "SVG text was lost");
+        let bmp = format!("data:image/bmp;base64,{}", base64::engine::general_purpose::STANDARD.encode(b"BMimage"));
+        assert_eq!(data_uri(&bmp, None), Some(bmp.clone()));
+        assert!(data_uri(&bmp.replacen("image/bmp", "image/png", 1), None).is_none());
         let mut text = RichText::default();
         text.push("click", Marks { link: Some("javascript:alert(1)".into()), ..Default::default() });
-        assert_eq!(inline(&text), "click");
+        assert_eq!(inline(&text, None, None), "click");
+        let invalid = std::collections::HashSet::from(["javascript:alert(1)".to_string()]);
+        assert_eq!(inline(&text, None, Some(&invalid)), "click");
+        let mut text = RichText::default();
+        text.push("local", Marks { link: Some("file:///D:/workspace/doc.pdf#page=2".into()), ..Default::default() });
+        assert_eq!(inline(&text, None, None), "local");
+        let mut allowed = std::collections::HashSet::new();
+        allowed.insert("file:///D:/workspace/doc.pdf#page=2".to_string());
+        assert!(inline(&text, None, Some(&allowed)).contains("href=\"file:///D:/workspace/doc.pdf#page=2\""));
+        allowed.clear(); allowed.insert("file:///D:/workspace/other.pdf".to_string());
+        assert_eq!(inline(&text, None, Some(&allowed)), "local");
         assert_eq!(esc("'`\"<>"), "&#39;&#96;&quot;&lt;&gt;");
     }
 
     #[test]
     fn renders_blocks_and_marks() {
+        assert_eq!(standalone_video("<VIDEO controls poster='./cover.svg' src='clip.mp4'></VIDEO>"), Some(Some("./cover.svg".into())));
+        assert_eq!(standalone_video("<video controls><source src='clip.mp4'></video>"), Some(None));
+        assert!(standalone_video("<video src='clip.mp4'></video><canvas></canvas>").is_none());
+        assert!(standalone_video("<video src='clip.mp4'><script>run()</script></video>").is_none());
+        assert!(standalone_audio("<AUDIO controls><source src='./sound.wav'></AUDIO>"));
+        assert!(!standalone_audio("<audio src='sound.wav'></audio><canvas></canvas>"));
         let mut t = RichText::plain("a ");
         t.push("b", Marks { bold: true, text_color: Some(ColorName("red".into())), ..Default::default() });
         let doc = Document {
@@ -504,7 +596,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let h = to_html(&doc, &Options { sub_pages: &["子页".into()] });
+        let h = to_html(&doc, &Options { sub_pages: &["子页".into()], asset_root: None });
         assert!(h.contains("a <b><span style=\"color:#cb0424;\">b</span></b>"));
         assert!(h.contains(">2.</span>"));
         assert!(h.contains("📄 子页"));

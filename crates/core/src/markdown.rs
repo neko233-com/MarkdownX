@@ -12,6 +12,10 @@ pub struct Options<'a> {
     /// 所有内容: images are kept, local ones copied into this folder next to
     /// the .md file. None is 仅文本（不含图片和附件）.
     pub assets: Option<&'a str>,
+    /// Prefix newly written relative links with `./` for portable workspace files.
+    pub dot_relative: bool,
+    /// Copy local PDF links from the library alongside the exported document.
+    pub copy_linked_pdfs: bool,
 }
 
 pub struct Export {
@@ -31,7 +35,9 @@ pub fn export(doc: &Document, opts: &Options) -> Export {
     let mut out = String::new();
     let title = doc.title.text.trim();
     if !title.is_empty() {
-        out.push_str(&format!("# {}\n\n", escape(title)));
+        let start = doc.title.text.len() - doc.title.text.trim_start().len();
+        let rich = doc.title.slice(start..start + title.len());
+        out.push_str(&format!("# {}\n\n", w.rich(&rich)));
     }
     out.push_str(&w.blocks(&doc.blocks));
     let trimmed = out.trim_end().len();
@@ -101,7 +107,11 @@ impl Writer<'_> {
     }
 
     fn block(&mut self, b: &Block, seq: u32) -> String {
-        let text = inline(&b.text, &mut |f| self.file_link(f));
+        let display = match (&b.kind, b.text.runs.as_slice()) {
+            (BlockKind::Text, [run]) if b.text.text == crate::editor::core::EQUATION => run.marks.inline.as_ref().filter(|obj| obj.is_display_equation()).and_then(Inline::equation),
+            _ => None,
+        };
+        let text = display.map(|src| format!("$$\n{src}\n$$")).unwrap_or_else(|| self.rich(&b.text));
         let nested = |w: &mut Self, head: String| -> String {
             if b.children.is_empty() {
                 return head;
@@ -141,19 +151,21 @@ impl Writer<'_> {
             BlockKind::Image { src, caption, .. } => match self.opts.assets {
                 Some(dir) => {
                     let alt = caption.clone().unwrap_or_default();
-                    format!("![{}]({})", escape(&alt), self.image(src, dir).replace(' ', "%20"))
+                    let link = self.image(src, dir);
+                    format!("![{}]({})", escape(&alt), self.asset_url(&link))
                 }
                 None => String::new(),
             },
-            BlockKind::Table(t) => table(t, &mut |f| self.file_link(f)),
+            BlockKind::Table(t) => self.table(t),
             BlockKind::Grid | BlockKind::Column { .. } => self.blocks(&b.children),
             // An add-on block: Markdown has nothing for it.
             BlockKind::Countdown(_) => String::new(),
             BlockKind::Interactive(i) => {
+                let source = self.interactive_source(i);
                 let payload = serde_json::json!({
                     "title": i.title,
                     "height": i.height(),
-                    "source": i.source,
+                    "source": source,
                 });
                 let longest = i.source.split('`').map(str::len).max().unwrap_or(0);
                 let fence = "`".repeat((longest + 1).max(3));
@@ -170,16 +182,92 @@ impl Writer<'_> {
         }
     }
 
+    fn rich(&mut self, text: &RichText) -> String {
+        if !self.opts.copy_linked_pdfs || self.opts.assets.is_none() {
+            return inline(text, &mut |asset| self.inline_asset(asset));
+        }
+        let mut copy = text.clone();
+        for run in &mut copy.runs {
+            let Some(link) = &mut run.marks.link else { continue };
+            let Some((path, page)) = crate::book::pdf_link_target(link) else { continue };
+            let path = path.to_string_lossy().replace('\\', "/");
+            let dest = self.image(&path, self.opts.assets.unwrap());
+            if !dest.is_empty() {
+                *link = self.asset_url(&dest.replace('%', "%25").replace('#', "%23").replace('?', "%3F"));
+                if let Some(page) = page { link.push_str(&format!("#page={page}")); }
+            }
+        }
+        inline(&copy, &mut |asset| self.inline_asset(asset))
+    }
+
     fn file_link(&mut self, file: &FileBlock) -> Option<String> {
         let dir = self.opts.assets.filter(|_| file.src_kind == "path")?;
         let link = self.image(&file.src, dir);
-        (!link.is_empty()).then(|| link.replace(' ', "%20").replace(')', "%29").replace('(', "%28"))
+        (!link.is_empty()).then(|| self.asset_url(&link))
+    }
+
+    fn inline_asset(&mut self, asset: InlineAsset<'_>) -> Option<String> {
+        match asset {
+            InlineAsset::File(file) => self.file_link(file),
+            InlineAsset::Image(image) => {
+                let dir = self.opts.assets?;
+                let link = self.image(&image.src, dir);
+                (!link.is_empty()).then(|| self.asset_url(&link))
+            }
+        }
+    }
+
+    fn asset_url(&self, link: &str) -> String {
+        if link.starts_with("data:image/") { return link.to_string(); }
+        let prefix = if self.opts.dot_relative && !link.is_empty() && !link.starts_with("http://") && !link.starts_with("https://") { "./" } else { "" };
+        format!("{prefix}{}", link.replace(' ', "%20").replace(')', "%29").replace('(', "%28"))
+    }
+
+    fn interactive_source(&mut self, i: &Interactive) -> String {
+        if i.kind != InteractiveKind::Html { return i.source.clone(); }
+        if let Some(dir) = self.opts.assets {
+            crate::html_assets::rewrite(&i.source, |src| {
+                if src.starts_with("data:") || src.starts_with("blob:") || src.starts_with('#') || src.starts_with("http://") || src.starts_with("https://") { return Ok::<_, std::convert::Infallible>(None); }
+                let rel = self.image(src, dir);
+                Ok((!rel.is_empty()).then(|| format!("./{}", rel.replace('%', "%25").replace(' ', "%20").replace('#', "%23").replace('?', "%3F"))))
+            }).unwrap()
+        } else { i.source.clone() }
+    }
+
+    fn table_widget(&mut self, i: &Interactive) -> String {
+        let mut widget = i.clone();
+        widget.source = self.interactive_source(i);
+        crate::paste::markdown_table_widget(&widget)
+    }
+
+    fn table(&mut self, t: &Table) -> String {
+        let cols = t.rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+        let mut row = |r: &Vec<TableCell>| {
+            let mut cells: Vec<String> = r.iter().map(|cell| cell.blocks.iter().map(|b| match &b.kind {
+                BlockKind::Image { .. } => self.block(b, 0),
+                BlockKind::Interactive(i) => self.table_widget(i),
+                _ => self.rich(&b.text),
+            })
+                .filter(|s| !s.is_empty()).collect::<Vec<_>>().join("<br>").replace('|', "\\|")).collect();
+            cells.resize(cols, String::new());
+            format!("| {} |", cells.join(" | "))
+        };
+        let mut rows = t.rows.iter();
+        let mut lines = vec![row(rows.next().unwrap_or(&vec![]))];
+        let markers = (0..cols).map(|col| {
+            match t.rows.iter().filter_map(|row| row.get(col)).filter_map(|cell| cell.blocks.first()).next().map(|block| block.align).unwrap_or_default() {
+                Align::Left => "---", Align::Center => ":---:", Align::Right => "---:",
+            }
+        }).collect::<Vec<_>>().join(" | ");
+        lines.push(format!("| {markers} |"));
+        lines.extend(rows.map(row));
+        lines.join("\n")
     }
 
     /// The link for an image: remote ones stay remote, local files get a
     /// copy in the assets folder (same name, numbered on clashes).
     fn image(&mut self, src: &str, dir: &str) -> String {
-        if src.starts_with("http://") || src.starts_with("https://") {
+        if src.starts_with("http://") || src.starts_with("https://") || src.starts_with("data:image/") {
             return src.to_string();
         }
         let Some(path) = crate::store::export_path_in(self.opts.library_root.unwrap_or(&crate::store::Store::root_dir()), src) else { self.missing += 1; return String::new() };
@@ -197,33 +285,6 @@ impl Writer<'_> {
         self.files.push((path, rel.clone()));
         rel
     }
-}
-
-fn table(t: &Table, files: &mut impl FnMut(&FileBlock) -> Option<String>) -> String {
-    let cols = t.rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
-    let mut cell = |c: &TableCell| {
-        let parts: Vec<String> = c.blocks.iter().map(|b| inline(&b.text, files)).filter(|s| !s.is_empty()).collect();
-        parts.join("<br>").replace('|', "\\|")
-    };
-    let mut row = |r: &Vec<TableCell>| {
-        let mut cells: Vec<String> = r.iter().map(&mut cell).collect();
-        cells.resize(cols, String::new());
-        format!("| {} |", cells.join(" | "))
-    };
-    let mut lines = vec![];
-    let mut rows = t.rows.iter();
-    match rows.next() {
-        Some(r) => lines.push(row(r)),
-        None => lines.push(row(&vec![])),
-    }
-    let markers = (0..cols).map(|col| {
-        match t.rows.iter().filter_map(|row| row.get(col)).filter_map(|cell| cell.blocks.first()).next().map(|block| block.align).unwrap_or_default() {
-            Align::Left => "---", Align::Center => ":---:", Align::Right => "---:",
-        }
-    }).collect::<Vec<_>>().join(" | ");
-    lines.push(format!("| {markers} |"));
-    lines.extend(rows.map(row));
-    lines.join("\n")
 }
 
 fn indent(s: &str, prefix: &str) -> String {
@@ -288,9 +349,13 @@ struct Md {
     underline: bool,
     code: bool,
     link: Option<String>,
+    image: bool,
+    equation: bool,
 }
 
-fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) -> String {
+enum InlineAsset<'a> { File(&'a FileBlock), Image(&'a InlineImage) }
+
+fn inline(t: &RichText, assets: &mut impl FnMut(InlineAsset<'_>) -> Option<String>) -> String {
     // Merge runs that only differ in marks Markdown can't express (colors).
     let mut runs: Vec<(Md, String)> = vec![];
     for (r, m) in t.spans() {
@@ -298,6 +363,10 @@ fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) ->
             Some(src) => t.text[r].chars().map(|_| format!("${src}$")).collect(),
             None => match &m.inline {
                 Some(Inline { kind: InlineKind::File(f), .. }) => t.text[r].chars().map(|_| f.name.clone()).collect(),
+                Some(Inline { kind: InlineKind::Image(image), .. }) => {
+                    let markup = assets(InlineAsset::Image(image)).map(|src| format!("![{}]({src})", escape(&image.alt))).unwrap_or_default();
+                    t.text[r].chars().map(|_| markup.clone()).collect()
+                }
                 Some(obj) => {
                     // An 打开超链接 button exports as a link.
                     let (text, link) = crate::docxml::raw_summary(&obj.xml);
@@ -310,14 +379,16 @@ fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) ->
                 None => t.text[r].to_string(),
             },
         };
-        let file_link = m.inline.as_ref().and_then(|obj| match &obj.kind { InlineKind::File(f) => files(f), _ => None });
+        let file_link = m.inline.as_ref().and_then(|obj| match &obj.kind { InlineKind::File(f) => assets(InlineAsset::File(f)), _ => None });
         let md = Md {
             bold: m.bold,
             italic: m.italic,
             strike: m.strike,
             underline: m.underline,
             code: m.code,
-            link: file_link.or_else(|| m.link.clone().filter(|url| crate::paste::link_ok(url))),
+            link: file_link.or_else(|| m.link.clone().filter(|url| crate::paste::link_ok(url) || crate::paste::relative_link_ok(url))),
+            image: m.inline.as_ref().is_some_and(|obj| obj.image().is_some()),
+            equation: m.inline.as_ref().is_some_and(|obj| obj.equation().is_some()),
         };
         match runs.last_mut() {
             Some((last, text)) if *last == md => text.push_str(&s),
@@ -346,7 +417,9 @@ fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) ->
             out.push_str(&s);
             continue;
         }
-        let mut x = if m.code {
+        let mut x = if m.image || m.equation {
+            body.to_string()
+        } else if m.code {
             let mut run = 0;
             let mut longest = 0;
             for c in body.chars() {
@@ -372,7 +445,7 @@ fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) ->
             x = if html { format!("<strong>{x}</strong>") } else { format!("**{x}**") };
         }
         if let Some(url) = &m.link {
-            x = format!("[{x}]({})", url.replace(' ', "%20").replace(')', "%29"));
+            x = format!("[{x}]({})", url.replace(' ', "%20").replace('(', "%28").replace(')', "%29"));
         }
         out.push_str(lead);
         out.push_str(&x);
@@ -384,6 +457,111 @@ fn inline(t: &RichText, files: &mut impl FnMut(&FileBlock) -> Option<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_images_survive_markdown_export_in_text_and_tables() {
+        let uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
+        let input = format!("![cover]({uri})\n\nBefore ![inline]({uri}) after\n\n| Shot | Frame |\n| --- | --- |\n| 1 | Before ![frame]({uri}) after |\n");
+        let doc = Document { blocks: crate::paste::markdown_to_blocks(&input, crate::paste::Off { file: true, ..Default::default() }), ..Default::default() };
+        let out = export(&doc, &Options { assets: Some("assets"), dot_relative: true, ..Default::default() });
+        assert_eq!(out.text.matches(uri).count(), 3, "{}", out.text);
+        assert_eq!(out.missing, 0);
+        assert!(out.files.is_empty());
+        let again = crate::paste::markdown_to_blocks(&out.text, crate::paste::Off { file: true, ..Default::default() });
+        assert_eq!(again.len(), doc.blocks.len());
+    }
+
+    #[test]
+    fn imported_pdf_links_copy_into_portable_markdown_including_tables() {
+        let root = std::env::temp_dir().join(format!("markdownx-export-pdf-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("assets/books/example/assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("paper #%.pdf");
+        std::fs::write(&path, b"%PDF-example").unwrap();
+        let source = "[read](assets/books/example/assets/paper%20%23%25.pdf#page=2)";
+        let blocks = crate::paste::markdown_to_blocks(&format!("{source}\n\n| File |\n| --- |\n| {source} |"), crate::paste::Off { file: true, ..Default::default() });
+        let doc = Document { blocks, ..Default::default() };
+        let opts = Options { library_root: Some(&root), assets: Some("content-assets/chapter"), dot_relative: true, copy_linked_pdfs: true, ..Default::default() };
+        let out = export(&doc, &opts);
+        assert_eq!(out.missing, 0);
+        assert_eq!(out.files.len(), 1);
+        assert_eq!(out.files[0].0, path.canonicalize().unwrap());
+        assert_eq!(out.text.matches("./content-assets/chapter/paper%20%23%25.pdf#page=2").count(), 2, "{}", out.text);
+        std::fs::create_dir_all(root.join("refs")).unwrap();
+        std::fs::write(root.join("refs/article.pdf"), b"%PDF-other").unwrap();
+        let local = Document { blocks: crate::paste::markdown_to_blocks("[article](./refs/article.pdf#page=3)", crate::paste::Off { file: true, ..Default::default() }), ..Default::default() };
+        let local_out = export(&local, &opts);
+        assert_eq!(local_out.missing, 0);
+        assert!(local_out.text.contains("./content-assets/chapter/article.pdf#page=3"), "{}", local_out.text);
+        assert_eq!(local_out.files.len(), 1);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(export(&doc, &opts).missing, 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn equation_export_preserves_tex_and_display_delimiters() {
+        let source = "Inline $\\frac{a_i}{b}$ end.\n\n$$\n\\frac{1}{\\frac{x}{y}}\n$$\n";
+        let doc = Document { blocks: crate::paste::markdown_to_blocks(source, crate::paste::Off { file: true, ..Default::default() }), ..Default::default() };
+        let text = export(&doc, &Options::default()).text;
+        assert!(text.contains("$\\frac{a_i}{b}$"), "{text}");
+        assert!(text.contains("$$\n\\frac{1}{\\frac{x}{y}}\n$$"), "{text}");
+        let reread = crate::paste::markdown_to_blocks(&text, crate::paste::Off { file: true, ..Default::default() });
+        let equation = reread[1].text.runs[0].marks.inline.as_ref().unwrap();
+        assert!(equation.is_display_equation());
+        assert_eq!(equation.equation(), Some("\\frac{1}{\\frac{x}{y}}"));
+    }
+
+    #[test]
+    fn html_video_export_copies_local_assets_as_relative_urls() {
+        let root = std::env::temp_dir().join(format!("mdx-html-export-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("my clip.mp4"), b"video").unwrap();
+        let source = "<video controls src=\"my clip.mp4\"></video>";
+        let doc = Document { blocks: vec![Block::new(BlockKind::Interactive(Interactive::html("Video", source)), RichText::default())], ..Default::default() };
+        let exported = export(&doc, &Options { library_root: Some(&root), assets: Some("assets"), ..Default::default() });
+        assert!(exported.text.contains("./assets/my%20clip.mp4"), "{}", exported.text);
+        assert_eq!(exported.files.len(), 1);
+        assert_eq!(exported.missing, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn storyboard_table_export_includes_image_and_asset() {
+        let root = std::env::temp_dir().join(format!("markdownx-table-image-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("shots")).unwrap();
+        std::fs::write(root.join("shots/frame.svg"), b"<svg/>").unwrap();
+        let blocks = crate::paste::markdown_to_blocks("| Shot | Frame |\n| --- | --- |\n| 1 | ![Frame](./shots/frame.svg) |", crate::paste::Off { file: true, ..Default::default() });
+        let doc = Document { blocks, ..Default::default() };
+        let exported = export(&doc, &Options { library_root: Some(&root), assets: Some("assets"), ..Default::default() });
+        assert!(exported.text.contains("![Frame](assets/frame.svg)"));
+        assert_eq!(exported.files.len(), 1);
+        assert_eq!(exported.missing, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn table_widgets_round_trip_multiline_source_and_copy_relative_assets() {
+        let root = std::env::temp_dir().join(format!("markdownx-table-widget-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("clip.mp4"), b"video").unwrap();
+        let source = "| Shot | Media |\n| --- | --- |\n| 1 | <video controls src=\"./clip.mp4\"></video> |";
+        let mut blocks = crate::paste::markdown_to_blocks(source, crate::paste::Off { file: true, ..Default::default() });
+        let BlockKind::Table(table) = &mut blocks[0].kind else { panic!("expected table") };
+        let BlockKind::Interactive(widget) = &mut table.rows[1][1].blocks[0].kind else { panic!("expected video") };
+        widget.source.push_str("\n<script>const label = '中文 | one';</script>");
+        let doc = Document { blocks, ..Default::default() };
+        let exported = export(&doc, &Options { library_root: Some(&root), assets: Some("assets"), ..Default::default() });
+        assert_eq!(exported.files.len(), 1);
+        assert_eq!(exported.missing, 0);
+        assert!(exported.text.contains("<markdownx-interactive data-base64=\""));
+        let parsed = crate::paste::markdown_to_blocks(&exported.text, crate::paste::Off { file: true, ..Default::default() });
+        let BlockKind::Table(table) = &parsed[0].kind else { panic!("expected table") };
+        let BlockKind::Interactive(widget) = &table.rows[1][1].blocks[0].kind else { panic!("expected widget") };
+        assert!(widget.source.contains("./assets/clip.mp4"));
+        assert!(widget.source.contains("中文 | one"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn inline_attachments_export_links_and_copies_including_tables() {
@@ -534,6 +712,7 @@ mod tests {
     fn exports_tables() {
         let cell = |s: &str| TableCell { blocks: vec![Block::text(s)], ..TableCell::empty() };
         let t = Table { col_widths: vec![], header_rows: 1, header_col: false, rows: vec![vec![cell("a"), cell("b|c")], vec![cell("1")]] };
-        assert_eq!(table(&t, &mut |_| None), "| a | b\\|c |\n| --- | --- |\n| 1 |  |");
+        let mut writer = Writer { opts: &Options::default(), files: vec![], missing: 0 };
+        assert_eq!(writer.table(&t), "| a | b\\|c |\n| --- | --- |\n| 1 |  |");
     }
 }

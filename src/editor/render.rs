@@ -258,6 +258,11 @@ impl R<'_> {
             found: if self.ghost { vec![] } else { self.ed.find_hits(id) },
             eq_counter: self.eqnos.get(&id).copied().unwrap_or(0),
             button_edit: if self.ghost { None } else { self.ed.button_preview(id) },
+            inline_images: text.runs.iter().filter_map(|run| run.marks.inline.as_ref()?.image()).map(|image| {
+                let path = self.ed.img.local(&image.src);
+                let size = path.as_ref().and_then(|path| self.ed.img.dims(path));
+                (image.src.clone(), (path, size))
+            }).collect(),
         }
     }
 
@@ -1304,6 +1309,12 @@ impl Editor {
         let origin0 = self.content_origin.get();
         let counter = self.word_counter();
         let find_box = self.find_box(window, cx);
+        #[cfg(target_os = "windows")]
+        self.ix.set_html_editor_visible(self.menu.is_none() && self.slash.is_none() && lightbox.is_none() && find_box.is_none() && self.core.sel.is_collapsed());
+        #[cfg(target_os = "windows")]
+        let html_begin = self.ix.clone();
+        #[cfg(target_os = "windows")]
+        let html_end = self.ix.clone();
         if std::mem::take(&mut self.autoscroll) && self.reveal.is_none() {
             self.reveal = Some((Reveal::Caret, 0));
         }
@@ -1375,6 +1386,8 @@ impl Editor {
         let root_canvas = canvas(
             move |b, window, _| {
                 origin.set(b.origin);
+                #[cfg(target_os = "windows")]
+                html_end.end_html_frame();
                 link_rects.into_iter().map(|r| window.insert_hitbox(r, HitboxBehavior::Normal)).collect::<Vec<_>>()
             },
             move |bounds, link_hitboxes, window, cx| {
@@ -1563,6 +1576,12 @@ impl Editor {
                 }),
             );
         self.register_actions(root, cx)
+            .children({
+                #[cfg(target_os = "windows")]
+                { Some(canvas(move |_, _, _| html_begin.begin_html_frame(), |_, _, _, _| {}).absolute().inset_0().into_any_element()) }
+                #[cfg(not(target_os = "windows"))]
+                { None::<AnyElement> }
+            })
             .child(
                 div()
                     .id("editor-page")

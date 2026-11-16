@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const SAVE_MAX_DELAY: Duration = Duration::from_secs(2);
 
-actions!(workspace, [NewDoc, ImportDoc, ImportFeishu, OpenFolder, OpenFile, PackageBook, ToggleSidebar, FocusSearch, GlobalSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
+actions!(workspace, [NewDoc, ImportDoc, ImportFeishu, OpenFolder, CreateDemo, OpenFile, PackageBook, ToggleSidebar, FocusSearch, GlobalSearch, FindInDoc, ReplaceInDoc, OpenSettings, OpenAbout, CheckForUpdates, GoHome, CloseWindow, Quit,
     HideApp, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
 /// The menu bar, in the interface language.
@@ -54,6 +54,7 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action(tr("导入为文档…", "Import as Document…"), ImportDoc),
                 MenuItem::action(tr("从飞书导入…", "Import from Feishu…"), ImportFeishu),
                 MenuItem::action(tr("打开文件夹…", "Open Folder…"), OpenFolder),
+                MenuItem::action(tr("创建演示文件夹…", "Create Demo Folder…"), CreateDemo),
                 MenuItem::action(tr("打包成电子书…", "Package as E-book…"), PackageBook),
                 MenuItem::action(tr("打开文件…", "Open File…"), OpenFile),
                 MenuItem::separator(),
@@ -229,6 +230,7 @@ pub struct Workspace {
     pub theme_anchor: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
     /// 快捷键's filter field.
     pub settings_filter: Entity<TextField>,
+    pub(crate) picgo_endpoint: Entity<TextField>,
     native_sidebar: crate::native_header::NativeSidebar,
     pub store: SharedStore,
     pub entries: Vec<Entry>,
@@ -238,6 +240,12 @@ pub struct Workspace {
     /// Bytes last read or saved, used to detect changes made by another app.
     pub(crate) file_snapshot: Option<String>,
     pub(crate) file_source: Option<FolderSource>,
+    /// The live editor is retained unchanged while a Markdown reading view is open.
+    pub(crate) file_read_editor: Option<Entity<Editor>>,
+    pub(crate) file_read_annotations: bool,
+    pub(crate) file_read_return_anchor: Option<String>,
+    pub(crate) file_read_heading_aliases: std::collections::HashMap<String, String>,
+    pub(crate) file_read_returns: Vec<crate::editor::core::Pos>,
     /// File saves run off the UI thread; revisions keep edits made during a save.
     file_saving: bool,
     pub(crate) file_revision: u64,
@@ -388,6 +396,12 @@ impl Workspace {
             f.placeholder_color = Theme::text_disabled();
             f
         });
+        let picgo_endpoint = cx.new(|cx| {
+            let mut f = TextField::new(crate::picgo::DEFAULT_ENDPOINT, cx);
+            f.placeholder_color = Theme::text_disabled();
+            f.set_text(&crate::settings::prefs().picgo_endpoint, cx);
+            f
+        });
         let folder_query = cx.new(|cx| {
             let mut f = TextField::new(crate::settings::tr("搜索文件…", "Search files…"), cx);
             f.placeholder_color = Theme::text_disabled();
@@ -395,6 +409,11 @@ impl Workspace {
         });
         let subs = vec![
             cx.subscribe(&settings_filter, |_, _, ev: &TextFieldEvent, cx| if matches!(ev, TextFieldEvent::Changed) { cx.notify(); }),
+            cx.subscribe(&picgo_endpoint, |this, _, ev: &TextFieldEvent, cx| match ev {
+                TextFieldEvent::Submit => this.save_picgo_endpoint(cx),
+                TextFieldEvent::Changed => cx.notify(),
+                _ => {}
+            }),
             cx.subscribe_in(&folder_query, window, |this, _, ev: &TextFieldEvent, _, cx| {
                 if matches!(ev, TextFieldEvent::Changed) {
                     this.refresh_folder_hits(cx);
@@ -434,6 +453,7 @@ impl Workspace {
                     && let Err(error) = this.store.recover_later(&ed.read(cx).core.doc) {
                     crate::logging::write(&format!("Could not preserve unsaved document: {error:#}"));
                 }
+                if let Some(ed) = &this.editor { ed.read(cx).cleanup_embedded_images(); }
                 async {}
             }),
         ];
@@ -478,12 +498,18 @@ impl Workspace {
             theme_menu: None,
             theme_anchor: Default::default(),
             settings_filter,
+            picgo_endpoint,
             store,
             entries,
             current: None,
             file: None,
             file_snapshot: None,
             file_source: None,
+            file_read_editor: None,
+            file_read_annotations: false,
+            file_read_return_anchor: None,
+            file_read_heading_aliases: Default::default(),
+            file_read_returns: vec![],
             file_saving: false,
             file_revision: 0,
             window_handle: window.window_handle(),
@@ -604,7 +630,7 @@ impl Workspace {
         let prompt = picked.is_none().then(|| {
             let mut extensions = ["md", "markdown", "mark", "txt", "docxxml", "mdxb", "xlsx", "xlsm", "xlam"].map(str::to_owned).to_vec();
             for (_, editor, suffixes) in fdl_core::extensions::BUILTINS {
-                if matches!(editor, fdl_core::extensions::BuiltinEditor::Image | fdl_core::extensions::BuiltinEditor::Audio | fdl_core::extensions::BuiltinEditor::Video | fdl_core::extensions::BuiltinEditor::Model) {
+                if matches!(editor, fdl_core::extensions::BuiltinEditor::Image | fdl_core::extensions::BuiltinEditor::Audio | fdl_core::extensions::BuiltinEditor::Video | fdl_core::extensions::BuiltinEditor::Model | fdl_core::extensions::BuiltinEditor::Pdf | fdl_core::extensions::BuiltinEditor::Research) {
                     extensions.extend(suffixes.iter().map(|suffix| suffix.trim_start_matches('.').to_owned()));
                 }
             }
@@ -628,7 +654,7 @@ impl Workspace {
             self.open_media_preview(path, window, cx);
             return;
         }
-        if crate::extensions::is_external(&path) && path.is_file() {
+        if (crate::extensions::is_external(&path) || crate::extensions::is_research(&path)) && path.is_file() {
             self.open_extension_path(path, window, cx);
             return;
         }
@@ -740,6 +766,33 @@ impl Workspace {
     pub fn open_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menus();
         self.add_workspace(window, cx);
+    }
+
+    pub(crate) fn create_demo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menus();
+        let picked = crate::devtools::take_pick();
+        let prompt = picked.is_none().then(|| cx.prompt_for_paths(PathPromptOptions {
+            files: false, directories: true, multiple: false,
+            prompt: Some(crate::settings::tr("选择演示文件夹的保存位置", "Choose where to create the demo folder").into()), extensions: None,
+        }));
+        let english = crate::settings::english();
+        cx.spawn_in(window, async move |this, cx| {
+            let paths = match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked };
+            let Some(parent) = paths.and_then(|paths| paths.into_iter().next()) else { return };
+            let task = cx.background_executor().spawn(async move {
+                let (root, starter) = crate::guides::create_demo_folder(&parent, &crate::store::Store::root_dir(), english)?;
+                Ok::<_, anyhow::Error>((crate::workspace_fs::WorkspaceDir::scan(root)?, starter))
+            });
+            let result = task.await;
+            let _ = this.update_in(cx, |w, window, cx| match result {
+                Ok((tree, starter)) => {
+                    let id = w.register_workspace_snapshot(tree, true, cx);
+                    w.save_workspaces(cx);
+                    w.open_workspace_file(id, starter, window, cx);
+                }
+                Err(error) => w.show_toast_kind(ToastKind::Error, &crate::localized_format!("无法创建演示文件夹：{}", "Could not create demo folder: {}", crate::settings::diagnostic(&error.to_string())), cx),
+            });
+        }).detach();
     }
 
     #[cfg(feature = "devtools")]
@@ -865,6 +918,7 @@ impl Workspace {
         self.file = None;
         self.file_snapshot = None;
         self.file_source = None;
+        self.file_read_editor = None;
         self.editor = None;
         self.view = View::Home;
         if !self.search_open { window.focus(&self.focus); }
@@ -901,6 +955,7 @@ impl Workspace {
         self.file_snapshot = None;
         self.file_source = None;
         self.current = None;
+        self.file_read_editor = None;
         self.editor = None;
         self.show_view(View::Home, cx);
     }
@@ -1005,6 +1060,143 @@ impl Workspace {
         }
     }
 
+    fn open_relative_link(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((relative, fragment)) = crate::paste::split_relative_link(target) else { return };
+        let anchor = fragment.map(crate::transfer::percent_decode);
+        if relative.is_empty() {
+            if let Some(anchor) = anchor {
+                if self.file_read_editor.is_some() && self.file_read_return_anchor.as_deref() == Some(anchor.as_str()) {
+                    self.return_from_read_link(cx);
+                } else {
+                    let before = self.file_read_editor.as_ref().and_then(|_| self.editor.as_ref().map(|editor| editor.read(cx).core.sel.head));
+                    if self.jump_to_fragment(&anchor, cx) && let Some(before) = before {
+                        self.file_read_returns.push(before);
+                        cx.notify();
+                    }
+                }
+            }
+            return;
+        }
+        if self.file.is_none() && let Some(id) = self.current.as_ref() {
+            let library = crate::store::Store::root_dir();
+            let source = crate::book_source::Source::for_pages(&library, std::slice::from_ref(id)).ok().flatten();
+            let page = source.as_ref().and_then(|source| source.relative_page(id, target).map(str::to_string));
+            if let Some(page) = page {
+                if let Some(anchor) = anchor { self.open_book_fragment(page, anchor, window, cx); }
+                else { self.open(&page, window, cx); }
+                return;
+            }
+            let decoded = crate::transfer::percent_decode(relative);
+            if source.is_some() && decoded.starts_with("assets/books/")
+                && let Some(path) = crate::store::export_path_in(&library, &decoded)
+                && crate::media_ui::media_kind(&path) == Some(crate::media_ui::MediaKind::Pdf)
+            {
+                let path = dunce::simplified(&path).to_path_buf();
+                if let Some(anchor) = anchor {
+                    if let Some(page) = crate::media_ui::pdf_page_fragment(&anchor) { self.open_pdf_fragment(path, page, window, cx); }
+                    else { self.show_toast_kind(ToastKind::Error, crate::settings::tr("PDF 页码请使用 #page=数字", "Use #page=number for PDFs"), cx); }
+                } else { self.load_file(path, window, cx); }
+                return;
+            }
+        }
+        let path = self.file.as_ref().and_then(|file| {
+            let canonical = file.canonicalize().ok()?;
+            let root = self.workspace_roots.iter().filter_map(|root| {
+                let resolved = root.spec.path.canonicalize().ok()?;
+                canonical.starts_with(&resolved).then_some((&root.spec.path, resolved.components().count()))
+            }).max_by_key(|(_, depth)| *depth).map(|(path, _)| path.clone())
+                .or_else(|| file.parent().map(std::path::Path::to_path_buf))?;
+            crate::workspace_files::resolve_relative_link(&root, file, relative).ok()
+        });
+        if let Some(path) = path {
+            if let Some(anchor) = anchor {
+                if matches!(crate::workspace_fs::DocKind::of(&path), Some(crate::workspace_fs::DocKind::Markdown | crate::workspace_fs::DocKind::DocxXml)) {
+                    self.open_file_fragment(path, anchor, window, cx);
+                } else if crate::media_ui::media_kind(&path) == Some(crate::media_ui::MediaKind::Pdf)
+                    && let Some(page) = crate::media_ui::pdf_page_fragment(&anchor) {
+                    self.open_pdf_fragment(path, page, window, cx);
+                } else {
+                    self.show_toast_kind(ToastKind::Error, crate::settings::tr("此文件不支持该锚点，PDF 页码请使用 #page=数字", "This file does not support that fragment; use #page=number for PDFs"), cx);
+                }
+                return;
+            }
+            if crate::spreadsheet_ui::is_spreadsheet(&path) {
+                self.open_spreadsheet_preview(path, window, cx);
+                return;
+            }
+            if crate::workspace_fs::DocKind::of(&path).is_some() || crate::media_ui::is_media(&path)
+                || crate::extensions::is_research(&path) || crate::extensions::is_external(&path) {
+                self.load_file(path, window, cx);
+                return;
+            }
+        }
+        self.show_toast_kind(ToastKind::Error, crate::settings::tr("无法打开相对链接：文件不存在、格式不支持或不在工作目录内", "Cannot open relative link: the file is missing, unsupported or outside the workspace"), cx);
+    }
+
+    fn jump_to_fragment(&mut self, anchor: &str, cx: &mut Context<Self>) -> bool {
+        let Some(editor) = self.editor.clone() else { return false };
+        let anchor = if self.file_read_editor.is_some() { self.file_read_heading_aliases.get(anchor).map_or(anchor, String::as_str) } else { anchor };
+        let chapter = self.file.is_none().then_some(self.current.as_ref()).flatten().and_then(|id| {
+            crate::book_source::Source::for_pages(&crate::store::Store::root_dir(), std::slice::from_ref(id)).ok().flatten()
+                .and_then(|source| source.translation(id).map(|(chapter, _)| (chapter.format.clone(), chapter.title.primary().to_string())))
+        });
+        let found = editor.update(cx, |editor, cx| {
+            let synthetic_title = chapter.as_ref().is_some_and(|(format, _)| format == "markdown");
+            let targets = fdl_core::anchors::targets_with_title(&editor.core.doc, !synthetic_title);
+            let id = if targets.title.as_deref() == Some(anchor) { Some(crate::editor::core::TITLE) }
+                else { targets.headings.iter().find(|(_, name)| name == anchor).map(|(id, _)| *id)
+                    .or_else(|| chapter.as_ref().filter(|(format, title)| format != "markdown" && fdl_core::anchors::slug(title) == anchor).map(|_| crate::editor::core::TITLE)) };
+            if let Some(id) = id { editor.jump_to_heading(id, cx); true } else { false }
+        });
+        #[cfg(feature = "devtools")]
+        if found { crate::logging::write("relative-link: heading PASS"); }
+        if !found { self.show_toast_kind(ToastKind::Error, crate::settings::tr("找不到链接指向的标题", "The linked heading was not found"), cx); }
+        found
+    }
+
+    pub(crate) fn return_from_read_link(&mut self, cx: &mut Context<Self>) {
+        let Some(pos) = self.file_read_returns.pop() else { return };
+        if let Some(editor) = self.editor.clone() {
+            editor.update(cx, |e, cx| e.return_to_read_position(pos, cx));
+        }
+        cx.notify();
+    }
+
+    fn open_file_fragment(&mut self, path: std::path::PathBuf, anchor: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.file.as_ref() == Some(&path) { self.jump_to_fragment(&anchor, cx); return; }
+        let (retry_path, retry_anchor) = (path.clone(), anchor.clone());
+        if !self.save_before(cx, move |w, window, cx| w.open_file_fragment(retry_path, retry_anchor, window, cx)) { return; }
+        self.open_file_path(path.clone(), window, cx);
+        if self.file.as_ref() == Some(&path) { self.jump_to_fragment(&anchor, cx); }
+    }
+
+    fn open_pdf_fragment(&mut self, path: std::path::PathBuf, page: u32, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_path_busy(&path) { self.workspace_busy_notice(cx); return; }
+        let retry = path.clone();
+        if self.save_before(cx, move |w, window, cx| w.open_pdf_fragment(retry, page, window, cx)) {
+            self.open_media_preview_at(path, Some(page), window, cx);
+        }
+    }
+
+    fn open_book_fragment(&mut self, page: String, anchor: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (retry_page, retry_anchor) = (page.clone(), anchor.clone());
+        if !self.save_before(cx, move |w, window, cx| w.open_book_fragment(retry_page, retry_anchor, window, cx)) { return; }
+        if self.try_open(&page, window, cx) { self.jump_to_fragment(&anchor, cx); }
+    }
+
+    fn open_attachment(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if !path.is_file() { self.show_toast_kind(ToastKind::Error, crate::settings::text("文件不存在"), cx); return; }
+        if crate::spreadsheet_ui::is_spreadsheet(&path) { self.open_spreadsheet_preview(path, window, cx); return; }
+        if crate::media_ui::is_media(&path) || crate::extensions::is_external(&path) || crate::extensions::is_research(&path)
+            || crate::workspace_fs::DocKind::of(&path).is_some()
+        { self.load_file(path, window, cx); return; }
+        let Ok(url) = url::Url::from_file_path(&path) else {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("无法识别文件路径", "Could not identify the file path"), cx); return;
+        };
+        if crate::devtools::scripted() { eprintln!("devtools: external attachment"); return; }
+        cx.open_url(url.as_str());
+    }
+
     pub(crate) fn load_file(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.file.as_ref() == Some(&path) && self.editor.is_some() {
             self.view = View::Doc;
@@ -1022,7 +1214,12 @@ impl Workspace {
     pub fn open_file_path(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace_path_busy(&path) { self.workspace_busy_notice(cx); return; }
         if crate::media_ui::is_media(&path) { self.open_media_preview(path, window, cx); return; }
-        if crate::extensions::is_external(&path) { self.open_extension_path(path, window, cx); return; }
+        if crate::extensions::is_external(&path) || crate::extensions::is_research(&path) { self.open_extension_path(path, window, cx); return; }
+        if self.spreadsheet_has_pending(cx) {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("工作簿仍有未保存的修改，请先保存或在工作簿窗口中处理", "The workbook has unsaved changes; save or resolve them before continuing"), cx);
+            return;
+        }
+        self.spreadsheet_preview = None;
         self.media_preview = None;
         match crate::workspace_fs::DocKind::of(&path) {
             Some(crate::workspace_fs::DocKind::Book) => {
@@ -1048,13 +1245,20 @@ impl Workspace {
                     Err(_) => { self.show_toast_kind(ToastKind::Error, crate::settings::tr("文档格式无法读取", "The document format could not be read"), cx); return; }
                 };
                 let modified = file_modified(&path);
+                let asset_root = self.workspace_roots.iter().filter(|root| path.starts_with(&root.spec.path))
+                    .max_by_key(|root| root.spec.path.components().count()).map(|root| root.spec.path.clone())
+                    .or_else(|| path.parent().map(std::path::Path::to_path_buf));
                 let editor = cx.new(|cx| {
                     let mut e = Editor::new(doc, modified, crate::store::PageWidth::default(), window, cx);
+                    if matches!(crate::workspace_fs::DocKind::of(&path), Some(crate::workspace_fs::DocKind::Markdown)) { e.image_base = path.parent().map(std::path::Path::to_path_buf); }
+                    e.asset_root = asset_root;
+                    e.asset_base = path.parent().map(std::path::Path::to_path_buf);
                     e.cat_pinned = true;
                     e
                 });
                 self.bind_editor(editor.clone(), window, cx);
                 if !self.search_open { editor.read(cx).focus(window); }
+                self.file_read_editor = None;
                 self.editor = Some(editor);
                 self.current = None;
                 self.plugin_preview = false;
@@ -1077,6 +1281,10 @@ impl Workspace {
     pub(crate) fn bind_editor(&mut self, editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) {
         self.editor_sub = Some(cx.subscribe_in(&editor, window, |this, _, ev: &EditorEvent, window, cx| match ev {
             EditorEvent::Changed => {
+                if this.file_read_editor.is_some() {
+                    if let Some(ed) = this.editor.clone() { ed.update(cx, |e, cx| { e.reject_read_only_edit(cx); }); }
+                    return;
+                }
                 // 阅读模式 put the document back: nothing to save.
                 let rejected = this.editor.clone().is_some_and(|ed| ed.update(cx, |e, cx| e.reject_read_only_edit(cx)));
                 if !rejected {
@@ -1101,6 +1309,8 @@ impl Workspace {
                 this.search_sel = this.default_search_sel(cx);
             }
             EditorEvent::OpenWiki(target) => this.open_wiki(target, window, cx),
+            EditorEvent::OpenRelativeLink(target) => this.open_relative_link(target, window, cx),
+            EditorEvent::OpenAttachment(path) => this.open_attachment(path.clone(), window, cx),
             EditorEvent::OpenDoc(id) => this.open(id, window, cx),
             EditorEvent::OpenDocAt(id, ordinal) => this.open_at(id, *ordinal, window, cx),
             EditorEvent::HideRefs => this.ask_refs(false, cx),
@@ -1123,6 +1333,11 @@ impl Workspace {
     /// Show `id`; false when it could not be opened (or the open document
     /// could not be saved first, see [`Self::save_before`]).
     pub fn try_open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.spreadsheet_has_pending(cx) {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("工作簿仍有未保存的修改，请先保存或在工作簿窗口中处理", "The workbook has unsaved changes; save or resolve them before continuing"), cx);
+            return false;
+        }
+        self.spreadsheet_preview = None;
         self.media_preview = None;
         // The constructor opens an initial library page before restoring a
         // workspace file. Only a later, explicit library choice clears it.
@@ -1178,6 +1393,7 @@ impl Workspace {
             && let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
                 e.meta.opened = m.opened;
             }
+        self.file_read_editor = None;
         self.editor = Some(editor);
         self.current = Some(id.to_string());
         self.file = None;
@@ -1277,6 +1493,7 @@ impl Workspace {
             self.save_task = None;
             self.unsaved = false;
             self.current = None;
+            self.file_read_editor = None;
             self.editor = None;
             self.editor_sub = None;
         }
@@ -1339,6 +1556,12 @@ impl Workspace {
 
     /// Switch the main pane to 主页 or 回收站 (or back to the document).
     pub fn show_view(&mut self, view: View, cx: &mut Context<Self>) {
+        if self.spreadsheet_has_pending(cx) {
+            self.show_toast_kind(ToastKind::Error, crate::settings::tr("工作簿仍有未保存的修改，请先保存或在工作簿窗口中处理", "The workbook has unsaved changes; save or resolve them before continuing"), cx);
+            return;
+        }
+        self.spreadsheet_preview = None;
+        self.media_preview = None;
         self.cancel_shortcut_recording(cx);
         if view == View::Trash {
             self.trash = self.store.list_trash();
@@ -1452,7 +1675,7 @@ impl Workspace {
         for handle in cx.windows().into_iter().filter(|w| w.window_id() != window.window_handle().window_id()).filter_map(|w| w.downcast::<Workspace>()) {
             let _ = handle.update(cx, |ws, _, cx| {
                 if let Some(entry) = ws.entries.iter_mut().find(|e| e.id == id) {
-                    entry.title = core.doc.title.text.clone();
+                    entry.title = core.doc.title.plain_text();
                     entry.icon = core.doc.icon.clone();
                 }
                 // Every remaining view can save the latest state if its sibling closes.
@@ -1475,7 +1698,7 @@ impl Workspace {
         let delay = SAVE_DELAY.min(left);
         // Keep the list title live while typing; the body/snippet updates on save.
         if let (Some(id), Some(ed)) = (&self.current, &self.editor) {
-            let title = ed.read(cx).core.doc.title.text.clone();
+            let title = ed.read(cx).core.doc.title.plain_text();
             if let Some(e) = self.entries.iter_mut().find(|e| &e.id == id) {
                 e.title = title;
             }
@@ -1506,6 +1729,14 @@ impl Workspace {
     /// the top bar shows the error.
     pub fn flush(&mut self, cx: &mut Context<Self>) -> bool {
         self.save_task = None;
+        // A reading view is generated, not an editable representation of the file.
+        if self.file_read_editor.is_some() {
+            if self.unsaved {
+                self.status = SaveStatus::Failed(crate::settings::tr("阅读视图无法保存，请切回编辑模式", "Reading view cannot be saved; switch to edit mode").to_string());
+                return false;
+            }
+            return true;
+        }
         // An extension preview is in-memory only: saving never rewrites its source.
         if self.plugin_preview {
             self.unsaved = false;
@@ -1545,7 +1776,7 @@ impl Workspace {
             return true;
         };
         let doc = &ed.read(cx).core.doc;
-        let (title, icon, body, reminders, links) = (doc.title.text.clone(), doc.icon.clone(), doc.plain_text(), doc.reminders(), doc.doc_links());
+        let (title, icon, body, reminders, links) = (doc.title.plain_text(), doc.icon.clone(), doc.plain_text(), doc.reminders(), doc.doc_links());
         match self.store.save(&id, doc) {
             Ok(meta) => {
                 if let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
@@ -1709,7 +1940,8 @@ impl Workspace {
     pub(crate) fn save_failed_copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ed) = &self.editor else { return };
         let mut doc = ed.read(cx).core.doc.clone();
-        doc.title = crate::model::RichText::plain(format!("{}{}", doc.title.text, crate::settings::tr("（恢复副本）", " (recovered copy)")));
+        let end = doc.title.text.len();
+        doc.title.insert_plain(end, crate::settings::tr("（恢复副本）", " (recovered copy)"), crate::model::Marks::default());
         match self.store.create_from(&doc) {
             Ok(_) => {
                 self.entries = self.store.list();
@@ -1837,7 +2069,7 @@ impl Workspace {
         let title = self
             .editor
             .as_ref()
-            .map(|e| display_title(&e.read(cx).core.doc.title.text))
+            .map(|e| display_title(&e.read(cx).core.doc.title.plain_text()))
             .unwrap_or_default();
         let save_error = match &self.status {
             SaveStatus::Failed(error) => Some(error.clone()),
@@ -2000,6 +2232,17 @@ impl Workspace {
                                 })),
                         )
                     })
+                    .when(matches!(self.file_source, Some(FolderSource::Markdown(_))), |d| {
+                        let reading = self.file_read_editor.is_some();
+                        d.child(seg("file-reading", if reading { "pen-line" } else { "eye-open" })
+                            .tip(if reading { crate::settings::tr("编辑模式", "Edit mode") } else { crate::settings::tr("阅读模式", "Reading mode") }, None)
+                            .on_click(cx.listener(move |w, _, window, cx| w.set_mode(!reading, window, cx))))
+                    })
+                    .when(self.file_read_editor.is_some() && !self.file_read_returns.is_empty(), |d| {
+                        d.child(seg("file-reading-back", "arrow-left")
+                            .tip(crate::settings::tr("返回引用", "Back to reference"), None)
+                            .on_click(cx.listener(|w, _, _, cx| w.return_from_read_link(cx))))
+                    })
                     .child(
                         seg("doc-search", "search")
                             .tip(crate::settings::tr("全局搜索", "Search everywhere"), Some(crate::shortcuts::hint("workspace::GlobalSearch", "⌘ + K")))
@@ -2065,6 +2308,7 @@ pub(crate) fn file_modified(path: &std::path::Path) -> u64 {
 }
 
 /// Read a Markdown file as the document model; its original source is retained for safe saves.
+#[cfg(test)]
 pub(crate) fn parse_markdown_file(path: &std::path::Path, text: &str) -> (crate::model::Document, u64) {
     (crate::markdown_source::parse(path, text).0, file_modified(path))
 }
@@ -2127,6 +2371,17 @@ impl Render for Workspace {
         let feishu_import = self.render_feishu_import(cx);
         let spreadsheet_preview = self.render_spreadsheet_preview(window, cx);
         let media_preview = self.render_media_preview(window, cx);
+        #[cfg(target_os = "windows")]
+        if let Some(editor) = &self.editor {
+            let restored = editor.read(cx).set_html_workspace_visible(self.view == View::Doc && self.confirm.is_none() && self.export_md.is_none()
+                && self.move_dlg.is_none() && self.feishu_import.is_none() && self.spreadsheet_preview.is_none() && self.media_preview.is_none()
+                && self.row_menu.is_none() && self.workspace_menu.is_none() && !self.doc_menu && !self.mode_menu && self.doc_info.is_none()
+                && self.theme_menu.is_none() && !self.search_open && !self.global_search && !self.annotations_open);
+            if restored {
+                let editor = editor.clone();
+                window.on_next_frame(move |_, cx| editor.update(cx, |_, cx| cx.notify()));
+            }
+        }
         // Only the note stands out: a white plane flush with the window's top,
         // right and bottom edges. The sidebar sits sunken on the window
         // surface beside it; the change of value is the only line between
@@ -2168,6 +2423,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|w, _: &ImportDoc, window, cx| w.open_import(window, cx)))
             .on_action(cx.listener(|w, _: &ImportFeishu, window, cx| w.open_feishu_import(window, cx)))
             .on_action(cx.listener(|w, _: &OpenFolder, window, cx| w.open_folder(window, cx)))
+            .on_action(cx.listener(|w, _: &CreateDemo, window, cx| w.create_demo(window, cx)))
             .on_action(cx.listener(|w, _: &OpenFile, window, cx| w.open_file(window, cx)))
             .on_action(cx.listener(|w, _: &PackageBook, window, cx| w.package_book(window, cx)))
             .on_action(cx.listener(|w, _: &ToggleSidebar, _, cx| {
@@ -2175,6 +2431,8 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|w, _: &FindInDoc, window, cx| {
+                #[cfg(target_os = "windows")]
+                if w.open_pdf_search(window, cx) { return; }
                 if !w.focus_spreadsheet_find(window, cx) { w.find_in_doc(false, window, cx); }
             }))
             .on_action(cx.listener(|w, _: &ReplaceInDoc, window, cx| {
@@ -2211,7 +2469,7 @@ impl Render for Workspace {
                 }
             }))
             // Esc leaves 批量操作 (closing its menu or confirmation first), even from the editor.
-            .capture_key_down(cx.listener(|w, ev: &KeyDownEvent, _, cx| {
+            .capture_key_down(cx.listener(|w, ev: &KeyDownEvent, window, cx| {
                 if w.record_shortcut(ev, cx) { return; }
                 // Esc cancels a confirmation dialog.
                 if ev.keystroke.key == "escape" && (w.confirm.is_some() || w.export_md.is_some()) {
@@ -2220,6 +2478,14 @@ impl Render for Workspace {
                     w.export_md = None;
                     cx.stop_propagation();
                     cx.notify();
+                    return;
+                }
+                if w.confirm.is_none() && w.export_md.is_none() && w.handle_pdf_key(ev, window, cx) { cx.stop_propagation(); return; }
+                #[cfg(target_os = "windows")]
+                if ev.keystroke.key == "escape" && w.close_pdf_search(window, cx) { cx.stop_propagation(); return; }
+                if ev.keystroke.key == "escape" && w.media_preview.is_some() {
+                    w.close_media_preview(cx);
+                    cx.stop_propagation();
                     return;
                 }
                 if ev.keystroke.key != "escape" || w.batch.is_none() || w.search_open || w.rename.is_some() {

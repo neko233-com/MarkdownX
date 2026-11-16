@@ -15,6 +15,16 @@ use gpui::*;
 pub const READ_ONLY_HINT: &str = "当前为阅读模式，请切换为编辑模式后重试";
 
 impl Editor {
+    /// Reveal the exact reference, including positions inside long table cells.
+    pub(crate) fn return_to_read_position(&mut self, pos: super::core::Pos, cx: &mut Context<Self>) {
+        self.core.unfold_to(pos.block);
+        self.core.dirty = false;
+        self.core.sel = super::core::Selection::caret(pos);
+        self.keep_read_only_fold();
+        self.reveal = Some((super::render::Reveal::Find(pos), 0));
+        cx.notify();
+    }
+
     pub fn set_read_only(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.read_only == on {
             return;

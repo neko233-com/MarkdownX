@@ -37,6 +37,8 @@ pub struct Preferences {
     pub language: String,
     /// Fetch `http(s)` images referenced by documents.
     pub remote_images: bool,
+    /// The local PicGo HTTP endpoint; authentication remains in the environment.
+    pub picgo_endpoint: String,
     /// The system-wide quick note hotkey is registered.
     pub quick_hotkey: bool,
     /// Look for a new version now and then (update.rs).
@@ -63,7 +65,7 @@ pub struct Preferences {
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), workspace_dir: None, workspaces: None, last_workspace_file: None, starter_offered: false, disabled_plugins: vec![] } }
+    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: true, language: "auto".into(), remote_images: true, picgo_endpoint: crate::picgo::DEFAULT_ENDPOINT.into(), quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), workspace_dir: None, workspaces: None, last_workspace_file: None, starter_offered: false, disabled_plugins: vec![] } }
 }
 
 impl Preferences {
@@ -315,7 +317,7 @@ fn desc(s: &'static str) -> Option<SharedString> { Some(s.into()) }
 /// The switch: the accent when on, black 16% when off, a white knob.
 pub(crate) fn switch(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
     div().id(id).flex_none().w(px(32.)).h(px(19.)).p(px(2.)).rounded_full().cursor_pointer().flex().items_center()
-        .when(on, |d| d.bg(Theme::primary()).justify_end())
+        .when(on, |d| d.bg(Theme::primary_button()).justify_end())
         .when(!on, |d| d.bg(theme::ca(craft::N1000, 0.16)).justify_start())
         .child(div().size(px(15.)).rounded_full().bg(gpui::white()).shadow(theme::shadow_button()))
 }
@@ -598,9 +600,28 @@ impl Workspace {
         if !themes::themes().iter().any(|t| t.id == id) { self.set_pref(|p| { p.theme = "craft".into(); p.feishu = false; }, cx); }
     }
 
+    pub(crate) fn save_picgo_endpoint(&mut self, cx: &mut Context<Self>) {
+        let value = self.picgo_endpoint.read(cx).text.clone();
+        match crate::picgo::validate_endpoint(&value) {
+            Ok(endpoint) => {
+                let saved = endpoint.clone();
+                self.set_pref(move |p| p.picgo_endpoint = saved, cx);
+                if prefs().picgo_endpoint == endpoint {
+                    self.picgo_endpoint.update(cx, |field, cx| field.set_text(&endpoint, cx));
+                    self.show_toast_kind(ui::ToastKind::Success, tr("图床地址已保存", "Image host address saved"), cx);
+                }
+            }
+            Err(_) => self.show_toast_kind(ui::ToastKind::Error, tr("请输入本机 PicGo 的 HTTP 地址", "Enter a local PicGo HTTP address"), cx),
+        }
+    }
+
     pub(crate) fn open_settings(&mut self, page: Page, cx: &mut Context<Self>) {
         self.cancel_shortcut_recording(cx);
         self.settings_page = page;
+        if page == Page::General {
+            let endpoint = prefs().picgo_endpoint;
+            self.picgo_endpoint.update(cx, |field, cx| field.set_text(&endpoint, cx));
+        }
         self.theme_menu = None;
         self.settings_scroll.set_offset(point(px(0.), px(0.)));
         self.shortcut_error = None;
@@ -703,6 +724,15 @@ impl Workspace {
                 row(tr("自动检查更新", "Check for updates automatically"), desc(tr("启动后和每 12 小时检查一次 GitHub 发布页；发现新版本会提示下载地址，不自动安装。", "Checks the GitHub releases page after launch and every 12 hours; a new version is announced with its download page, never installed silently.")),
                     switch("pref-update", p.auto_update).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.auto_update = !p.auto_update, cx)))).into_any_element(),
             ]))
+            .child(group(Some(tr("图片上传", "Image upload")), vec![
+                row(tr("PicGo 本机地址", "Local PicGo address"), desc(if std::env::var("MARKDOWNX_PICGO_ENDPOINT").ok().is_some_and(|s| !s.trim().is_empty()) {
+                    tr("环境变量优先；上传由你主动触发。", "The environment variable takes priority; uploads are manual.")
+                } else { tr("上传由你主动触发；留空恢复默认。", "Uploads are manual; leave blank for the default.") }),
+                    div().flex().items_center().gap(px(8.))
+                        .child(div().w(px(240.)).h(px(28.)).px(px(8.)).flex().items_center().rounded(px(8.)).bg(Theme::fill_hover())
+                            .child(div().flex_1().min_w_0().child(self.picgo_endpoint.clone())))
+                        .child(button("save-picgo-endpoint", tr("保存", "Save")).on_click(cx.listener(|w, _, _, cx| w.save_picgo_endpoint(cx))))).into_any_element(),
+            ]))
             .into_any_element()
     }
 
@@ -718,6 +748,8 @@ impl Workspace {
                 BuiltinEditor::Audio => tr("音频", "Audio"),
                 BuiltinEditor::Video => tr("视频", "Video"),
                 BuiltinEditor::Model => tr("3D 模型", "3D models"),
+                BuiltinEditor::Pdf => tr("PDF（只读）", "PDF (read-only)"),
+                BuiltinEditor::Research => tr("论文与文书（只读文本）", "Research and documents (read-only text)"),
             }
         }
         let catalog = crate::extensions::catalog();
@@ -857,6 +889,8 @@ impl Workspace {
             .child(group(None, vec![
                 row(tr("工作目录", "Workspace folders"), Some(workspace_location.into()),
                     button("change-workspace", tr("添加目录", "Add folder")).on_click(cx.listener(|w, _, window, cx| w.open_folder(window, cx)))).into_any_element(),
+                row(tr("演示文件", "Demo files"), desc(tr("在选择的位置创建独立文件夹，包含分镜、图片、视频和文书示例。", "Create a separate folder with storyboard, media and document examples.")),
+                    button("create-demo", tr("创建演示", "Create demo")).on_click(cx.listener(|w, _, window, cx| w.create_demo(window, cx)))).into_any_element(),
                 row(tr("MarkdownX 文档库", "MarkdownX library"), Some(location.into()),
                     button("reveal-library", reveal).on_click(|_, _, cx| cx.reveal_path(&crate::store::Store::root_dir()))).into_any_element(),
                 row(tr("回收站", "Trash"), Some(if english() { format!("Deleted documents are kept for {} days.", crate::store::TRASH_DAYS) } else { format!("删除的文档保留 {} 天后自动清除。", crate::store::TRASH_DAYS) }.into()),
@@ -884,6 +918,7 @@ pub(crate) fn update_pill(cx: &mut Context<Workspace>) -> Option<AnyElement> {
     use crate::update::State;
     let state = crate::update::state(cx);
     let (label, tip) = match &state {
+        State::ReleaseAvailable(m) => (tr("更新", "Update").to_string(), crate::localized_format!("打开 MarkdownX {} 下载页", "Open the MarkdownX {} download page", m.version)),
         State::Available(m) => (tr("更新", "Update").to_string(), crate::localized_format!("下载 MarkdownX {}", "Download MarkdownX {}", m.version)),
         State::Downloading(m) => (format!("{:.0}%", crate::update::progress(m) * 100.), crate::localized_format!("正在下载 {}…", "Downloading {}…", m.version)),
         State::Ready(m, _) => (tr("重启更新", "Restart").to_string(), crate::localized_format!("重启后更新到 {}，打开的文档会先保存", "Restart into {}; open documents are saved first", m.version)),
@@ -894,14 +929,14 @@ pub(crate) fn update_pill(cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let busy = matches!(state, State::Downloading(_) | State::Installing(_));
     Some(div().id("update-pill").no_drag().flex_shrink().min_w_0().h(px(24.)).px(px(10.)).relative().overflow_hidden().flex().items_center().justify_center().rounded_full()
         .text_size(px(12.)).line_height(px(16.)).font_weight(FontWeight::MEDIUM)
-        .when(!busy, |d| d.cursor_pointer().bg(Theme::primary()).text_color(gpui::white()).hover(|s| s.opacity(0.9)))
+        .when(!busy, |d| d.cursor_pointer().bg(Theme::primary_button()).text_color(gpui::white()).hover(|s| s.opacity(0.9)))
         .when(busy, |d| d.bg(Theme::sidebar_hover()).text_color(Theme::text_caption()))
         // Downloading: a fixed width (no jitter as the digits change), filled left
         // to right behind a moving wave.
         .when_some(fill, |d, f| d.w(px(56.)).child(ui::wave_fill(f, Theme::primary().opacity(0.18))))
         .child(div().relative().min_w_0().truncate().child(label))
         .tip(&tip, None)
-        .on_click(move |_, _, cx| match &state { State::Available(_) => crate::update::download(cx), State::Ready(..) => crate::update::install(cx), _ => {} })
+        .on_click(move |_, _, cx| match &state { State::ReleaseAvailable(_) => crate::update::open_release(cx), State::Available(_) => crate::update::download(cx), State::Ready(..) => crate::update::install(cx), _ => {} })
         .into_any_element())
 }
 
@@ -914,6 +949,8 @@ fn update_row(cx: &mut Context<Workspace>) -> Div {
         State::Unsupported => (tr("软件更新", "Software update").into(), desc(tr("这个版本不能自动更新，请从网站下载新版本。", "This copy cannot update itself. Download new versions from the website."))),
         State::Checking => (tr("正在检查更新…", "Checking for updates…").into(), None),
         State::Current => (tr("已是最新版本", "MarkdownX is up to date").into(), None),
+        State::NoRelease => (tr("暂无正式发布版本", "No stable release is published yet").into(), None),
+        State::ReleaseAvailable(m) => (crate::localized_format!("新版本 {} 可用", "Version {} is available", m.version).into(), desc(tr("打开发布页下载并安装更新。", "Open the release page to download and install the update."))),
         State::Available(m) => (crate::localized_format!("新版本 {} 可用", "Version {} is available", m.version).into(), None),
         State::Downloading(m) => (crate::localized_format!("正在下载 {}… {:.0}%", "Downloading {}… {:.0}%", m.version, crate::update::progress(m) * 100.).into(), None),
         State::Ready(m, _) => (crate::localized_format!("{} 已准备好", "{} is ready to install", m.version).into(), desc(tr("重启后完成更新，打开的文档会先保存。", "MarkdownX restarts to finish; open documents are saved first."))),
@@ -926,7 +963,11 @@ fn update_row(cx: &mut Context<Workspace>) -> Div {
         State::Ready(..) => Some(button("update-install", tr("重启以更新", "Restart to Update")).on_click(|_, _, cx| crate::update::install(cx))),
         _ => Some(button("update-check", tr("检查更新", "Check Now")).on_click(|_, _, cx| crate::update::check(true, cx))),
     };
-    row(title, detail, div().children(control))
+    let busy = matches!(state, State::Checking | State::Downloading(_) | State::Installing(_));
+    row(title, detail, div().flex().items_center().gap(px(8.))
+        .when(matches!(state, State::ReleaseAvailable(_)), |d| d.child(button("update-release", tr("打开下载页", "Download page")).on_click(|_, _, cx| crate::update::open_release(cx))))
+        .when(busy, |d| d.child(div().h(px(28.)).px(px(12.)).flex().items_center().text_size(px(13.)).text_color(Theme::text_disabled()).child(tr("请稍候…", "Please wait…"))))
+        .children(control))
 }
 
 /// The app icon resampled once to 176px, its size at 88pt on a 2x screen.
@@ -1278,8 +1319,9 @@ pub(crate) fn localize(text: &str, english: bool) -> &str {
         "本地上传" => "Upload",
         "推荐使用尺寸为 2,000 × 400 的图片，显示效果最佳" => "For best results, use a 2,000 × 400 image.",
         "新增分栏" => "Add column",
-        "图片格式仅支持 jpeg、jpg、png、gif、webp、bmp" => "Supported image formats: JPEG, JPG, PNG, GIF, WebP and BMP",
+        "图片格式仅支持 jpeg、jpg、png、gif、webp、bmp、svg" => "Supported image formats: JPEG, JPG, PNG, GIF, WebP, BMP and SVG",
         "识别图片宽高失败" => "Could not read image dimensions",
+        "无法保存图片" => "Could not save image",
         "上传图片大小不能超过 20 MB" => "Images must be 20 MB or smaller",
         "文件不存在" => "File not found",
         "加载失败，" => "Could not load. ",
@@ -1482,6 +1524,13 @@ fn diagnostic_for(message: &str, english: bool) -> String {
 #[cfg(test)]
 mod language_tests {
     use super::{english_for, language_index, parse_preferences, Preferences};
+
+    #[test]
+    fn old_preferences_default_picgo_endpoint() {
+        let p = parse_preferences(br#"{"remote_images":false}"#).unwrap();
+        assert_eq!(p.picgo_endpoint, crate::picgo::DEFAULT_ENDPOINT);
+        assert!(!p.remote_images);
+    }
 
     #[test]
     fn preferences_accept_utf8_bom() {

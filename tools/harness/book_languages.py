@@ -1,5 +1,6 @@
 """Round-trip an imported bilingual book through the real desktop export paths."""
 import base64
+import argparse
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-Quiet', action='store_true')
+    parser.parse_args()
     binary = Path(os.environ.get('FDL_BIN', ROOT / 'target' / 'release' / ('markdownx.exe' if os.name == 'nt' else 'markdownx')))
     if not binary.is_file() or b'devtools: cannot read' not in binary.read_bytes():
         raise SystemExit('Build the app with --features devtools before running this check.')
@@ -30,10 +34,10 @@ def main():
             'subtitle': {'zh': '副标题', 'en': 'Subtitle'}, 'authors': ['Author'],
             'languages': ['zh', 'en'], 'default_language': 'zh',
             'chapters': [
-                {'id': 'first', 'title': {'zh': '第一章', 'en': 'First'}, 'format': 'markdown',
-                 'content': '# 第一章\n\n![图](assets/图片.png)\n', 'content_en': '# First\n\n![image](assets/图片.png)\n'},
-                {'id': 'second', 'title': {'zh': '第二章', 'en': 'Second'}, 'format': 'markdown',
-                 'content': '# 第二章\n\n正文\n', 'content_en': '# Second\n\nTranslated\n'},
+                {'id': 'first', 'title': {'zh': '第一章', 'en': 'First'}, 'format': 'markdown', 'source_path': 'part/first.md',
+                 'content': '# 第一章\n\n[Jump](./second.md#目标-标题-1)\n\n![图](assets/图片.png)\n', 'content_en': '# First\n\n![image](assets/图片.png)\n'},
+                {'id': 'second', 'title': {'zh': '第二章', 'en': 'Second'}, 'format': 'markdown', 'source_path': 'part/second.md',
+                 'content': '# 第二章\n\n[Back](./first.md)\n\n## 目标 标题\n\n正文\n\n## 目标 标题\n', 'content_en': '# Second\n\nTranslated\n'},
             ],
             'assets': {'assets/图片.png': {'mime': 'application/x-test-image', 'data': base64.b64encode(b'fixture image').decode()}},
         }
@@ -59,7 +63,10 @@ def main():
                 raise SystemExit(name + ' failed:\n' + output[:6000] + '\n…\n' + output[-3000:])
             return output
 
-        run('import', 'wait 1000\ncheck-book-languages import\nwait 400\nquit\n', ['book-languages: import PASS'])
+        run('import', 'wait 1000\ncheck-book-languages import\nwait 400\nfollow-relative-link ./second.md#目标-标题-1\nwait 1000\nfollow-relative-link ./first.md\nwait 500\nquit\n', ['book-languages: import PASS'])
+        logs = '\n'.join(path.read_text(encoding='utf-8', errors='replace') for path in (temp / 'logs').glob('*') if path.is_file())
+        if 'relative-link: heading PASS' not in logs:
+            raise SystemExit('Imported-book heading link did not reach its target:\n' + logs[-4000:])
         output = run('export', f'''wait 1000
 check-book-languages reopen
 pick {exported}

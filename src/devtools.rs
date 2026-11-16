@@ -250,6 +250,13 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 }).unwrap();
                 continue;
             }
+            if cmd == "create-demo" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| ws.create_demo(window, cx)).unwrap();
+                }).unwrap();
+                continue;
+            }
             if cmd == "open-file" || cmd == "new-folder-file" {
                 cx.update(|cx| {
                     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
@@ -279,6 +286,375 @@ pub fn start(window: &mut Window, cx: &mut App) {
                 cx.update(|cx| {
                     let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
                     handle.update(cx, |ws, _, _| ws.check_media_preview(rest.trim())).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "update-check" || cmd == "update-state" || cmd == "appearance" {
+                cx.update(|cx| {
+                    if cmd == "update-state" {
+                        let state = crate::update::state(cx);
+                        let name = match state { crate::update::State::Checking => "checking", crate::update::State::Current => "current",
+                            crate::update::State::NoRelease => "none", crate::update::State::ReleaseAvailable(_) => "available",
+                            crate::update::State::Failed(_) => "failed", _ => "idle" };
+                        assert_eq!(name, rest.trim(), "unexpected update state: {state:?}");
+                        crate::logging::write(&format!("update-state: {name} PASS"));
+                    } else {
+                        let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                        handle.update(cx, |ws, _, cx| {
+                            if cmd == "appearance" { ws.set_pref(|p| p.appearance = rest.trim().into(), cx); }
+                            else { ws.open_settings(crate::settings::Page::About, cx); crate::update::check(rest.trim() != "auto", cx); }
+                        }).unwrap();
+                    }
+                }).unwrap();
+                continue;
+            }
+            if cmd == "picgo-edit" || cmd == "picgo-check" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| {
+                        if cmd == "picgo-edit" {
+                            ws.open_settings(crate::settings::Page::General, cx);
+                            ws.picgo_endpoint.update(cx, |field, cx| field.set_text(rest.trim(), cx));
+                            let focus = ws.picgo_endpoint.read(cx).focus_handle(cx);
+                            window.focus(&focus);
+                        } else {
+                            assert_eq!(crate::settings::prefs().picgo_endpoint, rest.trim(), "PicGo preference differs");
+                            crate::logging::write("picgo-settings: PASS");
+                        }
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "image-host-insert" || cmd == "image-host" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| {
+                        ws.editor.as_ref().expect("editor is not open").update(cx, |editor, cx| {
+                            if cmd == "image-host-insert" { editor.scripted_insert_image(std::path::Path::new(rest.trim()), window, cx); }
+                            else { editor.scripted_image_host(rest.trim(), window, cx); }
+                        });
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "footnote-conflict-start" || cmd == "footnote-conflict-check" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| {
+                        if cmd == "footnote-conflict-start" {
+                            ws.editor.as_ref().unwrap().update(cx, |editor, cx| {
+                                let block = &editor.core.doc.blocks[0];
+                                editor.core.sel = crate::editor::core::Selection::caret(crate::editor::core::Pos::new(block.id, 0));
+                                editor.core.insert_text("Unsaved "); editor.changed(window, cx);
+                            });
+                            std::fs::write(ws.file.as_ref().unwrap(), "# External\n\nChanged by another app.\n").unwrap();
+                            ws.set_mode(true, window, cx);
+                        } else {
+                            assert!(ws.file_read_editor.is_none(), "reading opened despite a failed save");
+                            assert!(ws.unsaved, "the failed edit was discarded");
+                            assert!(ws.editor.as_ref().unwrap().read(cx).core.doc.plain_text().contains("Unsaved Intro"));
+                            assert_eq!(std::fs::read_to_string(ws.file.as_ref().unwrap()).unwrap(), "# External\n\nChanged by another app.\n");
+                            crate::logging::write("footnote-reading: conflict PASS");
+                            ws.resolve_save_failed(false, window, cx);
+                        }
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "footnote-read-start" || cmd == "footnote-read-check" || cmd == "footnote-read-guard" || cmd == "footnote-read-back" || cmd == "footnote-heading-check" || cmd == "footnote-heading-back" || cmd == "footnote-read-end" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| {
+                        if cmd == "footnote-read-start" {
+                            ws.editor.as_ref().expect("editor missing").update(cx, |editor, cx| {
+                                let block = &editor.core.doc.blocks[0];
+                                assert!(block.text.text.starts_with("Intro"));
+                                editor.core.sel = crate::editor::core::Selection::caret(crate::editor::core::Pos::new(block.id, 0));
+                                editor.core.insert_text("Before "); editor.changed(window, cx);
+                            });
+                            ws.set_mode(true, window, cx);
+                        } else if cmd == "footnote-read-check" {
+                            assert!(ws.file_read_editor.is_some(), "reading view was not opened");
+                            let path = ws.file.as_ref().unwrap();
+                            assert!(std::fs::read_to_string(path).unwrap().contains("Before Intro[^a]"));
+                            ws.editor.as_ref().unwrap().update(cx, |editor, cx| {
+                                assert!(editor.read_only);
+                                assert!(editor.core.doc.plain_text().contains("Important note"));
+                                let assets = editor.core.doc.asset_sources();
+                                assert!(assets.iter().any(|path| path.ends_with("shot.svg")), "./ image was not resolved");
+                                assert!(assets.iter().any(|path| path.ends_with("shot2.svg")), "bare relative image was not resolved");
+                                let table = editor.core.doc.blocks.iter().find_map(|block| match &block.kind {
+                                    crate::model::BlockKind::Table(table) => Some(table), _ => None,
+                                }).expect("table missing in reading mode");
+                                let cell = &table.rows[1][0].blocks[0];
+                                let offset = cell.text.spans().find_map(|(range, marks)| marks.link.as_ref().map(|_| range.start)).expect("table footnote link missing");
+                                editor.core.sel = crate::editor::core::Selection::caret(crate::editor::core::Pos::new(cell.id, offset));
+                                let target = format!("#{}-1", fdl_core::anchors::slug(crate::settings::tr("脚注", "Footnote")));
+                                editor.scripted_relative_link(&target, cx);
+                            });
+                            crate::logging::write("footnote-reading: preview PASS");
+                        } else if cmd == "footnote-read-guard" {
+                            ws.editor.as_ref().unwrap().update(cx, |editor, cx| {
+                                editor.core.insert_text("SHOULD NOT SAVE"); editor.changed(window, cx);
+                            });
+                        } else if cmd == "footnote-read-back" {
+                            assert_eq!(ws.file_read_returns.len(), 1, "reference jump did not retain its position");
+                            assert!(ws.editor.as_ref().unwrap().read(cx).core.cell_of(ws.file_read_returns[0].block).is_some(), "reference position is not in the table");
+                            let back = format!("#{}", ws.file_read_return_anchor.as_ref().unwrap());
+                            ws.editor.as_ref().unwrap().update(cx, |editor, cx| editor.scripted_relative_link(&back, cx));
+                            crate::logging::write("footnote-reading: back PASS");
+                        } else if cmd == "footnote-heading-check" {
+                            assert!(ws.file_read_returns.is_empty());
+                            assert_eq!(ws.file_read_heading_aliases.get("sectiona").map(String::as_str), Some("section1"));
+                            ws.editor.as_ref().unwrap().update(cx, |editor, cx| editor.scripted_relative_link("#sectiona", cx));
+                        } else if cmd == "footnote-heading-back" {
+                            assert_eq!(ws.file_read_returns.len(), 1, "original heading fragment did not navigate");
+                            ws.return_from_read_link(cx);
+                            crate::logging::write("footnote-reading: heading alias PASS");
+                        } else {
+                            assert!(ws.file_read_returns.is_empty(), "back link did not return to the reference");
+                            let preview = ws.editor.as_ref().unwrap().read(cx);
+                            assert!(preview.core.cell_of(preview.core.sel.head.block).is_some(), "back link did not restore the table cell");
+                            ws.set_mode(false, window, cx);
+                            assert!(ws.file_read_editor.is_none(), "editing view was not restored");
+                            ws.editor.as_ref().unwrap().update(cx, |editor, cx| {
+                                assert!(!editor.read_only);
+                                assert!(editor.core.undo(), "undo history was lost during reading");
+                                assert!(editor.core.doc.blocks[0].text.text.starts_with("Intro"));
+                                assert!(editor.core.redo(), "redo history was lost during reading");
+                                let block = &editor.core.doc.blocks[0];
+                                assert!(block.text.text.starts_with("Before Intro"));
+                                editor.core.sel = crate::editor::core::Selection::caret(crate::editor::core::Pos::new(block.id, 0));
+                                editor.core.insert_text("After "); editor.changed(window, cx);
+                            });
+                            crate::logging::write("footnote-reading: restore PASS");
+                        }
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "edit-nested-list" || cmd == "edit-nested-inline-image" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| {
+                        ws.editor.as_ref().expect("editor missing").update(cx, |editor, cx| {
+                            let child = &editor.core.doc.blocks[0].children[0];
+                            let inline = cmd == "edit-nested-inline-image";
+                            if inline { assert!(child.text.text.starts_with("Before ")); }
+                            else { assert_eq!(child.text.text, "Child"); }
+                            let position = crate::editor::core::Pos::new(child.id, if inline { 0 } else { child.text.text.len() });
+                            editor.core.sel = crate::editor::core::Selection::caret(position);
+                            editor.core.insert_text(if inline { "New " } else { " edited" });
+                            editor.changed(window, cx);
+                        });
+                        crate::logging::write("nested-list-edit: PASS");
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "check-indented-code" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| {
+                        let editor = ws.editor.as_ref().expect("editor missing").read(cx);
+                        let blocks = &editor.core.doc.blocks;
+                        assert!(blocks.iter().any(|block| matches!(block.kind, crate::model::BlockKind::Code { .. }) && block.text.text == "![literal](missing.png)\nsecond"));
+                        let images = blocks.iter().filter_map(|block| match &block.kind {
+                            crate::model::BlockKind::Image { src, .. } => Some(src), _ => None,
+                        }).collect::<Vec<_>>();
+                        assert_eq!(images.len(), 2, "real images missing or example was parsed as an image");
+                        assert!(images.iter().all(|src| std::path::Path::new(src).is_file()), "relative image did not resolve");
+                        crate::logging::write("indented-code: PASS");
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "check-html-images" || cmd == "check-embedded-images" || cmd == "check-rich-title" || cmd == "check-svg-views" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| {
+                        let editor = ws.editor.as_ref().expect("editor missing").read(cx);
+                        if cmd == "check-html-images" { editor.check_html_images(); }
+                        else if cmd == "check-svg-views" { editor.check_svg_views(); }
+                        else if cmd == "check-rich-title" { editor.check_rich_title(); }
+                        else { editor.check_embedded_images(); }
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "check-display-math" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| {
+                        ws.editor.as_ref().expect("editor missing").update(cx, |editor, cx| {
+                            let (id, src) = editor.core.doc.blocks.iter().find_map(|block| {
+                                let object = block.text.runs.iter().filter_map(|run| run.marks.inline.as_ref()).find(|obj| obj.is_display_equation())?;
+                                Some((block.id, object.equation()?.to_string()))
+                            }).expect("display equation missing");
+                            let layout = crate::editor::math::layout(&src, true, crate::editor::math::FONT_PX, crate::theme::Theme::text(), 0, window).expect("display math layout failed");
+                            assert!(layout.width > 0. && layout.ascent + layout.depth > 0.);
+                            if rest.trim() == "open" { editor.open_equation_editor(crate::editor::core::Pos::new(id, 0), window, cx); }
+                            if rest.trim() == "edited" { assert_eq!(src, "\\frac{z}{2}", "equation editor did not apply the change"); }
+                            crate::logging::write(&format!("display-math: {} PASS", rest.trim()));
+                        });
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "follow-relative-link" || cmd == "follow-book-pdf" || cmd == "follow-exported-pdf" || cmd == "check-relative-file" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| {
+                        if cmd == "follow-relative-link" {
+                            ws.editor.as_ref().expect("editor missing").update(cx, |editor, cx| editor.scripted_relative_link(rest.trim(), cx));
+                        } else if cmd == "follow-book-pdf" || cmd == "follow-exported-pdf" {
+                            ws.editor.as_ref().expect("editor missing").update(cx, |editor, cx| {
+                                let target = editor.core.doc.blocks.iter().flat_map(|block| &block.text.runs)
+                                    .filter_map(|run| run.marks.link.as_deref())
+                                    .find(|link| (cmd == "follow-exported-pdf" || link.starts_with("assets/books/")) && fdl_core::book::pdf_link_target(link).is_some())
+                                    .expect("imported PDF link missing").to_string();
+                                editor.scripted_relative_link(&target, cx);
+                            });
+                        } else {
+                            let actual = ws.file.as_ref().expect("workspace file missing").canonicalize().unwrap();
+                            let expected = std::path::Path::new(rest.trim()).canonicalize().unwrap();
+                            assert_eq!(actual, expected, "wrong relative-link destination");
+                            crate::logging::write("relative-link: file PASS");
+                        }
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "check-heading-scroll" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| ws.editor.as_ref().expect("editor missing").read(cx).scripted_heading_scroll()).unwrap();
+                }).unwrap();
+                continue;
+            }
+            if cmd == "check-research-preview" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| {
+                        assert!(ws.plugin_preview, "research preview is not active");
+                        let editor = ws.editor.as_ref().expect("editor is not open").read(cx);
+                        assert!(editor.read_only, "research preview is writable");
+                        let content = crate::docxml::serialize(&editor.core.doc);
+                        assert!(content.contains(rest.trim()), "research text is missing");
+                        assert!(!content.contains("MARKDOWNX_RESEARCH_EDIT_PROBE"), "read-only content was changed");
+                        crate::logging::write("research-preview: PASS");
+                    }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            if cmd == "check-inline-html-state" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| ws.editor.as_ref().expect("editor is not open").read(cx).check_inline_html_state(rest.trim())).unwrap();
+                }).unwrap();
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            if cmd == "inline-html-menu" {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| { ws.doc_menu = rest.trim() == "open"; cx.notify(); }).unwrap();
+                }).unwrap();
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            if cmd == "check-inline-html" {
+                let (web, frame) = cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| ws.editor.as_ref().expect("editor is not open").read(cx).inline_html_frame()).unwrap()
+                }).unwrap().expect("inline HTML is unavailable");
+                let phase = rest.trim();
+                let result = crate::native_widget::test_frame(web, frame, phase, cx).await.expect("could not inspect interactive frame");
+                match phase {
+                    "game" => assert!(result["canvas"] == true && result["score"].as_str().is_some_and(|s| s.contains("score: 1")), "game did not respond: {result}"),
+                    "fetch" => assert!(result["canvas"] == true && result["score"].as_str().is_some_and(|s| s.contains("score: 1")) && result["network"] == "blocked", "local data or network isolation failed: {result}"),
+                    "demo" => assert!(result["canvas"] == true && result["score"].as_str().is_some_and(|s| s.contains("得分：1")), "demo game did not respond: {result}"),
+                    "external" => assert!(result["canvas"] == true && result["score"].as_str().is_some_and(|s| s.contains("score: 1")) && result["color"] == "rgb(18, 52, 86)", "external game script or stylesheet failed: {result}"),
+                    "demo-external" => assert!(result["canvas"] == true && result["score"].as_str().is_some_and(|s| s.contains("镜次：1")) && result["color"] == "rgb(36, 54, 75)" && result["outline"] == "rgb(246, 207, 112)" && result["cssImage"].as_u64().unwrap_or(0) > 0 && result["responsive"] == true, "external demo game, CSS or responsive image failed: {result}"),
+                    "module" => assert!(result["canvas"] == true && result["score"].as_str().is_some_and(|s| s.contains("镜次：1")) && result["color"] == "rgb(36, 54, 75)" && result["cssImage"].as_u64().unwrap_or(0) > 0 && result["images"].as_u64().unwrap_or(0) > 0, "module game or relative image failed: {result}"),
+                    "module-identity" => assert!(result["runs"] == 3, "module query identity or deduplication failed: {result}"),
+                    "inline-style" => assert!(result["canvas"] == true && result["score"].as_str().is_some_and(|s| s.contains("内联镜次：1")) && result["inlineBg"].as_u64().unwrap_or(0) > 0 && result["inlineBorder"].as_u64().unwrap_or(0) > 0, "inline CSS game or images failed: {result}"),
+                    "docx" => assert!(result["ready"] == "true" && result["text"].as_str().is_some_and(|s| s.contains("分镜制作服务合同示例") && s.contains("交付清单")) && result["tables"].as_u64().unwrap_or(0) > 0 && result["images"].as_u64().unwrap_or(0) > 0, "DOCX layout, table or image failed: {result}"),
+                    "docx-revisions" => assert!(result["ready"] == "true" && result["text"].as_str().is_some_and(|s| s.contains("OLD_CLAUSE") && s.contains("NEW_CLAUSE")), "DOCX revisions missing from layout: {result}"),
+                    "docm" => assert!(result["ready"] == "true" && result["text"].as_str().is_some_and(|s| s.contains("This is a macro word processing document")), "DOCM layout failed: {result}"),
+                    "dotx" => assert!(result["ready"] == "true" && result["text"].as_str().is_some_and(|s| s.contains("Test")), "DOTX layout failed: {result}"),
+                    "epub" => assert!(result["text"].as_str().is_some_and(|s| s.contains("引言与方法") && s.contains("结果与参考文献")) && result["images"].as_u64().unwrap_or(0) > 0 && result["math"].as_u64().unwrap_or(0) > 0 && result["scripts"] == 0 && result["warning"].as_str().is_some_and(|s| s.contains("不运行脚本")), "EPUB text, image, math or warning failed: {result}"),
+                    "ofd" | "ofd-next" => assert!(result["ready"] == "true" && result["page"] == if phase == "ofd" { "1 / 2" } else { "2 / 2" } && result["dark"].as_u64().unwrap_or(0) > 20 && result["warning"].as_str().is_some_and(|s| s.contains("签名未验证")), "OFD page or warning failed: {result}"),
+                    "game-after-navigation" => assert!(result["canvas"] == true && result["score"].as_str().is_some_and(|s| s.contains("score: 1")), "game did not recover after blocked navigation: {result}"),
+                    "navigate" => {},
+                    "video" => assert!(result["time"].as_f64().unwrap_or(0.) > 0.1 && result["width"].as_u64().unwrap_or(0) > 0 && result["poster"].as_u64().unwrap_or(0) > 0 && result["paused"] == false, "video or poster did not load: {result}"),
+                    "audio" => assert!(result["time"].as_f64().unwrap_or(0.) > 0.1 && result["paused"] == false, "audio did not load: {result}"),
+                    _ => unreachable!(),
+                }
+                crate::logging::write(&format!("inline-html: {phase} PASS"));
+                continue;
+            }
+            #[cfg(target_os = "windows")]
+            if cmd == "capture-docx" {
+                let (web, frame) = cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, _, cx| ws.editor.as_ref().expect("editor is not open").read(cx).inline_html_frame()).unwrap()
+                }).unwrap().expect("DOCX preview is unavailable");
+                let lower = rest.trim() == "lower";
+                let bytes = crate::native_widget::capture_docx(web, frame, lower, cx).await.expect("DOCX capture failed");
+                let root = std::path::PathBuf::from(std::env::var_os("FDL_SHOTS").expect("FDL_SHOTS is required")).canonicalize().unwrap();
+                let temporary = std::env::temp_dir().canonicalize().unwrap();
+                assert!(root.starts_with(temporary), "DOCX captures must stay in a temporary directory");
+                let path = root.join(if lower { "docx-lower.png" } else { "docx-top.png" });
+                use std::io::Write;
+                std::fs::OpenOptions::new().write(true).create_new(true).open(path).unwrap().write_all(&bytes).unwrap();
+                continue;
+            }
+            if matches!(cmd, "click-inline-image" | "click-inline-upload" | "click-pdf-attachment" | "click-inline-attachment") {
+                let position = cx.update(|cx| {
+                    let workspace = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    workspace.update(cx, |ws, _, cx| {
+                        let editor = ws.editor.as_ref().expect("editor is not open").read(cx);
+                        if cmd == "click-inline-image" { editor.scripted_inline_image_point() }
+                        else if cmd == "click-pdf-attachment" { editor.scripted_attachment_point() }
+                        else if cmd == "click-inline-attachment" { editor.scripted_inline_attachment_point() }
+                        else { editor.scripted_inline_upload_point() }
+                    }).unwrap()
+                }).unwrap();
+                handle.update(cx, |_, window, cx| {
+                    let modifiers = Modifiers::default();
+                    window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), cx);
+                    window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position, modifiers, click_count: 1, first_mouse: false }), cx);
+                    window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position, modifiers, click_count: 1 }), cx);
+                }).unwrap();
+                continue;
+            }
+            if matches!(cmd, "check-inline-model" | "drag-inline-model" | "zoom-inline-model" | "reset-inline-model") {
+                cx.update(|cx| {
+                    let handle = cx.windows().into_iter().find_map(|w| w.downcast::<crate::app::Workspace>()).unwrap();
+                    handle.update(cx, |ws, window, cx| {
+                        let bounds = ws.editor.as_ref().expect("editor is not open").read(cx).check_inline_model(if cmd == "check-inline-model" { rest.trim() } else { "loaded" });
+                        if cmd == "drag-inline-model" {
+                            let start = point(bounds.left() + bounds.size.width * 0.4, bounds.top() + bounds.size.height * 0.45);
+                            let end = point(start.x + px(70.), start.y + px(25.));
+                            let modifiers = Modifiers::default();
+                            window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: start, pressed_button: None, modifiers }), cx);
+                            window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: start, modifiers, click_count: 1, first_mouse: false }), cx);
+                            window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: end, pressed_button: Some(MouseButton::Left), modifiers }), cx);
+                            window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: end, modifiers, click_count: 1 }), cx);
+                        }
+                        if cmd == "zoom-inline-model" {
+                            let position = point(bounds.left() + bounds.size.width * 0.5, bounds.top() + bounds.size.height * 0.5);
+                            window.dispatch_event(PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta: ScrollDelta::Pixels(point(px(0.), px(80.))), ..Default::default() }), cx);
+                        }
+                        if cmd == "reset-inline-model" {
+                            let position = point(bounds.left() + bounds.size.width * 0.5, bounds.top() + bounds.size.height * 0.5);
+                            let modifiers = Modifiers::default();
+                            window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position, modifiers, click_count: 2, first_mouse: false }), cx);
+                            window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position, modifiers, click_count: 2 }), cx);
+                        }
+                    }).unwrap();
                 }).unwrap();
                 continue;
             }

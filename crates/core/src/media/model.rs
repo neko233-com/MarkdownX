@@ -10,6 +10,7 @@ const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_VERTICES: usize = 1_000_000;
 const MAX_TRIANGLES: usize = 500_000;
 const MAX_RENDER_SIDE: u32 = 2048;
+const MAX_RASTER_SAMPLES: u64 = 30_000_000;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mesh {
@@ -189,7 +190,7 @@ fn parse_gltf(json: &[u8], path: Option<&Path>, glb_binary: Option<&[u8]>) -> Re
         while let Some((index, parent)) = stack.pop() {
             visited += 1;
             ensure!(visited <= nodes.len().max(1) * 16, "glTF node graph is too deep");
-            let node = &nodes[index as usize];
+            let node = nodes.get(usize::try_from(index)?).context("glTF node is missing")?;
             let transform = multiply(&parent, &node_transform(node)?);
             if let Some(mesh_index) = node.get("mesh").and_then(Value::as_u64) {
                 add_gltf_mesh(&mut mesh, &root, &resolved, views, accessors, mesh_index as usize, &transform)?;
@@ -212,7 +213,7 @@ fn decode_data_uri(uri: &str) -> Result<Vec<u8>> {
 }
 
 fn read_relative(base: &Path, uri: &str) -> Result<Vec<u8>> {
-    let relative = PathBuf::from(uri.replace('\\', "/"));
+    let relative = PathBuf::from(crate::book::percent_decode_path(&uri.replace('\\', "/"))?);
     ensure!(!relative.is_absolute() && relative.components().all(|part| !matches!(part, std::path::Component::ParentDir)), "glTF buffer path escapes its folder");
     let root = base.canonicalize().context("glTF folder unavailable")?;
     let path = root.join(relative).canonicalize().context("glTF buffer unavailable")?;
@@ -270,8 +271,8 @@ fn read_accessor_vec3(buffers: &[Vec<u8>], views: &[Value], accessors: &[Value],
     ensure!(stride >= 12, "invalid glTF vertex stride");
     let mut out = Vec::with_capacity(count);
     for index in 0..count {
-        let offset = start + index * stride;
-        ensure!(offset + 12 <= buffer.len(), "glTF vertex is out of range");
+        let offset = index.checked_mul(stride).and_then(|n| start.checked_add(n)).context("glTF vertex offset overflow")?;
+        ensure!(offset.checked_add(12).is_some_and(|end| end <= buffer.len()), "glTF vertex is out of range");
         let read = |at: usize| f32::from_le_bytes(buffer[at..at + 4].try_into().unwrap());
         out.push([read(offset), read(offset + 4), read(offset + 8)]);
     }
@@ -290,8 +291,8 @@ fn read_accessor_indices(buffers: &[Vec<u8>], views: &[Value], accessors: &[Valu
     ensure!(stride >= size, "invalid glTF index stride");
     let mut out = Vec::with_capacity(count);
     for index in 0..count {
-        let offset = start + index * stride;
-        ensure!(offset + size <= buffer.len(), "glTF index is out of range");
+        let offset = index.checked_mul(stride).and_then(|n| start.checked_add(n)).context("glTF index offset overflow")?;
+        ensure!(offset.checked_add(size).is_some_and(|end| end <= buffer.len()), "glTF index is out of range");
         out.push(match size {
             1 => buffer[offset] as u32,
             2 => u16::from_le_bytes(buffer[offset..offset + 2].try_into().unwrap()) as u32,
@@ -376,6 +377,7 @@ pub fn render(mesh: &Mesh, width: u32, height: u32, yaw: f32, pitch: f32, zoom: 
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
     let mut depth = vec![f32::NEG_INFINITY; width as usize * height as usize];
     let base = [92u8, 142, 214];
+    let mut samples = 0u64;
     for triangle in &mesh.triangles {
         let p = [transform(mesh.positions[triangle[0] as usize]), transform(mesh.positions[triangle[1] as usize]), transform(mesh.positions[triangle[2] as usize])];
         let normal = [
@@ -393,6 +395,9 @@ pub fn render(mesh: &Mesh, width: u32, height: u32, yaw: f32, pitch: f32, zoom: 
         let max_y = p.iter().map(|v| v[1]).fold(f32::NEG_INFINITY, f32::max).ceil().min(height as f32 - 1.0) as i32;
         let area = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0]);
         if area.abs() < 1e-9 { continue; }
+        if min_x > max_x || min_y > max_y { continue; }
+        samples = samples.saturating_add((max_x - min_x + 1) as u64 * (max_y - min_y + 1) as u64);
+        ensure!(samples <= MAX_RASTER_SAMPLES, "model is too complex for the desktop preview");
         for y in min_y..=max_y {
             for x in min_x..=max_x {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
@@ -490,6 +495,25 @@ f 5 1 4 8
         let path = std::env::temp_dir().join("markdownx-model.glb");
         assert_eq!(parse_glb(&glb, &path).unwrap().triangles.len(), 1);
         assert!(parse_glb(b"bad", &path).is_err());
+    }
+
+    #[test]
+    fn malformed_gltf_indices_and_offsets_return_errors() {
+        let (json, _) = triangle_gltf(Some("data:application/octet-stream;base64,"));
+        let mut value: Value = serde_json::from_slice(&json).unwrap();
+        value["nodes"] = serde_json::json!([{ "mesh": 0 }]);
+        value["scenes"] = serde_json::json!([{ "nodes": [20] }]);
+        value["scene"] = serde_json::json!(0);
+        assert!(parse_gltf(&serde_json::to_vec(&value).unwrap(), None, None).is_err());
+        value["scenes"][0]["nodes"] = serde_json::json!([0]);
+        value["bufferViews"][0]["byteStride"] = serde_json::json!(u64::MAX);
+        assert!(parse_gltf(&serde_json::to_vec(&value).unwrap(), None, None).is_err());
+    }
+
+    #[test]
+    fn desktop_model_preview_limits_raster_work() {
+        let mesh = Mesh { positions: vec![[-1., -1., 0.], [1., -1., 0.], [0., 1., 0.]], triangles: vec![[0, 1, 2]; 100] };
+        assert!(render(&mesh, 2048, 2048, 0., 0., 1.).is_err());
     }
 
     #[test]

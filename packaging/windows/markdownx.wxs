@@ -28,9 +28,28 @@
         <Directory Id="ProgramsFolder" Name="Programs">
           <Directory Id="INSTALLDIR" Name="MarkdownX">
             <Directory Id="ServerDir" Name="server">
-              <Directory Id="WebDir" Name="web" />
+              <Directory Id="WebDir" Name="web">
+                <Directory Id="ReaderDir" Name="reader">
+                  <Directory Id="ReaderJsDir" Name="js" />
+                  <Directory Id="ReaderLibDir" Name="lib">
+                    <Directory Id="ThreeDir" Name="three">
+                      <Directory Id="ThreeAddonsDir" Name="addons">
+                        <Directory Id="ThreeLoadersDir" Name="loaders" />
+                        <Directory Id="ThreeControlsDir" Name="controls" />
+                        <Directory Id="ThreeUtilsDir" Name="utils" />
+                      </Directory>
+                    </Directory>
+                  </Directory>
+                </Directory>
+                <Directory Id="ReaderExamplesDir" Name="examples" />
+              </Directory>
             </Directory>
             <Directory Id="TemplatesDir" Name="templates" />
+            <Directory Id="DocxViewerLicenseDir" Name="docx-viewer-licenses" />
+            <Directory Id="OfdViewerLicenseDir" Name="ofd-viewer-licenses" />
+            <Directory Id="LegacyDocLicenseDir" Name="legacy-doc-licenses" />
+            <Directory Id="EpubViewerLicenseDir" Name="epub-viewer-licenses" />
+            <Directory Id="ModuleParserLicenseDir" Name="module-parser-licenses" />
           </Directory>
         </Directory>
       </Directory>
@@ -38,7 +57,6 @@
         <Directory Id="AppMenuFolder" Name="MarkdownX" />
       </Directory>
       <Directory Id="DesktopFolder" />
-      <Directory Id="StartupFolder" />
     </Directory>
 
     <DirectoryRef Id="INSTALLDIR">
@@ -47,6 +65,8 @@
         <RemoveFolder Id="RemoveInstallDir" Directory="INSTALLDIR" On="uninstall" />
         <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
         <File Id="MarkdownXExe" Source="target\release\markdownx.exe" />
+        <File Id="MarkdownXConsole" Name="markdownx.com" Source="target\release\markdownx-console.exe" />
+        <Environment Id="MarkdownXUserPath" Name="Path" Value="[INSTALLDIR]" Action="set" Part="last" Permanent="no" System="no" />
         <File Id="AppIconFile" Source="assets\branding\app-icon.ico" />
         <File Id="LicenseFile" Source="LICENSE" />
         <File Id="ReadmeFile" Source="README.md" />
@@ -54,6 +74,117 @@
         <File Id="InstallPowerShell" Source="install.ps1" />
         <File Id="InstallShell" Source="install.sh" />
         <File Id="ThirdPartyFile" Source="THIRD_PARTY.md" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ModuleParserLicenseDir">
+      <Component Id="ModuleParserLicenses" Guid="{0BB47F64-E9DF-4B5B-8850-73757C43BE09}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ModuleParserLicenses" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveModuleParserLicenseDir" Directory="ModuleParserLicenseDir" On="uninstall" />
+        <File Id="RessLicense" Source="assets\module-parser-licenses\RESS-LICENSE" />
+        <File Id="UnicodeXidLicense" Source="assets\module-parser-licenses\UNICODE-XID-LICENSE" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="EpubViewerLicenseDir">
+      <Component Id="EpubViewerLicenses" Guid="{DF4E797C-87EF-4999-9138-D52250EC5D48}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="EpubViewerLicenses" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveEpubViewerLicenseDir" Directory="EpubViewerLicenseDir" On="uninstall" />
+        <File Id="RbookLicense" Source="assets\epub-viewer\RBOOK-LICENSE" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="LegacyDocLicenseDir">
+      <Component Id="LegacyDocLicenses" Guid="{C324A718-4C7D-432E-82D0-F4C211D9D338}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="LegacyDocLicenses" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveLegacyDocLicenseDir" Directory="LegacyDocLicenseDir" On="uninstall" />
+        <File Id="UndocLicense" Source="assets\legacy-doc-viewer\UNDOC-LICENSE" />
+        <File Id="UnparserLicense" Source="assets\legacy-doc-viewer\UNPARSER-SHARED-LICENSE" />
+        <File Id="CfbLicense" Source="assets\legacy-doc-viewer\CFB-LICENSE" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="OfdViewerLicenseDir">
+      <Component Id="OfdViewerLicenses" Guid="{87C9850A-9F2F-4D52-9B40-7CB5093B73D6}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="OfdViewerLicenses" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveOfdViewerLicenseDir" Directory="OfdViewerLicenseDir" On="uninstall" />
+        <File Id="OfdViewerLicense" Source="assets\ofd-viewer\OFDJS-LICENSE" />
+        <File Id="FflateLicense" Source="assets\ofd-viewer\FFLATE-LICENSE" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ReaderDir">
+      <Component Id="ReaderAssets" Guid="{A4B24953-2AE6-409F-AE1B-6D0B4A0477A3}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ReaderFiles" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveReaderDir" Directory="ReaderDir" On="uninstall" />
+        <File Id="ReaderIndex" Source="web\index.html" />
+        <File Id="ReaderCss" Source="web\style.css" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="DocxViewerLicenseDir">
+      <Component Id="DocxViewerLicenses" Guid="{5C5D722A-559A-4B37-8E23-4A2904E2E362}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="DocxViewerLicenses" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveDocxViewerLicenseDir" Directory="DocxViewerLicenseDir" On="uninstall" />
+        <File Id="DocxPreviewLicense" Source="assets\docx-viewer\DOCX-PREVIEW-LICENSE" />
+        <File Id="JsZipLicense" Source="assets\docx-viewer\JSZIP-LICENSE.md" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ReaderJsDir">
+      <Component Id="ReaderJsAssets" Guid="{58BE8565-52E6-4367-B9B0-A2EA80885810}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ReaderJsFiles" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveReaderJsDir" Directory="ReaderJsDir" On="uninstall" />
+        <File Id="ReaderApp" Source="web\js\app.js" />
+        <File Id="ReaderTheme" Source="web\js\theme.js" />
+        <File Id="ReaderDocxml" Source="web\js\docxml.js" />
+        <File Id="ReaderKatex" Source="web\js\katex.mjs" />
+        <File Id="ReaderKatexLicense" Source="web\js\katex-LICENSE" />
+        <File Id="ReaderMarkdown" Source="web\js\markdown.js" />
+        <File Id="ReaderMdxb" Source="web\js\mdxb.js" />
+        <File Id="ReaderWidgets" Source="web\js\widgets.js" />
+        <File Id="ReaderModel3d" Source="web\js\model3d.js" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ThreeDir">
+      <Component Id="ThreeCore" Guid="{54A7E045-39DC-4841-867B-CBF0AB3C65E8}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ThreeCore" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveThreeDir" Directory="ThreeDir" On="uninstall" />
+        <RemoveFolder Id="RemoveReaderLibDir" Directory="ReaderLibDir" On="uninstall" />
+        <File Id="ThreeModule" Source="web\lib\three\three.module.js" />
+        <File Id="ThreeCoreJs" Source="web\lib\three\three.core.js" />
+        <File Id="ThreeLicense" Source="web\lib\three\LICENSE" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ThreeLoadersDir">
+      <Component Id="ThreeLoaders" Guid="{0E8B4E73-C987-4823-95B1-90C78F2392C2}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ThreeLoaders" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveThreeLoadersDir" Directory="ThreeLoadersDir" On="uninstall" />
+        <RemoveFolder Id="RemoveThreeAddonsDir" Directory="ThreeAddonsDir" On="uninstall" />
+        <File Id="ThreeGltfLoader" Source="web\lib\three\addons\loaders\GLTFLoader.js" />
+        <File Id="ThreeObjLoader" Source="web\lib\three\addons\loaders\OBJLoader.js" />
+        <File Id="ThreeStlLoader" Source="web\lib\three\addons\loaders\STLLoader.js" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ThreeControlsDir">
+      <Component Id="ThreeControls" Guid="{426C44C4-AE84-4EC4-BBCB-8A1A05A2F532}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ThreeControls" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveThreeControlsDir" Directory="ThreeControlsDir" On="uninstall" />
+        <File Id="ThreeOrbitControls" Source="web\lib\three\addons\controls\OrbitControls.js" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ThreeUtilsDir">
+      <Component Id="ThreeUtils" Guid="{D668F8B8-2D1A-45B8-A9D0-A93B0E32C26F}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ThreeUtils" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveThreeUtilsDir" Directory="ThreeUtilsDir" On="uninstall" />
+        <File Id="ThreeBufferUtils" Source="web\lib\three\addons\utils\BufferGeometryUtils.js" />
+        <File Id="ThreeSkeletonUtils" Source="web\lib\three\addons\utils\SkeletonUtils.js" />
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="ReaderExamplesDir">
+      <Component Id="ReaderExamples" Guid="{2E414A7D-886E-4CE8-BFDB-934F1F20D2D4}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="ReaderExampleFiles" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveReaderExamplesDir" Directory="ReaderExamplesDir" On="uninstall" />
+        <File Id="ReaderManifest" Source="examples\manifest.json" />
+        <File Id="ReaderExampleQuadratic" Source="examples\quadratics.mdxb" />
+        <File Id="ReaderExampleProjectile" Source="examples\projectile-lab.mdxb" />
+        <File Id="ReaderExampleType" Source="examples\type-specimen.mdxb" />
+        <File Id="ReaderExamplePhysics" Source="examples\junior-physics.mdxb" />
+        <File Id="ReaderExampleChemistry" Source="examples\junior-chemistry.mdxb" />
       </Component>
     </DirectoryRef>
 
@@ -125,18 +256,6 @@
       </Component>
     </DirectoryRef>
 
-    <DirectoryRef Id="StartupFolder">
-      <Component Id="StartupServer" Guid="{0CACDFD6-B7DD-47F3-A767-0B9F28E2BA6E}">
-        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="Startup" Type="integer" Value="1" KeyPath="yes" />
-        <Shortcut Id="StartupServerShortcut"
-                  Name="MarkdownX Server"
-                  Description="Start the MarkdownX collaboration server"
-                  Target="[ServerDir]start-server.vbs"
-                  WorkingDirectory="ServerDir"
-                  Icon="AppIcon" />
-      </Component>
-    </DirectoryRef>
-
     <DirectoryRef Id="INSTALLDIR">
       <Component Id="FileAssociation" Guid="{BA900DF5-FA85-4B21-9F98-21518D1CC0BE}">
         <RegistryKey Root="HKCU" Key="Software\Classes\.mdxb">
@@ -161,10 +280,21 @@
       <ComponentRef Id="AppExe" />
       <ComponentRef Id="ServerExe" />
       <ComponentRef Id="WebAssets" />
+      <ComponentRef Id="ReaderAssets" />
+      <ComponentRef Id="DocxViewerLicenses" />
+      <ComponentRef Id="OfdViewerLicenses" />
+      <ComponentRef Id="LegacyDocLicenses" />
+      <ComponentRef Id="EpubViewerLicenses" />
+      <ComponentRef Id="ModuleParserLicenses" />
+      <ComponentRef Id="ReaderJsAssets" />
+      <ComponentRef Id="ThreeCore" />
+      <ComponentRef Id="ThreeLoaders" />
+      <ComponentRef Id="ThreeControls" />
+      <ComponentRef Id="ThreeUtils" />
+      <ComponentRef Id="ReaderExamples" />
       <ComponentRef Id="Templates" />
       <ComponentRef Id="AppShortcuts" />
       <ComponentRef Id="DesktopShortcut" />
-      <ComponentRef Id="StartupServer" />
       <ComponentRef Id="FileAssociation" />
     </Feature>
 

@@ -302,8 +302,13 @@ pub fn export_path(src: &str) -> Option<PathBuf> {
 
 pub fn export_path_in(root: &std::path::Path, src: &str) -> Option<PathBuf> {
     let root = root.canonicalize().ok()?;
-    let raw = std::path::Path::new(src.strip_prefix("file://").unwrap_or(src));
-    let path = if raw.is_absolute() { raw.to_path_buf() } else { root.join(raw) }.canonicalize().ok()?;
+    let src = src.strip_prefix("file://").unwrap_or(src);
+    let raw = std::path::Path::new(src);
+    let path = if raw.is_absolute() { raw.to_path_buf() } else { root.join(raw) };
+    let path = if !path.is_file() && let Some((path, _)) = crate::html_assets::svg_fragment(src) {
+        let raw = std::path::Path::new(path);
+        if raw.is_absolute() { raw.to_path_buf() } else { root.join(raw) }
+    } else { path }.canonicalize().ok()?;
     (path.starts_with(root) && path.is_file()).then_some(path)
 }
 
@@ -359,7 +364,8 @@ impl Store {
                 if path.extension().is_none_or(|x| x != "xml") { continue; }
                 let restored = (|| -> Result<()> {
                     let mut doc = docxml::parse(&std::fs::read_to_string(&path)?)?;
-                    doc.title = crate::model::RichText::plain(format!("{} (recovered copy)", doc.title.text));
+                    let end = doc.title.text.len();
+                    doc.title.insert_plain(end, " (recovered copy)", crate::model::Marks::default());
                     store.create_from(&doc)?;
                     std::fs::remove_file(&path)?;
                     Ok(())
@@ -431,7 +437,7 @@ impl Store {
                 None => {
                     let Ok(xml) = std::fs::read_to_string(&p) else { continue };
                     let doc = docxml::parse(&xml).unwrap_or_default();
-                    let parsed = Parsed { title: doc.title.text.clone(), icon: doc.icon.clone(), body: doc.plain_text(), reminders: doc.reminders(), links: doc.doc_links() };
+                    let parsed = Parsed { title: doc.title.plain_text(), icon: doc.icon.clone(), body: doc.plain_text(), reminders: doc.reminders(), links: doc.doc_links() };
                     if let Some((t, len)) = stamp { self.parsed.insert(id.clone(), (t, len, parsed.clone())); }
                     parsed
                 }
@@ -632,7 +638,7 @@ impl Store {
                 let doc = std::fs::read_to_string(self.trash_path(id)).ok().and_then(|x| docxml::parse(&x).ok()).unwrap_or_default();
                 TrashEntry {
                     id: id.clone(),
-                    title: doc.title.text.clone(),
+                    title: doc.title.plain_text(),
                     icon: doc.icon.clone(),
                     deleted: t.deleted,
                     parent: t.meta.parent.clone(),

@@ -51,7 +51,7 @@ impl R<'_> {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .child(ui_text(display_title(&ed.core.doc.title.text))),
+                        .child(ui_text(display_title(&ed.core.doc.title.plain_text()))),
                 ),
         );
         let mut content = div()

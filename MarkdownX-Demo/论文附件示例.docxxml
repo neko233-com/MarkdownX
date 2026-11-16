@@ -1,0 +1,5 @@
+<title>论文附件只读预览</title>
+<p>下面的卡片和行内附件使用相对于本文档的同一份 PDF。Windows 中点击卡片选中，再点击打开；行内附件可直接点击。</p>
+<figure view-type="Card"><source path="./论文阅读示例.pdf" name="论文阅读示例.pdf"/></figure>
+<p>行内附件：<source path="论文阅读示例.pdf" name="论文阅读示例.pdf"/></p>
+<p>示例论文为虚构内容，PDF 预览不会修改原文件。</p>

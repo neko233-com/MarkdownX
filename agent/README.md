@@ -25,6 +25,29 @@ edit a chapter's Markdown, the Markdown wins. `pack` accepts `.md` and `.xml`
 chapter sources, reads `NN-topic.en.md` as `content_en`, and re-embeds files
 under `assets/`.
 
+Image paths are resolved from the chapter or translation file, not from the
+book root. Use `![frame](./shots/frame.svg)`; `shots/frame.svg` also works.
+The CLI embeds recognized local images, including HTML `<img src="./shots/frame.svg">` tags (standalone tags may span lines) and images in table cells, and refuses a
+missing image or one outside the book folder. Existing `assets/...` keys from
+an unpacked book still work. Image-looking text in fenced and indented code remains literal; indentation at the start and end of a Markdown chapter is preserved. Images in footnote continuations and ordinary list content are still embedded.
+
+In `mdxb-html` fences (and HTML interactive CDATA in DocxXML), `img`, `video`,
+`audio`, `source`, `track` and `model-viewer` `src` attributes and video `poster` attributes
+can use paths such as `./clip.mp4`. These resolve next to the chapter or
+translation and are embedded for the sandboxed web reader. Scripts, comments,
+ordinary code fences and external URLs are left alone; missing or out-of-book
+local media fail packaging. Local glTF/GLB buffer and image dependencies are
+embedded too. External stylesheets can include relative `url()` resources and
+nested `@import` files; missing, circular or out-of-book dependencies fail the
+pack. Local `url()` and `@import` references in HTML `style` attributes and
+`<style>` blocks resolve relative to the chapter or translation and are embedded
+as well. Script imports and OBJ material libraries are not yet embedded automatically.
+
+List-item and standalone `<video>`, `<audio>` and `<canvas>` blocks in Markdown run as
+sandboxed HTML in the web reader, along with immediately following script tags.
+A standalone `<model-viewer>` without scripts uses the built-in desktop and web
+3D viewers. Ordinary fenced code remains literal.
+
 ## Commands
 
 No dependencies beyond Python 3.10+.
@@ -63,7 +86,7 @@ Chapters are ordinary Markdown plus a few fenced blocks:
 | Inline maths | `$v = \frac{s}{t}$` |
 | Native canvas | ` ```mdxb-canvas ` with a JSON body |
 | Sandboxed HTML | ` ```mdxb-html ` with a JSON body |
-| Local image | `![](assets/diagram.png)` |
+| Local image | `![](./assets/diagram.png)` |
 | Checklist | `- [x] measured` / `- [ ] repeat` |
 
 Canvas JSON:
@@ -76,7 +99,7 @@ Canvas JSON:
 ````
 
 `source` is a JSON **string**. Web supports `quadratic`, `unitcircle` and
-`projectile`; the desktop native runtime currently implements `quadratic`.
+`projectile`; the desktop native runtime implements the same three kinds.
 HTML is executed only by the web reader, inside
 `<iframe sandbox="allow-scripts">`.
 

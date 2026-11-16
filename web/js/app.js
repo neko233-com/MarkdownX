@@ -1,9 +1,10 @@
 // MarkdownX reader shell: bookshelf, chapter navigation, rendering and
 // language/theme persistence. No framework, no build step.
 
-import { readBookFile, normalizeBook, assetURL, pick } from './mdxb.js';
+import { readBookFile, normalizeBook, assetURL, pick, headingSlug } from './mdxb.js';
 import { disposeInteractive, mountInteractive } from './widgets.js';
 import { color, escapeHTML } from './docxml.js';
+import { readableAccent } from './theme.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -18,14 +19,14 @@ const T = {
     prev: '上一章', next: '下一章', open: '打开一本书', close: '关闭', contents: '目录',
     lang: 'EN', interactive: '交互内容', imageMissing: '图片未嵌入', copy: '复制', copied: '已复制',
     loading: '正在打开…', error: '打不开这本书', empty: '这本书还没有内容。',
-    back: '返回书架', theme: '切换明暗',
+    back: '返回书架', theme: '切换明暗', headingMissing: '找不到链接指向的标题', pdfMissing: 'PDF 无法打开或未嵌入书籍', footnotes: '注释', backToReference: '返回引用',
   },
   en: {
     chapter: 'Chapter', chapterOf: (i, n) => `Chapter ${i} of ${n}`, min: 'min read',
     prev: 'Previous', next: 'Next', open: 'Open a book', close: 'Close', contents: 'Contents',
     lang: '中文', interactive: 'Interactive', imageMissing: 'Image not embedded', copy: 'Copy', copied: 'Copied',
     loading: 'Opening…', error: 'Could not open this book', empty: 'This book has no content yet.',
-    back: 'Back to library', theme: 'Toggle theme',
+    back: 'Back to library', theme: 'Toggle theme', headingMissing: 'The linked heading was not found', pdfMissing: 'The PDF is unavailable or not embedded', footnotes: 'Notes', backToReference: 'Back to reference',
   },
 };
 
@@ -36,6 +37,35 @@ const state = {
   theme: store.get('mx-theme', 'light'),
   examples: [],
 };
+const pdfUrls = new Map();
+
+function clearPdfUrls() {
+  for (const url of pdfUrls.values()) URL.revokeObjectURL(url);
+  pdfUrls.clear();
+}
+
+function openEmbeddedPdf(href) {
+  const match = /^#mdxb-pdf\/([^?]+)(?:\?page=([0-9]+))?$/.exec(href);
+  if (!match) return;
+  let key;
+  try { key = decodeURIComponent(match[1]); } catch { toast(t('pdfMissing')); return; }
+  const asset = state.book?.assets && Object.prototype.hasOwnProperty.call(state.book.assets, key) ? state.book.assets[key] : null;
+  const page = match[2] ? Number(match[2]) : 1;
+  if (!asset || String(asset.mime).toLowerCase() !== 'application/pdf' || !Number.isSafeInteger(page) || page < 1 || page > 2147483647
+      || typeof asset.data !== 'string' || asset.data.length > Math.ceil(16 * 1024 * 1024 / 3) * 4) { toast(t('pdfMissing')); return; }
+  let url = pdfUrls.get(key);
+  if (!url) {
+    try {
+      const decoded = atob(asset.data);
+      if (!decoded.slice(0, 1024).includes('%PDF-')) throw new Error('invalid PDF');
+      const bytes = new Uint8Array(decoded.length);
+      for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
+      url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      pdfUrls.set(key, url);
+    } catch { toast(t('pdfMissing')); return; }
+  }
+  window.open(url + (match[2] ? '#page=' + page : ''), '_blank', 'noopener,noreferrer');
+}
 
 function t(key, ...args) {
   const v = T[state.lang]?.[key] ?? T.en[key] ?? key;
@@ -49,18 +79,19 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = state.theme;
   store.set('mx-theme', state.theme);
   const meta = $('meta[name="theme-color"]');
-  if (meta) meta.content = state.theme === 'dark' ? '#171512' : '#fbf8f1';
+  if (meta) meta.content = state.theme === 'dark' ? '#0a0a0a' : '#fafafa';
   for (const b of [$('#landing-theme'), $('#reader-theme')]) {
     if (b) b.setAttribute('aria-pressed', state.theme === 'dark' ? 'true' : 'false');
   }
 }
 
 function applyBookTheme(book) {
-  const accent = (book.theme && book.theme.accent) || '#b45309';
+  const coverAccent = (book.theme && book.theme.accent) || '#0070f3';
+  const accent = readableAccent(coverAccent, state.theme === 'dark');
   document.documentElement.style.setProperty('--accent', accent);
-  document.documentElement.style.setProperty('--accent-ink', shade(accent, state.theme === 'dark' ? 32 : -26));
+  document.documentElement.style.setProperty('--accent-ink', accent);
   document.documentElement.style.setProperty('--accent-soft', rgba(accent, state.theme === 'dark' ? .16 : .11));
-  document.documentElement.style.setProperty('--cover', accent);
+  document.documentElement.style.setProperty('--cover', coverAccent);
   const cover = book.cover ? assetURL(book, book.cover) : '';
   const tocCover = $('#toc-cover');
   tocCover.innerHTML = '';
@@ -69,7 +100,7 @@ function applyBookTheme(book) {
     tocCover.style.background = `center / cover no-repeat url("${cover.replace(/"/g, '%22')}")`;
   } else {
     tocCover.style.backgroundImage = '';
-    tocCover.style.background = `linear-gradient(135deg, ${accent}, ${shade(accent, -28)})`;
+    tocCover.style.background = `linear-gradient(135deg, ${coverAccent}, ${shade(coverAccent, -28)})`;
     const glyph = document.createElement('span');
     glyph.className = 'cover-glyph';
     glyph.textContent = 'M';
@@ -95,6 +126,17 @@ function shade(hex, amount) {
 function bookTitle() { return pick(state.book?.titleRaw, state.lang) || state.book?.title || ''; }
 function bookSubtitle() { return pick(state.book?.subtitleRaw, state.lang) || state.book?.subtitle || ''; }
 function chapterTitle(ch) { return pick(ch.titleRaw, state.lang) || ch.title || ''; }
+function chapterDisplayTitle(ch) {
+  const title = chapterTitle(ch);
+  const blocks = state.lang === 'en' && ch.blocksEn ? ch.blocksEn : ch.blocks;
+  const heading = blocks?.[0];
+  if (heading?.type !== 'h' || heading.level !== 1 || heading.anchorHtml === undefined
+      || textOf(heading.anchorHtml) !== title || !heading.html?.includes('class="footnote-ref"')) return title;
+  const container = document.createElement('div');
+  container.innerHTML = heading.html;
+  container.querySelectorAll('sup.footnote-ref').forEach(ref => ref.remove());
+  return (container.textContent || '').trim() || title;
+}
 
 function applyLang(lang) {
   state.lang = String(lang).toLowerCase().startsWith('en') ? 'en' : 'zh';
@@ -176,6 +218,7 @@ async function loadExample(ex, button) {
 /* ---------- opening / closing ---------- */
 
 function openBook(book) {
+  clearPdfUrls();
   state.book = book;
   state.lang = book.languages?.some((l) => String(l).toLowerCase().startsWith('en')) && state.lang === 'en' ? 'en' : state.lang;
   const saved = Number(store.get(`mx-progress:${book.id || book.title}`, '0'));
@@ -194,6 +237,7 @@ function openBook(book) {
 }
 
 function closeBook() {
+  clearPdfUrls();
   disposeInteractive($('#chapter'));
   $('#chapter').replaceChildren();
   state.book = null;
@@ -229,7 +273,7 @@ function render() {
   state.chapterIndex = Math.max(0, Math.min(state.chapterIndex, chapters.length - 1));
   const ch = chapters[state.chapterIndex];
 
-  $('#topbar-title').textContent = `${bookTitle()} · ${chapterTitle(ch)}`;
+  $('#topbar-title').textContent = `${bookTitle()} · ${chapterDisplayTitle(ch)}`;
   $('#lang-toggle').hidden = !hasEnglish(book);
   $('#toc-title').textContent = bookTitle();
   const sub = bookSubtitle();
@@ -254,7 +298,7 @@ function renderToc() {
     b.type = 'button';
     b.className = `toc-item${i === state.chapterIndex ? ' active' : ''}`;
     b.setAttribute('aria-current', i === state.chapterIndex ? 'page' : 'false');
-    b.innerHTML = `<span class="num">${String(i + 1).padStart(2, '0')}</span><span class="lbl">${escapeHTML(chapterTitle(ch))}</span>`;
+    b.innerHTML = `<span class="num">${String(i + 1).padStart(2, '0')}</span><span class="lbl">${escapeHTML(chapterDisplayTitle(ch))}</span>`;
     b.addEventListener('click', () => { setChapter(i); closeToc(); });
     list.appendChild(b);
   });
@@ -265,6 +309,7 @@ function renderChapter(ch) {
   disposeInteractive(article);
   article.innerHTML = '';
   const blocks = state.lang === 'en' && ch.blocksEn ? ch.blocksEn : ch.blocks;
+  const format = state.lang === 'en' && ch.blocksEn ? ch.formatEn : ch.format;
   const title = chapterTitle(ch) || t('empty');
   const n = state.book.chapters.length;
   const idx = state.chapterIndex + 1;
@@ -277,14 +322,34 @@ function renderChapter(ch) {
   meta.innerHTML = `<span class="chapter-kicker">${kicker}</span><span class="chapter-dot"></span><span class="chapter-time">${minutes} ${t('min')}</span>`;
   article.appendChild(meta);
 
+  const usedAnchors = new Set();
+  const anchorFor = (text) => {
+    const base = headingSlug(text);
+    if (!base) return '';
+    let candidate = base, suffix = 1;
+    while (usedAnchors.has(candidate)) candidate = `${base}-${suffix++}`;
+    usedAnchors.add(candidate);
+    return candidate;
+  };
   const h1 = document.createElement('h1');
   h1.className = 'chapter-title';
-  h1.textContent = title;
+  const headingTitle = textOf(blocks[0]?.anchorHtml ?? blocks[0]?.html);
+  const titleIsHeading = blocks[0]?.type === 'h' && blocks[0].level === 1 && (headingTitle === title || textOf(blocks[0].html) === title);
+  const sourceTitle = state.lang === 'en' && ch.blocksEn ? ch.titleAnchorEn : ch.titleAnchor;
+  const sourceTitleHtml = state.lang === 'en' && ch.blocksEn ? ch.titleHtmlEn : ch.titleHtml;
+  if (titleIsHeading && blocks[0].anchorHtml !== undefined && /class="(?:footnote-ref|inline-image|math-inline)"/.test(blocks[0].html || '')) h1.innerHTML = blocks[0].html;
+  else if (format !== 'markdown' && format !== 'md' && sourceTitle === title && sourceTitleHtml) h1.innerHTML = sourceTitleHtml;
+  else h1.textContent = title;
+  if (format !== 'markdown' && format !== 'md') {
+    h1.dataset.anchor = anchorFor(sourceTitle || title);
+    const alias = headingSlug(title);
+    if (alias && alias !== h1.dataset.anchor) h1.dataset.anchorAlias = alias;
+  } else if (titleIsHeading) h1.dataset.anchor = anchorFor(headingTitle);
   article.appendChild(h1);
 
   const body = document.createElement('div');
   body.className = 'chapter-body';
-  const filtered = blocks.filter((b, i) => !(i === 0 && b.type === 'h' && b.level === 1 && textOf(b.html) === title));
+  const filtered = blocks.filter((_, i) => !(i === 0 && titleIsHeading));
   if (!filtered.length) {
     const p = document.createElement('p');
     p.className = 'raw';
@@ -292,7 +357,7 @@ function renderChapter(ch) {
     body.appendChild(p);
   } else {
     let heading = 0;
-    const ctx = { chapter: ch, heading: () => ++heading };
+    const ctx = { chapter: ch, heading: () => ++heading, anchorFor };
     filtered.forEach((b) => body.appendChild(renderBlock(b, ctx)));
   }
   article.appendChild(body);
@@ -321,6 +386,7 @@ function renderBlock(b, ctx) {
       const el = document.createElement(`h${Math.min(9, Math.max(1, b.level))}`);
       el.id = `sec-${ctx.chapter.id}-${ctx.heading()}`;
       el.innerHTML = b.html || '';
+      el.dataset.anchor = ctx.anchorFor(b.anchorHtml === undefined ? el.textContent || '' : textOf(b.anchorHtml));
       return el;
     }
     case 'list': return renderList(b, ctx);
@@ -357,6 +423,32 @@ function renderBlock(b, ctx) {
         g.appendChild(col);
       });
       return g;
+    }
+    case 'footnotes': {
+      const section = document.createElement('section');
+      section.className = 'footnotes';
+      const heading = document.createElement('h2');
+      heading.textContent = t('footnotes');
+      section.appendChild(heading);
+      const list = document.createElement('ol');
+      b.notes.forEach((note) => {
+        const item = document.createElement('li');
+        item.id = note.id;
+        note.blocks.forEach((block) => item.appendChild(renderBlock(block, ctx)));
+        const back = document.createElement('span');
+        back.className = 'footnote-backs';
+        note.backlinks.forEach((id, index) => {
+          const a = document.createElement('a');
+          a.href = `#${id}`;
+          a.setAttribute('aria-label', `${t('backToReference')} ${index + 1}`);
+          a.textContent = '↩';
+          back.appendChild(a);
+        });
+        item.appendChild(back);
+        list.appendChild(item);
+      });
+      section.appendChild(list);
+      return section;
     }
     case 'table': return renderTable(b, ctx);
     case 'todo': {
@@ -401,6 +493,7 @@ function renderBlock(b, ctx) {
 
 function renderList(b, ctx) {
   const list = document.createElement(b.ordered ? 'ol' : 'ul');
+  if (b.ordered && Number.isSafeInteger(b.start) && b.start >= 0) list.start = b.start;
   for (const item of b.items || []) {
     const li = document.createElement('li');
     if (item.done !== undefined && item.done !== null) {
@@ -495,7 +588,7 @@ function renderImage(b) {
     img.src = src;
     img.alt = b.caption || '';
     img.loading = 'lazy';
-    if (b.width > 0) img.style.width = `${Math.min(100, b.width)}px`;
+    if (b.width > 0) img.style.width = `${Math.min(4096, b.width)}px`;
     fig.appendChild(img);
   } else {
     const d = document.createElement('div');
@@ -521,8 +614,8 @@ function renderChapterNav() {
   next.disabled = i >= chapters.length - 1;
   nav.classList.toggle('only-next', i <= 0);
   nav.classList.toggle('only-prev', i >= chapters.length - 1);
-  prev.querySelector('span:last-child').innerHTML = i > 0 ? `<span class="cl-label">${t('prev')}</span><span class="cl-title">${escapeHTML(chapterTitle(chapters[i - 1]))}</span>` : '';
-  next.querySelector('span:first-child').innerHTML = i < chapters.length - 1 ? `<span class="cl-label">${t('next')}</span><span class="cl-title">${escapeHTML(chapterTitle(chapters[i + 1]))}</span>` : '';
+  prev.querySelector('span:last-child').innerHTML = i > 0 ? `<span class="cl-label">${t('prev')}</span><span class="cl-title">${escapeHTML(chapterDisplayTitle(chapters[i - 1]))}</span>` : '';
+  next.querySelector('span:first-child').innerHTML = i < chapters.length - 1 ? `<span class="cl-label">${t('next')}</span><span class="cl-title">${escapeHTML(chapterDisplayTitle(chapters[i + 1]))}</span>` : '';
 }
 
 function setChapter(index, scroll = true) {
@@ -628,7 +721,32 @@ function bind() {
   });
   $('#chapter').addEventListener('click', (e) => {
     const a = e.target.closest('a');
-    if (a && a.getAttribute('href') === '#') e.preventDefault();
+    const href = a?.getAttribute('href') || '';
+    if (href.startsWith('#mdxb-pdf/')) {
+      e.preventDefault();
+      openEmbeddedPdf(href);
+    } else if (href.startsWith('#mdxb-chapter/')) {
+      e.preventDefault();
+      let id, anchor = '';
+      try {
+        const parts = href.slice('#mdxb-chapter/'.length).split('?anchor=');
+        id = decodeURIComponent(parts[0]);
+        if (parts.length > 1) anchor = decodeURIComponent(parts[1]);
+      } catch { return; }
+      const index = state.book?.chapters.findIndex(ch => ch.id === id) ?? -1;
+      if (index >= 0) {
+        setChapter(index);
+        if (anchor) {
+          const targets = $$('[data-anchor]', $('#chapter'));
+          const heading = targets.find(node => node.dataset.anchor === anchor) || targets.find(node => node.dataset.anchorAlias === anchor);
+          if (heading) heading.scrollIntoView({ block: 'start', behavior: 'instant' }); else toast(t('headingMissing'));
+        }
+      }
+    } else if (/^#mdxfn-\d+-(?:note|ref)-\d+$/.test(href)) {
+      e.preventDefault();
+      const target = document.getElementById(href.slice(1));
+      if (target && $('#chapter').contains(target)) target.scrollIntoView({ block: 'start', behavior: 'instant' });
+    } else if (href === '#') e.preventDefault();
   });
 }
 

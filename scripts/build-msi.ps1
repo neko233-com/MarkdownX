@@ -24,6 +24,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $wix 'candle.exe'))) {
 
 foreach ($file in @(
     'target\release\markdownx.exe',
+    'target\release\markdownx-console.exe',
     'target\release\markdownx-server.exe',
     'assets\branding\app-icon.ico',
     'server\start-server.ps1',
@@ -57,6 +58,7 @@ if ($light.ExitCode -ne 0) {
     throw "light failed ($($light.ExitCode))"
 }
 
+& (Join-Path $PSScriptRoot 'verify-msi-ui.ps1') -MsiPath $msi
 $hash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText(($msi + '.sha256'), ($hash + '  ' + [IO.Path]::GetFileName($msi) + "`n"), [Text.Encoding]::ASCII)
 Get-Item -LiteralPath $msi | Select-Object FullName, Length, LastWriteTime

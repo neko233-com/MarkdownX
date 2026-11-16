@@ -1,0 +1,9 @@
+---
+title: "研究笔记示例"
+format: html
+bibliography: ./参考文献.bib
+---
+
+本文和参考文献均为虚构示例，用于演示 Quarto 源文件的只读文本预览。
+
+公式：$E = mc^2$。引用示例：[@example2026]。

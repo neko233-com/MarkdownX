@@ -16,4 +16,6 @@ Use `+` beside My documents to open more folders together. Distinct icons and co
 
 ## Explore more
 
+Open `论文附件示例.docxxml` to try its card and inline links to the nearby sample PDF in the read-only Windows viewer.
+
 Open Home for guides to writing and interactive books. Keep this sample or replace it with your own content.

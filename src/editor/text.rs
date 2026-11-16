@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// One visual (wrapped) row of a block.
 #[derive(Clone, Debug)]
@@ -43,6 +44,10 @@ pub struct TextLayout {
     pub eqs: Vec<(usize, Bounds<Pixels>)>,
     /// 按钮: byte offset and window bounds of the button box.
     pub buttons: Vec<(usize, Bounds<Pixels>)>,
+    /// Inline images occupy one object character, like other inline objects.
+    pub images: Vec<(usize, Bounds<Pixels>)>,
+    #[cfg(feature = "devtools")]
+    pub decoded_inline_images: usize,
 }
 
 impl TextLayout {
@@ -226,6 +231,7 @@ pub struct RichTextElement {
     /// The button whose 按钮设置 panel is open (`.editing`), shown with
     /// the panel's unsaved values.
     pub button_edit: Option<(usize, crate::model::InlineButton)>,
+    pub inline_images: HashMap<String, (Option<std::path::PathBuf>, Option<(f32, f32)>)>,
 }
 
 pub struct Prepared {
@@ -279,14 +285,42 @@ enum EqBody {
     /// 日期提醒: the clock icon box (x, y, size), filled when it notifies,
     /// and the date text from `text_x`.
     Reminder { line: ShapedLine, icon: [f32; 3], icon_color: Hsla, filled: bool, text_x: f32 },
+    Image { data: Option<Arc<RenderImage>>, alt: ShapedLine },
 }
 
 enum ObjSrc {
-    Eq(String),
+    Eq(String, bool),
     Btn(crate::model::InlineButton, bool),
     File(crate::model::FileBlock),
     Rem(crate::model::InlineReminder),
     Doc(crate::model::InlineDocLink),
+    Image(crate::model::InlineImage, Option<std::path::PathBuf>, Option<(f32, f32)>),
+}
+
+fn inline_image_geom(ix: usize, image: &crate::model::InlineImage, natural: Option<(f32, f32)>, row_w: f32, data: Option<Arc<RenderImage>>, spec: &TextSpec, window: &mut Window) -> EqGeom {
+    let (natural_w, natural_h) = natural.filter(|(w, h)| *w > 0. && *h > 0.).unwrap_or((160., 90.));
+    let scale = (220. / natural_w).min(180. / natural_h).min((row_w - 4.).max(1.) / natural_w).min(1.);
+    let (w, h) = ((natural_w * scale).max(1.), (natural_h * scale).max(1.));
+    let alt: String = image.alt.chars().take(12).collect();
+    let font = font_for(spec, &Marks::default());
+    let run = TextRun { len: alt.len(), font, color: Theme::text_caption(), background_color: None, underline: None, strikethrough: None };
+    let alt = window.text_system().shape_line(alt.into(), px(spec.size.min(12.)), &[run], None);
+    EqGeom { ix, display: false, adv: w + 4., box_h: h + 4., view: [2., -h / 2., w, h], placeholder: false, ext: None, body: EqBody::Image { data, alt } }
+}
+
+fn inline_image_frame(image: &RenderImage) -> usize {
+    let count = image.frame_count();
+    if count <= 1 { return 0; }
+    thread_local! { static START: std::time::Instant = std::time::Instant::now(); }
+    let delay = |index| std::time::Duration::from(image.delay(index)).as_millis().max(20);
+    let total: u128 = (0..count).map(delay).sum();
+    let mut elapsed = START.with(|start| start.elapsed().as_millis() % total);
+    for index in 0..count {
+        let duration = delay(index);
+        if elapsed < duration { return index; }
+        elapsed -= duration;
+    }
+    0
 }
 
 thread_local! {
@@ -441,8 +475,8 @@ fn button_geom(ix: usize, b: &crate::model::InlineButton, editing: bool, spec: &
     }
 }
 
-fn eq_geom(ix: usize, src: &str, fs: f32, row_w: f32, color: Hsla, eqno: u32, window: &mut Window) -> EqGeom {
-    let display = math::is_block(src);
+fn eq_geom(ix: usize, (src, force_display): (&str, bool), fs: f32, row_w: f32, color: Hsla, eqno: u32, window: &mut Window) -> EqGeom {
+    let display = force_display || math::is_block(src);
     let parsed = if src.trim().is_empty() { None } else { Some(math::layout(src, display, math::FONT_PX, color, eqno, window)) };
     let Some(Some(m)) = parsed else {
         // `.equation-block-placeholder` / `-error-placeholder`: 14px/20px,
@@ -738,11 +772,16 @@ impl Element for RichTextElement {
                 let Some(obj) = m.inline.as_ref() else { continue };
                 if let Some(src) = obj.equation() {
                     for (i, _) in self.text.text[r.clone()].char_indices() {
-                        eq_src.push((r.start + i, ObjSrc::Eq(src.to_string())));
+                        eq_src.push((r.start + i, ObjSrc::Eq(src.to_string(), obj.is_display_equation())));
                     }
                 } else if let Some(f) = obj.file() {
                     for (i, _) in self.text.text[r.clone()].char_indices() {
                         eq_src.push((r.start + i, ObjSrc::File(f.clone())));
+                    }
+                } else if let Some(image) = obj.image() {
+                    let (path, size) = self.inline_images.get(&image.src).cloned().unwrap_or_default();
+                    for (i, _) in self.text.text[r.clone()].char_indices() {
+                        eq_src.push((r.start + i, ObjSrc::Image(image.clone(), path.clone(), size)));
                     }
                 } else if let Some(l) = obj.doc_link() {
                     for (i, _) in self.text.text[r.clone()].char_indices() {
@@ -789,7 +828,7 @@ impl Element for RichTextElement {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         let st = state.clone();
-        let layout_id = window.request_measured_layout(style, move |known, available, window, _cx| {
+        let layout_id = window.request_measured_layout(style, move |known, available, window, cx| {
             let wrap_width = if wrap {
                 known.width.or(match available.width {
                     AvailableSpace::Definite(x) => Some(x),
@@ -813,8 +852,8 @@ impl Element for RichTextElement {
             let eqs: Vec<Rc<EqGeom>> = eq_src
                 .iter()
                 .map(|(ix, src)| match src {
-                    ObjSrc::Eq(src) => {
-                        let g = Rc::new(eq_geom(*ix, src, fs, row_w, color, eqno, window));
+                    ObjSrc::Eq(src, display) => {
+                        let g = Rc::new(eq_geom(*ix, (src, *display), fs, row_w, color, eqno, window));
                         eqno += math::numbers_in(src);
                         g
                     }
@@ -822,6 +861,11 @@ impl Element for RichTextElement {
                     ObjSrc::File(f) => Rc::new(file_geom(*ix, f, &spec, row_w, window)),
                     ObjSrc::Rem(r) => Rc::new(reminder_geom(*ix, r, &spec, window)),
                     ObjSrc::Doc(l) => Rc::new(doc_geom(*ix, l, &spec, row_w, window)),
+                    ObjSrc::Image(image, path, natural) => {
+                        let data = path.as_ref().and_then(|path| window.use_asset::<ImageAssetLoader>(&Resource::from(path.clone()), cx)).and_then(Result::ok);
+                        if data.as_ref().is_some_and(|image| image.frame_count() > 1) { window.request_animation_frame(); }
+                        Rc::new(inline_image_geom(*ix, image, *natural, row_w, data, &spec, window))
+                    }
                 })
                 .collect();
             let mut start = 0;
@@ -916,7 +960,9 @@ impl Element for RichTextElement {
                 y += h;
             }
         }
-        let mut layout = TextLayout { bounds, lines: p.lines, rows, line_height: lh, mono: self.spec.mono, eqs: vec![], buttons: vec![] };
+        let mut layout = TextLayout { bounds, lines: p.lines, rows, line_height: lh, mono: self.spec.mono, eqs: vec![], buttons: vec![], images: vec![],
+            #[cfg(feature = "devtools")]
+            decoded_inline_images: 0 };
         let mut placed = vec![];
         for e in p.eqs {
             let ri = layout.row_for(e.ix);
@@ -929,7 +975,11 @@ impl Element for RichTextElement {
             let origin = point(bounds.left() + x, if e.ext.is_some() { line_top } else { line_top + base - px(EQ_MIDDLE * self.spec.size) });
             let [vx, vy, vw, vh] = e.view;
             let view = Bounds::new(point(origin.x + px(vx), origin.y + px(vy)), size(px(vw), px(vh)));
-            if e.ext.is_some() {
+            if matches!(&e.body, EqBody::Image { .. }) {
+                layout.images.push((e.ix, view));
+                #[cfg(feature = "devtools")]
+                if matches!(&e.body, EqBody::Image { data: Some(_), .. }) { layout.decoded_inline_images += 1; }
+            } else if e.ext.is_some() {
                 layout.buttons.push((e.ix, view));
             } else {
                 layout.eqs.push((e.ix, view));
@@ -984,7 +1034,7 @@ impl Element for RichTextElement {
                 // (`.equation-leaf ::selection` is transparent).
                 let mut parts = vec![];
                 let mut a = sel.start;
-                let mut objs: Vec<usize> = layout.eqs.iter().chain(&layout.buttons).map(|(ix, _)| *ix).collect();
+                let mut objs: Vec<usize> = layout.eqs.iter().chain(&layout.buttons).chain(&layout.images).map(|(ix, _)| *ix).collect();
                 objs.sort();
                 for ix in objs.iter().filter(|ix| sel.start <= **ix && **ix < sel.end) {
                     if a < *ix {
@@ -1042,6 +1092,15 @@ impl Element for RichTextElement {
                 EqBody::File { .. } => self.paint_file(eq, window, cx),
                 EqBody::Doc { .. } => self.paint_doc(eq, window, cx),
                 EqBody::Reminder { .. } => self.paint_reminder(eq, window, cx),
+                EqBody::Image { data, alt } => {
+                    if let Some(data) = data {
+                        let frame = inline_image_frame(data);
+                        let _ = window.paint_image(eq.view, Corners::all(px(4.)), data.clone(), frame, false);
+                    } else {
+                        window.paint_quad(fill(eq.view, Theme::fill_hover()).corner_radii(px(4.)));
+                        let _ = alt.paint(point(eq.view.left() + px(4.), eq.view.center().y - (alt.ascent + alt.descent) / 2.), alt.ascent + alt.descent, window, cx);
+                    }
+                }
                 EqBody::Text { line, at, icon } => {
                     let top = o.y + px(at[1]) - line.ascent;
                     let _ = line.paint(point(o.x + px(at[0]), top), line.ascent + line.descent, window, cx);

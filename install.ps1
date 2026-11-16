@@ -349,7 +349,7 @@ try {
         $installed = $true
     } catch { $failure = $_ }
     finally {
-        $serverNeedsRestart = $serverStopped -or ($servers.Count -and $servers[0].HasExited) -or ($installed -and $servers.Count -eq 0)
+        $serverNeedsRestart = $serverStopped -or ($servers.Count -and $servers[0].HasExited)
         if ($serverNeedsRestart -and @(Get-InstalledProcesses 'markdownx-server' $serverPath).Count -eq 0) {
             try { Start-InstalledServer } catch { if (-not $failure) { $failure = $_ } else { Write-Warning 'The collaboration server could not be restarted.' } }
         }

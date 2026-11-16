@@ -94,7 +94,7 @@ impl Workspace {
     /// Write "<标题> 副本" of `id` to the library; the caller refreshes the list.
     pub(crate) fn copy_doc(&mut self, id: &str, cx: &mut Context<Self>) -> Option<String> {
         let mut doc = self.doc_of(id, cx)?;
-        let title = crate::localized_format!("{} 副本", "{} copy", display_title(&doc.title.text));
+        let title = crate::localized_format!("{} 副本", "{} copy", display_title(&doc.title.plain_text()));
         doc.title = crate::model::RichText::plain(title);
         let width = self.entries.iter().find(|e| e.id == id).map(|e| e.meta.width).unwrap_or_default();
         match self.store.create_from(&doc) {

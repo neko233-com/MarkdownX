@@ -7,7 +7,7 @@ use crate::app::Workspace;
 use crate::input::{TextField, TextFieldEvent};
 use crate::spreadsheet_save::{SaveError, SpreadsheetDocument};
 use crate::theme::Theme;
-use crate::trash::{close_button, dialog};
+use crate::trash::close_button;
 use crate::ui::{TipExt, TipSide, ToastKind};
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -899,9 +899,10 @@ impl Workspace {
     pub(crate) fn render_spreadsheet_preview(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.spreadsheet_preview.as_ref()?;
         let title = state.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let width = (f32::from(window.viewport_size().width) - 32.).clamp(250., 920.);
-        let height = (f32::from(window.viewport_size().height) - 32.).clamp(250., 650.);
-        let mut content = dialog("spreadsheet-preview").relative().w(px(width)).h(px(height)).flex().flex_col()
+        let left = if self.sidebar_open { self.sidebar_w(window) } else { 0. };
+        let width = (f32::from(window.viewport_size().width) - left).max(1.);
+        let height = f32::from(window.viewport_size().height).max(1.);
+        let mut content = div().id("spreadsheet-preview").relative().w(px(width)).h(px(height)).bg(Theme::bg_body()).flex().flex_col()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .capture_key_down(cx.listener(|w, event: &KeyDownEvent, window, cx| {
                 let modifiers = event.keystroke.modifiers;
@@ -1099,7 +1100,7 @@ impl Workspace {
                 .on_click(cx.listener(|w, _, _, cx| { w.spreadsheet_preview = None; cx.notify(); }))
                 .child(crate::settings::tr("确认放弃未保存的修改", "Confirm discard unsaved changes")));
         }
-        Some(crate::transfer::mask("spreadsheet-mask", content, |w, cx| w.close_spreadsheet_preview(cx), cx))
+        Some(crate::transfer::preview_pane("spreadsheet-pane", content, left))
     }
 }
 

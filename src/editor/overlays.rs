@@ -333,6 +333,7 @@ impl Editor {
         }
         out.extend(self.table_toolbar(window, cx));
         out.extend(self.image_toolbar(window, cx));
+        out.extend(self.inline_image_toolbar(window, cx));
         out.extend(self.file_toolbar(window, cx));
         out.extend(self.link_card(window, cx));
         out.extend(self.button_layers(window, cx));

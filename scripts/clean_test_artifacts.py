@@ -48,7 +48,7 @@ def targets() -> list[Path]:
     found.extend(sorted(ROOT.glob(".dsh-*")))
     for name in ("test-results", "playwright-report", ".pytest_cache"):
         found.append(ROOT / name)
-    for parent in (ROOT, ROOT / "web", ROOT / "server", ROOT / "examples", ROOT / "scripts", ROOT / "tools"):
+    for parent in (ROOT, ROOT / "web", ROOT / "server", ROOT / "examples", ROOT / "scripts", ROOT / "tools", ROOT / "tools" / "harness", ROOT / "tools" / "agent"):
         if not parent.is_dir():
             continue
         for pycache in parent.glob("__pycache__"):

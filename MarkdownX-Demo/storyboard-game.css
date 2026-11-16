@@ -1,0 +1,2 @@
+@import "./storyboard-palette.css";
+#slate { background: #24364b url("./storyboard-shots/02.svg") center / cover; border: 3px solid #f7e8bd; cursor: pointer; }

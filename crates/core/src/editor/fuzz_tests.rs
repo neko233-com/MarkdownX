@@ -26,7 +26,9 @@ const SEED_DOC: &str = r#"<title>随机 <b>编辑</b></title>
 <grid><column width-ratio="0.5"><p>左</p></column><column width-ratio="0.5"><p>右</p><p>右二</p></column></grid>
 <table><colgroup><col width="120"/><col width="80"/><col width="80"/></colgroup><thead><tr><th><p>A</p></th><th><p>B</p></th><th><p>C</p></th></tr></thead><tbody><tr><td colspan="2" rowspan="2"><p>合并</p><ul><li>格内列表</li></ul></td><td><p>3</p></td></tr><tr><td><p>6</p></td></tr><tr><td><p>7</p></td><td><p>8</p></td><td><pre lang="text"><code>a
 b</code></pre></td></tr></tbody></table>
-<p>公式 <latex>E=mc^2</latex> 结束</p>
+<p>公式 <latex>E=mc^2</latex> 图片 <inline-image src="assets/a.png" alt="画面"/> 结束</p>
+<p><latex display="block">\frac{a}{b}</latex></p>
+<img href="assets/a.png"/>
 <p></p>
 "#;
 
@@ -116,7 +118,7 @@ fn step(c: &mut Core, rng: &mut Rng) -> String {
     }
     let us = c.units();
     let any = |rng: &mut Rng| rng.pick(&us).id;
-    match rng.below(23) {
+    match rng.below(25) {
         0..=2 => {
             let s = *rng.pick(TEXTS);
             c.insert_text(s);
@@ -211,6 +213,27 @@ fn step(c: &mut Core, rng: &mut Rng) -> String {
         }
         20 => table_step(c, rng),
         21 => object_step(c, rng),
+        22 => {
+            let mut images = vec![];
+            c.doc.for_each_block(|b| if let BlockKind::Image { src, .. } = &b.kind { images.push((b.id, src.clone())); });
+            let (id, src) = images.get(rng.below(images.len())).cloned().unwrap_or((any(rng), String::new()));
+            let next = if src == "assets/a.png" { "https://example.test/a.png" } else { "assets/a.png" };
+            c.replace_image_source(id, &src, next);
+            format!("replace_image_source({id:?})")
+        }
+        23 => {
+            let mut images = vec![];
+            c.doc.for_each_block(|b| {
+                for (range, marks) in b.text.spans() {
+                    if let Some(image) = marks.inline.as_ref().and_then(Inline::image) { images.push((Pos::new(b.id, range.start), b.text.clone(), image.src.clone())); }
+                }
+            });
+            if let Some((at, expected, src)) = images.get(rng.below(images.len())).cloned() {
+                let next = if src == "assets/a.png" { "https://example.test/a.png" } else { "assets/a.png" };
+                c.replace_inline_image_source(at, &expected, next);
+            }
+            "replace_inline_image_source".into()
+        }
         _ => {
             c.trailing_line();
             "trailing_line".into()

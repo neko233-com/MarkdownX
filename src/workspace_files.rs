@@ -50,6 +50,54 @@ pub(crate) fn validate_external_open(root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Resolve a Markdown link from its document while staying inside this workspace.
+pub(crate) fn resolve_relative_link(root: &Path, document: &Path, href: &str) -> Result<PathBuf> {
+    resolve_relative_link_inner(root, document, href, false)
+}
+
+/// Export must preserve where a not-yet-created target belongs, without
+/// treating a file in the destination directory as the source target.
+pub(crate) fn resolve_relative_link_for_export(root: &Path, document: &Path, href: &str) -> Result<PathBuf> {
+    resolve_relative_link_inner(root, document, href, true)
+}
+
+fn resolve_relative_link_inner(root: &Path, document: &Path, href: &str, allow_missing: bool) -> Result<PathBuf> {
+    ensure!(crate::paste::relative_link_ok(href), "unsupported relative link");
+    ensure!(!href.contains('#'), "resolve a file path without its heading fragment");
+    let decoded = crate::transfer::percent_decode(href);
+    ensure!(crate::paste::relative_path_ok(&decoded), "unsupported relative link");
+    let canonical_root = root.canonicalize().context("workspace is unavailable")?;
+    let source = document.canonicalize().context("document is unavailable")?;
+    ensure!(source.is_file() && source.starts_with(&canonical_root), "document is outside this workspace");
+    let mut relative = source.parent().context("document has no parent")?.strip_prefix(&canonical_root)?.to_path_buf();
+    for component in Path::new(&decoded).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(name) => relative.push(name),
+            Component::ParentDir => ensure!(relative.pop(), "path is outside this workspace"),
+            _ => bail!("unsupported relative link"),
+        }
+    }
+    let target = canonical_root.join(&relative);
+    if allow_missing {
+        let mut cursor = canonical_root.clone();
+        let mut parts = relative.components().peekable();
+        while let Some(component) = parts.next() {
+            cursor.push(component.as_os_str());
+            match fs::symlink_metadata(&cursor) {
+                Ok(meta) => {
+                    ensure!(!is_link(&meta), "symbolic links and junctions cannot be followed");
+                    if parts.peek().is_some() { ensure!(meta.is_dir(), "link parent is not a directory"); }
+                    else { ensure!(meta.is_file() || meta.is_dir(), "not a regular file or directory"); }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    } else { validate_external_open(&canonical_root, &target)?; }
+    Ok(root.join(relative))
+}
+
 pub(crate) fn create(root: &Path, parent: &Path, name: &str, dir: bool, protected: &[PathBuf]) -> Result<PathBuf> {
     let xlsx = !dir && Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xlsx"));
     let content = if xlsx { include_bytes!("../assets/empty-workbook.xlsx").as_slice() } else { &[] };
@@ -207,6 +255,43 @@ fn send_to_trash(paths: Vec<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn relative_links_resolve_from_document_and_stay_in_workspace() {
+        let base = std::env::temp_dir().join(format!("markdownx-relative-link-{}", uuid::Uuid::new_v4()));
+        let root = base.join("workspace");
+        let dir = root.join("chapters");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("story.md");
+        let target = dir.join("合同 (1).pdf");
+        let hash_target = dir.join("合同 #1.pdf");
+        let top = root.join("index.md");
+        fs::write(&source, "story").unwrap();
+        fs::write(&target, "pdf").unwrap();
+        fs::write(&hash_target, "pdf-hash").unwrap();
+        fs::write(&top, "index").unwrap();
+        fs::write(base.join("outside.md"), "keep").unwrap();
+        for link in ["./合同%20%281%29.pdf", "合同%20%281%29.pdf"] {
+            assert_eq!(resolve_relative_link(&root, &source, link).unwrap(), target);
+        }
+        assert_eq!(resolve_relative_link(&root, &source, "../index.md").unwrap(), top);
+        assert_eq!(resolve_relative_link(&root, &source, "./合同%20%231.pdf").unwrap(), hash_target);
+        assert_eq!(resolve_relative_link_for_export(&root, &source, "./future%20%231.pdf").unwrap(), dir.join("future #1.pdf"));
+        assert_eq!(resolve_relative_link_for_export(&root, &source, "nested/future.md").unwrap(), dir.join("nested/future.md"));
+        assert!(resolve_relative_link_for_export(&root, &source, "../../outside.md").is_err());
+        assert!(resolve_relative_link_for_export(&root, &source, "story.md/child.pdf").is_err());
+        assert_eq!(resolve_relative_link_for_export(&root, &source, "..").unwrap(), root);
+        assert_eq!(resolve_relative_link_for_export(&root, &source, ".").unwrap(), dir);
+        for link in ["../../outside.md", "%2e%2e/%2e%2e/outside.md", "missing.md", "/outside.md", "C:/outside.md", "https://example.test/", "story.md#heading", "a%5cb.md", "a%3ab"] {
+            assert!(resolve_relative_link(&root, &source, link).is_err(), "{link}");
+        }
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(base.join("outside.md"), dir.join("link.md")).is_ok() {
+            assert!(resolve_relative_link(&root, &source, "link.md").is_err());
+            assert!(resolve_relative_link_for_export(&root, &source, "link.md").is_err());
+        }
+        assert_eq!(fs::read_to_string(base.join("outside.md")).unwrap(), "keep");
+        fs::remove_dir_all(base).unwrap();
+    }
     #[test]
     fn creates_xlsx_exclusively_and_keeps_workbook_type_on_rename() {
         let root = std::env::temp_dir().join(format!("markdownx-new-xlsx-{}", uuid::Uuid::new_v4()));

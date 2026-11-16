@@ -28,6 +28,10 @@ pub enum EditorEvent {
     Catalogue(bool),
     /// A cross-file `[[wiki]]` link was clicked.
     OpenWiki(String),
+    /// A Markdown file link, resolved by the workspace against the open file.
+    OpenRelativeLink(String),
+    /// Open an attachment through the workspace's built-in preview.
+    OpenAttachment(std::path::PathBuf),
     /// A 子页面列表 item or an @文档 link was clicked.
     OpenDoc(String),
     /// A 反向引用 line: that document, scrolled to its nth block.
@@ -108,6 +112,12 @@ pub type BoundsMap = Rc<RefCell<HashMap<BlockId, Bounds<Pixels>>>>;
 
 pub struct Editor {
     pub core: Core,
+    /// Folder of an editable Markdown file; new image assets belong beside it.
+    pub(crate) image_base: Option<std::path::PathBuf>,
+    /// Workspace boundary for resolving dependencies of embedded assets.
+    pub(crate) asset_root: Option<std::path::PathBuf>,
+    /// Directory of the opened document, used by inline CSS references.
+    pub(crate) asset_base: Option<std::path::PathBuf>,
     pub focus: FocusHandle,
     pub cache: LayoutCache,
     /// Window bounds of every rendered block wrapper (last frame).
@@ -358,6 +368,9 @@ impl Editor {
         let mut e = Editor {
             core: Core::new(doc),
             focus: cx.focus_handle(),
+            image_base: None,
+            asset_root: None,
+            asset_base: None,
             cache: Default::default(),
             block_bounds: Default::default(),
             list: ListState::new(0, ListAlignment::Top, px(600.)),
@@ -954,7 +967,7 @@ impl Editor {
     }
 
     fn insert_image_bytes(&mut self, bytes: &[u8], ext: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let b = match super::image::image_block_from(bytes, ext) {
+        let b = match super::image::image_block_from_in(bytes, ext, self.image_base.as_deref()) {
             Ok(b) => b,
             Err(msg) => return self.toast(msg, cx),
         };
@@ -962,6 +975,13 @@ impl Editor {
         let p = self.core.ensure_paragraph_after(nid);
         self.core.sel = Selection::caret(Pos::new(p, 0));
         self.changed(window, cx);
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scripted_insert_image(&mut self, path: &std::path::Path, window: &mut Window, cx: &mut Context<Self>) {
+        let bytes = std::fs::read(path).expect("scripted image");
+        let ext = path.extension().and_then(|s| s.to_str()).expect("image extension");
+        self.insert_image_bytes(&bytes, ext, window, cx);
     }
 
     // ---- links, languages, colors
@@ -1836,7 +1856,7 @@ impl Editor {
         };
         let html = html.filter(|_| !plain && rich_target).map(|h| {
             let mut b = crate::paste::html_to_blocks(&h);
-            super::image::localize_pasted_images(&mut b);
+            super::image::localize_pasted_images_in(&mut b, self.image_base.as_deref());
             b
         });
         // HTML that only restates the text (a lone link to it, or the text
@@ -2219,6 +2239,17 @@ impl Editor {
             // The paragraph comes on release (a drag inserts nothing).
             self.gap_press = Some(ev.position);
             self.core.clear_block_sel();
+            return cx.notify();
+        }
+        if ev.click_count == 1 && !ev.modifiers.shift && !self.read_only && self.link_under(ev.position).is_none()
+            && let Some(at) = self.inline_image_under(ev.position)
+        {
+            self.core.clear_block_sel();
+            self.goal_x = None;
+            self.set_caret(at, false);
+            self.dragging = false;
+            window.prevent_default();
+            self.restart_blink(window, cx);
             return cx.notify();
         }
         let Some(pos) = self.pos_at(ev.position) else { return };

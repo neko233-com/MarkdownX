@@ -197,13 +197,26 @@ impl Editor {
     }
 
     pub(super) fn link_input_ok(&self, cx: &App) -> bool {
-        is_link_input(self.link_field.read(cx).text.trim())
+        let link = self.link_field.read(cx).text.trim();
+        is_link_input(link) || self.local_link_input(link)
+    }
+
+    fn local_link_input(&self, link: &str) -> bool {
+        if link.starts_with('#') { return crate::paste::relative_link_ok(link); }
+        let Some(base) = self.image_base.as_deref() else { return false };
+        if !crate::paste::relative_link_ok(link) { return false; }
+        let path = crate::paste::split_relative_link(link).map_or(link, |(path, _)| path);
+        if link.starts_with("./") || link.starts_with("../") || base.join(crate::transfer::percent_decode(path)).is_file() { return true; }
+        if link.starts_with("www.") { return false; }
+        let extension = std::path::Path::new(path).extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+        matches!(extension.as_str(), "md" | "markdown" | "mdxb" | "docxxml" | "pdf" | "caj" | "ofd" | "docx" | "odt" | "rtf" | "tex" | "bib" | "qmd" | "rmd" | "png" | "jpg" | "jpeg" | "svg" | "gif" | "webp" | "mp4" | "webm" | "mp3" | "wav") || !is_link_input(link)
     }
 
     pub(super) fn submit_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Menu::Link { block, range, only_link }) = self.menu.clone() else { return };
         let link = self.link_field.read(cx).text.trim().to_string();
-        if !is_link_input(&link) {
+        let local = self.local_link_input(&link);
+        if !local && !is_link_input(&link) {
             return;
         }
         let (orig_text, orig_link) = self.link_ui.orig.clone();
@@ -215,8 +228,8 @@ impl Editor {
         if text == orig_text && link == orig_link {
             return;
         }
-        let url = normalize(&link);
-        if !contains_url(&url) {
+        let url = if local { link.clone() } else { normalize(&link) };
+        if !local && !contains_url(&url) {
             return self.toast(crate::settings::text("请输入有效的链接。"), cx);
         }
         self.core.sel = Selection { anchor: Pos::new(block, range.start), head: Pos::new(block, range.end) };
@@ -549,8 +562,27 @@ impl Editor {
         if let Some(url) = self.link_ui.click.take()
             && self.core.sel.is_collapsed()
         {
-            cx.open_url(&normalize(&url));
+            let path = crate::paste::split_relative_link(&url).map_or(url.as_str(), |(path, _)| path);
+            let local_www = url.starts_with("www.") && self.image_base.as_ref().is_some_and(|base| base.join(crate::transfer::percent_decode(path)).is_file());
+            if crate::paste::relative_link_ok(&url) && (!url.starts_with("www.") || local_www) {
+                cx.emit(super::view::EditorEvent::OpenRelativeLink(url));
+            } else { cx.open_url(&normalize(&url)); }
         }
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scripted_relative_link(&mut self, target: &str, cx: &mut Context<Self>) {
+        assert!(self.core.doc.blocks.iter().any(|block| block.text.runs.iter().any(|run| run.marks.link.as_deref() == Some(target))), "relative link not parsed: {target}");
+        assert!(self.core.sel.is_collapsed(), "test requires a collapsed selection");
+        self.link_ui.click = Some(target.to_string());
+        self.link_release(cx);
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scripted_heading_scroll(&self) {
+        let top = self.list.logical_scroll_top();
+        assert!(top.item_ix > 0 || f32::from(top.offset_in_item) > 0., "heading link did not scroll the document");
+        crate::logging::write("relative-link: heading scroll PASS");
     }
 
     /// Window rects of the link under the pointer (pointer cursor).

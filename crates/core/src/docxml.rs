@@ -527,6 +527,10 @@ pub fn to_inline(kind: InlineKind) -> Inline {
     let xml = match &kind {
         InlineKind::Equation(src) => format!("<latex>{}</latex>", esc(src)),
         InlineKind::File(f) => source_xml(f),
+        InlineKind::Image(image) => {
+            let kind = if matches!(image.src_kind.as_str(), "src" | "path" | "href" | "token") { image.src_kind.as_str() } else { "src" };
+            format!("<inline-image {kind}=\"{}\" alt=\"{}\"/>", esc_attr(&image.src), esc_attr(&image.alt))
+        }
         InlineKind::Button(b) => {
             let mut xml = format!("<button action=\"{}\"", b.action.name());
             if b.action == ButtonAction::OpenLink && !b.src.is_empty() {
@@ -556,6 +560,11 @@ pub fn to_inline(kind: InlineKind) -> Inline {
     }
 }
 
+/// A Markdown display equation uses the existing latex element and retains its source.
+pub fn to_display_equation(src: &str) -> Inline {
+    Inline { kind: InlineKind::Equation(src.to_string()), xml: format!("<latex display=\"block\">{}</latex>", esc(src)) }
+}
+
 /// Change an inline attachment's source while preserving its other XML attributes.
 pub fn remap_inline_file(inline: &mut Inline, file: FileBlock) -> Result<()> {
     let mut nodes = parse_dom(&inline.xml)?;
@@ -568,12 +577,29 @@ pub fn remap_inline_file(inline: &mut Inline, file: FileBlock) -> Result<()> {
     Ok(())
 }
 
+/// Change an inline image source without discarding unknown XML attributes.
+pub fn remap_inline_image(inline: &mut Inline, image: InlineImage) -> Result<()> {
+    let mut nodes = parse_dom(&inline.xml)?;
+    let Some(Node::El(element)) = nodes.first_mut() else { return Err(anyhow!("invalid inline image")); };
+    if element.name != "inline-image" { return Err(anyhow!("invalid inline image")); }
+    let key = if matches!(image.src_kind.as_str(), "src" | "path" | "href" | "token") { image.src_kind } else { "src".into() };
+    element.attrs.retain(|(name, _)| !matches!(name.as_str(), "src" | "path" | "href" | "token"));
+    element.attrs.push((key, image.src));
+    *inline = inline_of(element);
+    Ok(())
+}
+
 /// An inline element read from a file: kept verbatim, understood if we can.
 fn inline_of(e: &Element) -> Inline {
     let kind = match e.name.as_str() {
         "latex" => Some(InlineKind::Equation(code_text(&e.children))),
         // The attachment, as a card (its view once turned back into a block).
         "source" => Some(InlineKind::File(file_of(e, FileView::Card))),
+        "inline-image" => {
+            let (src_kind, src) = ["src", "path", "href", "token"].iter().find_map(|key| e.attr(key).map(|value| (key.to_string(), value.to_string())))
+                .unwrap_or(("src".into(), String::new()));
+            Some(InlineKind::Image(InlineImage { src_kind, src, alt: e.attr("alt").unwrap_or_default().to_string() }))
+        }
         "button" => {
             let action = match e.attr("action") {
                 Some("DuplicatePage") => ButtonAction::DuplicatePage,

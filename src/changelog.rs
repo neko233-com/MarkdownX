@@ -15,6 +15,102 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.45", &[
+        ("统一桌面与网页阅读器的中性灰阶，改善浅色与深色文字层级", "Unify desktop and web neutral colors with clearer light and dark contrast"),
+        ("手动检查更新显示持久状态，支持失败重试和打开正式发布下载页", "Show persistent update results, retry failures and open stable release downloads"),
+    ]),
+    ("0.1.44", &[
+        ("模块化互动内容可加载相对图片和媒体，分镜演示已更新", "Load module-relative images and media in interactive content, with an updated storyboard demo"),
+    ]),
+    ("0.1.43", &[
+        ("支持互动内容中模块脚本的相对导入，并增加演示", "Support relative ES module imports in interactive content and add a demo"),
+    ]),
+    ("0.1.42", &[
+        ("在设置中配置本机 PicGo 地址，改进上传连接处理", "Configure the local PicGo address in settings and improve upload response handling"),
+    ]),
+    ("0.1.41", &[
+        ("支持容器包裹的画布和视频，并增加分镜演示", "Support canvas and video in HTML containers with a storyboard demo"),
+    ]),
+    ("0.1.40", &[
+        ("网页阅读的图片、公式标题锚点与桌面保持一致", "Match web heading anchors to desktop for images and equations"),
+        ("论文演示增加图片与公式标题跳转", "Add image and equation heading links to the paper demo"),
+    ]),
+    ("0.1.39", &[
+        ("修复网页与 HTML/PDF 导出中带脚注标题的锚点及跳转", "Fix heading anchors and navigation with footnotes in web and HTML/PDF exports"),
+        ("跨盘导出保留已校验的本地文件链接", "Preserve verified local file links when exporting across volumes"),
+        ("论文演示增加带脚注标题和跳转链接", "Add a heading with a footnote and a navigation link to the paper demo"),
+    ]),
+    ("0.1.38", &[
+        ("阅读模式保留带脚注标题的原始锚点链接", "Preserve original links to headings containing footnotes in reading mode"),
+    ]),
+    ("0.1.37", &[
+        ("Markdown 阅读模式支持论文脚注跳转和返回，保留原文及编辑历史", "Read Markdown footnotes with navigation while preserving source and edit history"),
+    ]),
+    ("0.1.36", &[
+        ("修复论文导出时交错脚注的编号顺序和返回链接", "Fix numbering and backlinks for interleaved footnotes in exported papers"),
+    ]),
+    ("0.1.35", &[
+        ("保留粗体和引用式图片的原文，支持编辑相邻普通文字", "Preserve emphasis and reference-style images when editing adjacent plain text"),
+    ]),
+    ("0.1.34", &[
+        ("编辑嵌套列表中与图片同行的文字时保留原始图片语法", "Preserve original inline image markup when editing nested list text"),
+    ]),
+    ("0.1.33", &[
+        ("修复中文编号、制表符和多空格列表的嵌套层级", "Fix nested lists with Chinese numbering, tabs and multiple spaces"),
+        ("编辑嵌套列表文字时保留原始图片引用与缩进", "Preserve original image references and indentation when editing nested list text"),
+    ]),
+    ("0.1.32", &[
+        ("网页阅读保留嵌套列表与起始编号，列表中支持音视频和互动内容", "Preserve nested lists and numbering, with audio, video and interactive content in list items"),
+        ("打包列表中的本地媒体和译文资源，演示增加列表示例", "Package local list media and translated resources, with new examples"),
+    ]),
+    ("0.1.31", &[
+        ("缩进代码中的示例图片路径不再被当作真实资源，保留脚注与列表中的图片", "Keep image examples in indented code literal while packaging real footnote and list images"),
+    ]),
+    ("0.1.30", &[
+        ("网页阅读器的 Markdown 章节支持脚注、跳转和返回链接", "Render footnotes with navigation and backlinks in Markdown book chapters"),
+        ("论文演示增加脚注示例", "Add a footnote to the sample paper"),
+    ]),
+    ("0.1.29", &[
+        ("命令行内置 HTML 和 PDF 支持脚注编号、引用与返回链接", "Render footnote references and backlinks in built-in HTML and PDF exports"),
+    ]),
+    ("0.1.28", &[
+        ("分镜演示新增表格音视频和嵌套 source 写法，PDF 显示音频播放提示", "Add nested audio/video source examples and show audio playback notes in PDF"),
+    ]),
+    ("0.1.27", &[
+        ("命令行自动处理论文引用并生成 HTML 或 PDF，支持浏览器和 Typst 回退", "Process paper citations in automatic HTML/PDF conversion with browser and Typst fallbacks"),
+        ("Pandoc HTML 的本地链接随输出目录调整，缺失引文时保护已有文件", "Rebase local links in Pandoc HTML and protect existing files when citations are missing"),
+    ]),
+    ("0.1.26", &[
+        ("PDF 导出显示视频封面并改善互动内容的打印背景和分页", "Show video posters in PDF and improve interactive content backgrounds and pagination"),
+    ]),
+    ("0.1.25", &[
+        ("修复内嵌 SVG 和分镜图中的中文、镜号在预览及导出时可能丢失的问题", "Preserve labels in embedded and storyboard SVG images during preview and export"),
+    ]),
+    ("0.1.24", &[
+        ("HTML 与 PDF 导出兼容内嵌 SVG 和 BMP，和桌面预览使用相同的图片校验", "Export embedded SVG and BMP to HTML and PDF with the same image validation as desktop preview"),
+    ]),
+    ("0.1.23", &[
+        ("正文和表格中混排的本地图片可上传到 PicGo，保留原文格式与本地文件", "Upload local images mixed into text and tables to PicGo while preserving source formatting and local files"),
+        ("支持预览 Markdown 中 Base64 内嵌图片并在导出时保留原始数据", "Preview Base64 embedded images in Markdown and preserve their data on export"),
+    ]),
+    ("0.1.22", &[
+        ("工作区链接支持使用 #page=数字 跳到 PDF 或受支持 CAJ 的指定页面", "Workspace links can open a specified PDF or supported CAJ page with #page=number"),
+        ("页码无效或超出文档范围时给出提示，保护原文件与未保存的编辑", "Report invalid or missing pages while preserving source files and unsaved edits"),
+    ]),
+    ("0.1.21", &[
+        ("互动内容的媒体与脚本统一按文档目录查找，并限制在工作区内", "Resolve interactive media and scripts from the document directory and keep them within the workspace"),
+        ("缺失或越界的本地资源会显示错误，不再静默加载", "Show an error when local interactive resources are missing or outside the workspace"),
+    ]),
+    ("0.1.20", &[
+        ("分镜表格支持相对路径的视频和 Canvas，打包电子书时保留素材", "Use relative-path video and Canvas in storyboard tables and include their assets in books"),
+        ("新增只读 DOC、Office 模板和 EPUB 预览，增强文书脚注、批注与修订提取", "Preview legacy DOC, Office templates and EPUB, with improved notes, comments and revision extraction"),
+        ("增强文档压缩包校验，识别重复条目并提示缺失的关联内容", "Validate document archives and report duplicate entries or missing related content"),
+    ]),
+    ("0.1.19", &[
+        ("Markdown 相对路径图片、表格分镜及互动内容预览得到增强，并加入演示文件", "Improved Markdown relative-path images, storyboard tables and interactive previews, with new examples"),
+        ("支持只读 PDF、DOC、DOCX、OFD、EPUB 和更多论文及法律文档预览", "Read PDF, DOC, DOCX, OFD, EPUB and more research and legal documents in read-only previews"),
+        ("新增命令行转换和本地图片管理，阅读内容时目录树保持清晰", "Convert documents from the command line, manage local images and keep the file tree clear while reading"),
+    ]),
     ("0.1.18", &[
         ("工作区可直接打开和编辑 .xlsx、.xlsm、.xlam 表格，支持公式试算、格式、查找替换和工作表管理", "Open and edit .xlsx, .xlsm and .xlam workbooks with formulas, formats, find and replace, and worksheet management"),
         ("新增按后缀匹配的外部扩展，设置 › 扩展可逐个启停，匹配文件以只读 Markdown 预览打开", "Add suffix-matched external extensions with per-plugin switches in Settings › Extensions and read-only Markdown previews"),

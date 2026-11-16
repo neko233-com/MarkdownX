@@ -1,6 +1,8 @@
 # vendor 补丁
 
-`vendor/gpui` 是 crates.io 的 gpui 0.2.2，`vendor/taffy` 是 taffy 0.9.0，`vendor/xattr` 是 xattr 0.2.3，都打了本地补丁。项目通过 `Cargo.toml` 的 `[patch.crates-io]` 使用这些目录。补丁处都带 `quiet.md:` 注释；完整列表以下表和 diff 为准。
+`vendor/gpui` 是 crates.io 的 gpui 0.2.2，`vendor/taffy` 是 taffy 0.9.0，`vendor/xattr` 是 xattr 0.2.3，`vendor/proc-macro-error2` 是 proc-macro-error2 2.0.1，都打了本地补丁。项目通过 `Cargo.toml` 的 `[patch.crates-io]` 使用这些目录。补丁处都带 `quiet.md:` 注释；完整列表以下表和 diff 为准。
+
+`proc-macro-error2/src/lib.rs` 将公开重导出的 `proc_macro` extern crate 声明为 `pub`，消除 Rust E0365 未来不兼容警告；升级上游时应核对是否已修复。
 
 和上游对比：
 

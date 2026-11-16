@@ -182,9 +182,11 @@ fn render_html(src: &str, display: bool) -> Option<String> {
 }
 
 /// The equation as MathML (`<math>…</math>`), for HTML export.
-pub fn mathml(src: &str) -> Option<String> {
+pub fn mathml(src: &str) -> Option<String> { mathml_mode(src, is_block(src)) }
+
+pub fn mathml_mode(src: &str, display: bool) -> Option<String> {
     let mut settings = katex::types::Settings::default();
-    settings.display_mode = is_block(src);
+    settings.display_mode = display;
     settings.output = katex::types::OutputFormat::Mathml;
     settings.throw_on_error = true;
     let expr = format!("\\displaystyle {}", src.trim());

@@ -82,6 +82,10 @@ impl Workspace {
     }
 
     pub(crate) fn toggle_annotations(&mut self, cx: &mut Context<Self>) {
+        if self.file_read_editor.is_some() {
+            self.show_toast_kind(crate::ui::ToastKind::Info, crate::settings::tr("请切换到编辑模式查看或添加批注", "Switch to edit mode to view or add notes"), cx);
+            return;
+        }
         self.annotations_open = !self.annotations_open;
         if self.annotations_open {
             self.reload_annotations(cx);

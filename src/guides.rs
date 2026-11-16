@@ -103,12 +103,82 @@ pub fn create_workspace_demo(root: &Path, english: bool) -> anyhow::Result<Optio
     // The same empty default folder also gets a workbook, so the spreadsheet
     // editor can be tried without finding a file first.
     let workbook = if english { "Sales data.xlsx" } else { "销售数据.xlsx" };
-    fs::write(root.join(workbook), include_bytes!("../MarkdownX-Demo/销售数据.xlsx"))?;
+    fs::OpenOptions::new().write(true).create_new(true).open(root.join(workbook))?
+        .write_all(include_bytes!("../MarkdownX-Demo/销售数据.xlsx"))?;
+    // Seed the storyboard and its relative resources only in a new workspace.
+    fs::create_dir(root.join("storyboard-shots"))?;
+    for (name, bytes) in [
+        ("分镜与互动演示.md", include_bytes!("../MarkdownX-Demo/分镜与互动演示.md").as_slice()),
+        ("分镜资料.md", include_bytes!("../MarkdownX-Demo/分镜资料.md").as_slice()),
+        ("storyboard-shots/01.svg", include_bytes!("../MarkdownX-Demo/storyboard-shots/01.svg").as_slice()),
+        ("storyboard-shots/02.svg", include_bytes!("../MarkdownX-Demo/storyboard-shots/02.svg").as_slice()),
+        ("storyboard-shots/03.svg", include_bytes!("../MarkdownX-Demo/storyboard-shots/03.svg").as_slice()),
+        ("storyboard-shots/04(近景).svg", include_bytes!("../MarkdownX-Demo/storyboard-shots/04(近景).svg").as_slice()),
+        ("示例视频.mp4", include_bytes!("../MarkdownX-Demo/示例视频.mp4").as_slice()),
+        ("示例音频.wav", include_bytes!("../MarkdownX-Demo/示例音频.wav").as_slice()),
+        ("示例模型.obj", include_bytes!("../MarkdownX-Demo/示例模型.obj").as_slice()),
+        ("示例合同.rtf", include_bytes!("../MarkdownX-Demo/示例合同.rtf").as_slice()),
+        ("示例合同.docx", include_bytes!("../MarkdownX-Demo/示例合同.docx").as_slice()),
+        ("旧版合同示例.doc", include_bytes!("../MarkdownX-Demo/旧版合同示例.doc").as_slice()),
+        ("版式文书示例.ofd", include_bytes!("../MarkdownX-Demo/版式文书示例.ofd").as_slice()),
+        ("论文阅读示例.pdf", include_bytes!("../MarkdownX-Demo/论文阅读示例.pdf").as_slice()),
+        ("论文附件示例.docxxml", include_bytes!("../MarkdownX-Demo/论文附件示例.docxxml").as_slice()),
+        ("电子书论文示例.epub", include_bytes!("../MarkdownX-Demo/电子书论文示例.epub").as_slice()),
+        ("论文源文件示例.qmd", include_bytes!("../MarkdownX-Demo/论文源文件示例.qmd").as_slice()),
+        ("论文引用示例.md", include_bytes!("../MarkdownX-Demo/论文引用示例.md").as_slice()),
+        ("参考文献.bib", include_bytes!("../MarkdownX-Demo/参考文献.bib").as_slice()),
+        ("module-game.mjs", include_bytes!("../MarkdownX-Demo/module-game.mjs").as_slice()),
+        ("module-helper.mjs", include_bytes!("../MarkdownX-Demo/module-helper.mjs").as_slice()),
+        ("module-label.mjs", include_bytes!("../MarkdownX-Demo/module-label.mjs").as_slice()),
+        ("storyboard-data.json", include_bytes!("../MarkdownX-Demo/storyboard-data.json").as_slice()),
+        ("storyboard-game.js", include_bytes!("../MarkdownX-Demo/storyboard-game.js").as_slice()),
+        ("storyboard-game.css", include_bytes!("../MarkdownX-Demo/storyboard-game.css").as_slice()),
+        ("storyboard-palette.css", include_bytes!("../MarkdownX-Demo/storyboard-palette.css").as_slice()),
+    ] {
+        fs::OpenOptions::new().write(true).create_new(true).open(root.join(name))?.write_all(bytes)?;
+    }
     Ok(Some(path))
+}
+
+/// Create a separate demo on request without changing an existing folder or library.
+pub fn create_demo_folder(parent: &Path, protected: &Path, english: bool) -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let parent = parent.canonicalize()?;
+    anyhow::ensure!(parent.is_dir(), "demo location is not a folder");
+    if let Ok(protected) = protected.canonicalize() { anyhow::ensure!(!parent.starts_with(protected), "demo location is inside the document library"); }
+    for n in 1..=10000 {
+        let name = if n == 1 { "MarkdownX-Demo".to_string() } else { format!("MarkdownX-Demo-{n}") };
+        let root = parent.join(name);
+        match fs::create_dir(&root) {
+            Ok(()) => {
+                let starter = create_workspace_demo(&root, english)
+                    .map_err(|e| anyhow::anyhow!("could not populate {}: {e}", root.display()))?
+                    .ok_or_else(|| anyhow::anyhow!("demo folder was changed while being created: {}", root.display()))?;
+                return Ok((root, starter));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    anyhow::bail!("could not find an unused demo folder name")
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn requested_demo_uses_a_new_folder_and_avoids_the_library() {
+        let parent = std::env::temp_dir().join(format!("markdownx-request-demo-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(parent.join("MarkdownX-Demo")).unwrap();
+        std::fs::write(parent.join("MarkdownX-Demo/keep.txt"), "keep").unwrap();
+        std::fs::create_dir(parent.join("library")).unwrap();
+        assert!(super::create_demo_folder(&parent.join("library"), &parent.join("library"), false).is_err());
+        let (root, starter) = super::create_demo_folder(&parent, &parent.join("library"), false).unwrap();
+        assert_eq!(root.file_name().unwrap(), "MarkdownX-Demo-2");
+        assert!(starter.is_file() && root.join("分镜与互动演示.md").is_file());
+        assert_eq!(std::fs::read(root.join("论文附件示例.docxxml")).unwrap(), include_bytes!("../MarkdownX-Demo/论文附件示例.docxxml"));
+        assert!(root.join("论文阅读示例.pdf").is_file());
+        assert_eq!(std::fs::read_to_string(parent.join("MarkdownX-Demo/keep.txt")).unwrap(), "keep");
+        std::fs::remove_dir_all(parent).unwrap();
+    }
     /// Guides go only into an empty folder: an existing library, even one whose
     /// documents were all deleted, is never refilled or overwritten.
     #[test]
@@ -181,6 +251,16 @@ mod tests {
             let workbook = root.join(if english { "Sales data.xlsx" } else { "销售数据.xlsx" });
             let book = fdl_core::spreadsheet::read(&workbook).unwrap();
             assert!(book.sheets.iter().any(|sheet| sheet.name == "销售数据"));
+            assert!(root.join("分镜与互动演示.md").is_file());
+            for name in ["module-game.mjs", "module-helper.mjs", "module-label.mjs", "storyboard-data.json"] { assert!(root.join(name).is_file(), "missing {name}"); }
+            assert_eq!(std::fs::read(root.join("storyboard-game.js")).unwrap(), include_bytes!("../MarkdownX-Demo/storyboard-game.js"));
+            assert_eq!(std::fs::read(root.join("storyboard-game.css")).unwrap(), include_bytes!("../MarkdownX-Demo/storyboard-game.css"));
+            assert_eq!(std::fs::read(root.join("storyboard-palette.css")).unwrap(), include_bytes!("../MarkdownX-Demo/storyboard-palette.css"));
+            assert!(root.join("storyboard-shots/02.svg").is_file());
+            assert!(root.join("示例视频.mp4").is_file() && root.join("示例模型.obj").is_file());
+            assert_eq!(std::fs::read(root.join("示例音频.wav")).unwrap(), include_bytes!("../MarkdownX-Demo/示例音频.wav"));
+            assert!(root.join("示例合同.rtf").is_file() && root.join("示例合同.docx").is_file() && root.join("旧版合同示例.doc").is_file() && root.join("版式文书示例.ofd").is_file() && root.join("电子书论文示例.epub").is_file() && root.join("论文源文件示例.qmd").is_file() && root.join("论文阅读示例.pdf").is_file());
+            assert!(root.join("论文引用示例.md").is_file() && root.join("参考文献.bib").is_file());
             std::fs::write(&demo, "My own document").unwrap();
             assert!(super::create_workspace_demo(&root, !english).unwrap().is_none());
             assert_eq!(std::fs::read_to_string(&demo).unwrap(), "My own document");

@@ -156,6 +156,27 @@ pub fn local_path(f: &FileBlock) -> Option<PathBuf> {
     (f.src_kind != "token").then(|| image_path(&f.src)).flatten()
 }
 
+/// Workspace attachments are relative to their document; imported library
+/// attachments continue to use the library's asset directory.
+pub fn local_path_in(f: &FileBlock, base: Option<&Path>, root: Option<&Path>) -> Option<PathBuf> {
+    if f.src_kind == "token" { return None; }
+    let src = &f.src;
+    if src.starts_with("file://") { return url::Url::parse(src).ok()?.to_file_path().ok(); }
+    if Path::new(src).is_absolute() { return local_path(f).map(|path| dunce::simplified(&path).to_path_buf()); }
+    let Some(base) = base else { return local_path(f) };
+    if src.is_empty() || src.contains(':') { return None; }
+    let decoded = crate::transfer::percent_decode(src);
+    let local = base.join(&decoded);
+    let inside = |path: &Path| {
+        let canonical = path.canonicalize().ok()?;
+        if let Some(root) = root && !canonical.starts_with(root.canonicalize().ok()?) { return None; }
+        canonical.is_file().then(|| dunce::simplified(&canonical).to_path_buf())
+    };
+    if let Some(path) = inside(&local) { return Some(path); }
+    if !src.starts_with("./") && decoded.starts_with("assets/") && let Some(root) = root { return inside(&root.join(decoded)); }
+    None
+}
+
 #[derive(Clone, PartialEq)]
 enum Thumb {
     Pending,
@@ -265,6 +286,7 @@ fn make_thumb(p: &Path) -> Option<PathBuf> {
 }
 
 /// Opens the file in Quick Look (scripted runs only log it).
+#[cfg(target_os = "macos")]
 pub fn quick_look(p: &Path) {
     if crate::devtools::scripted() {
         eprintln!("quicklook {}", p.display());
@@ -329,7 +351,7 @@ impl R<'_> {
         // `hovered` covers the pointer over the block and its open handle
         // menu; only the menu gets the accent-tinted ring (as code blocks do).
         let menu_on = hovered && matches!(&ed.menu, Some(Menu::Block { block, .. }) | Some(Menu::Add { block, .. }) if *block == id);
-        let path = local_path(f);
+        let path = local_path_in(f, ed.asset_base.as_deref(), ed.asset_root.as_deref());
         let size = path.as_ref().and_then(|p| ed.file.size(p));
         let kind = kind_of(&f.name);
         let preview = (f.view == FileView::Preview && size.is_some()).then(|| preview_of(&f.name)).flatten();
@@ -618,6 +640,20 @@ impl R<'_> {
 }
 
 impl Editor {
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scripted_attachment_point(&self) -> Point<Pixels> {
+        let id = self.core.doc.blocks.iter().find_map(|block| match &block.kind {
+            BlockKind::File(file) if file.name.to_ascii_lowercase().ends_with(".pdf") => Some(block.id),
+            _ => None,
+        }).expect("PDF attachment is missing");
+        self.file.boxes.borrow().get(&id).expect("PDF attachment was not laid out").center()
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scripted_inline_attachment_point(&self) -> Point<Pixels> {
+        let block = self.core.doc.blocks.iter().find(|block| block.text.runs.iter().any(|run| run.marks.inline.as_ref().and_then(Inline::file).is_some())).expect("inline attachment is missing");
+        self.cache.borrow().get(&block.id).and_then(|layout| layout.buttons.first()).map(|(_, bounds)| bounds.center()).expect("inline attachment was not laid out")
+    }
     /// The attachment showing as selected (toolbar, accent rim).
     pub(super) fn active_file(&self, focused: bool) -> Option<BlockId> {
         let h = self.core.sel.head.block;
@@ -631,14 +667,17 @@ impl Editor {
 
     pub(super) fn open_file(&mut self, p: Option<&Path>, cx: &mut Context<Self>) {
         match p.filter(|p| p.is_file()) {
+            #[cfg(target_os = "macos")]
             Some(p) => quick_look(p),
+            #[cfg(not(target_os = "macos"))]
+            Some(p) => cx.emit(super::view::EditorEvent::OpenAttachment(p.to_path_buf())),
             None => self.toast(crate::settings::text("文件不存在"), cx),
         }
     }
 
     /// 下载: a copy where the save panel says (Downloads first).
     pub(super) fn download_file(&mut self, f: &FileBlock, cx: &mut Context<Self>) {
-        let Some(src) = local_path(f).filter(|p| p.is_file()) else { return self.toast(crate::settings::text("文件不存在"), cx) };
+        let Some(src) = local_path_in(f, self.asset_base.as_deref(), self.asset_root.as_deref()).filter(|p| p.is_file()) else { return self.toast(crate::settings::text("文件不存在"), cx) };
         let picked = crate::devtools::take_pick().and_then(|p| p.into_iter().next());
         let dir = dirs::download_dir().or_else(dirs::home_dir).unwrap_or_default();
         let rx = picked.is_none().then(|| cx.prompt_for_new_path(&dir, Some(&f.name)));
@@ -661,7 +700,7 @@ impl Editor {
 
     fn audio_player(&self, id: BlockId) -> Option<Rc<player::Player>> {
         let Some(BlockKind::File(f)) = self.core.kind_of(id) else { return None };
-        self.file.player(&local_path(f)?)
+        self.file.player(&local_path_in(f, self.asset_base.as_deref(), self.asset_root.as_deref())?)
     }
 
     fn toggle_audio(&mut self, id: BlockId, cx: &mut Context<Self>) {
@@ -759,7 +798,7 @@ impl Editor {
         let Some(BlockKind::File(f)) = self.core.kind_of(id) else { return None };
         let preview = preview_of(&f.name);
         let view = f.view;
-        let path = local_path(f);
+        let path = local_path_in(f, self.asset_base.as_deref(), self.asset_root.as_deref());
         let act = |f: fn(&mut Editor, BlockId, &mut Window, &mut Context<Editor>)| {
             cx.listener(move |e: &mut Editor, _: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
@@ -1077,7 +1116,35 @@ mod player {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, clock, format_size, kind_of, previewable};
+    use super::{FileBlock, FileView, Kind, clock, format_size, kind_of, local_path_in, previewable};
+
+    #[test]
+    fn workspace_attachments_use_document_directory_and_stay_inside_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        let base = root.join("chapter");
+        std::fs::create_dir_all(base.join("assets")).unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(base.join("assets/paper one.pdf"), b"chapter").unwrap();
+        std::fs::write(root.join("assets/paper one.pdf"), b"root").unwrap();
+        std::fs::write(temp.path().join("outside.pdf"), b"outside").unwrap();
+        let mut file = FileBlock { src_kind: "path".into(), src: "./assets/paper%20one.pdf".into(), name: "paper.pdf".into(), view: FileView::Card };
+        let resolve = |file: &FileBlock| local_path_in(file, Some(&base), Some(&root));
+        assert_eq!(std::fs::read(resolve(&file).unwrap()).unwrap(), b"chapter");
+        file.src = "assets/paper%20one.pdf".into();
+        assert_eq!(std::fs::read(resolve(&file).unwrap()).unwrap(), b"chapter");
+        std::fs::remove_file(base.join("assets/paper one.pdf")).unwrap();
+        assert_eq!(std::fs::read(resolve(&file).unwrap()).unwrap(), b"root");
+        file.src = "./assets/paper%20one.pdf".into();
+        assert!(resolve(&file).is_none());
+        file.src = "../../outside.pdf".into();
+        assert!(resolve(&file).is_none());
+        file.src = "assets/paper%20one.pdf".into(); file.src_kind = "token".into();
+        assert!(resolve(&file).is_none());
+        file.src_kind = "path".into();
+        file.src = url::Url::from_file_path(root.join("assets/paper one.pdf")).unwrap().to_string();
+        assert_eq!(std::fs::read(resolve(&file).unwrap()).unwrap(), b"root");
+    }
 
     #[test]
     fn sizes_and_kinds() {

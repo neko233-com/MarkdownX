@@ -10,15 +10,21 @@ pub const MANIFEST_FILE: &str = "plugin.json";
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BuiltinEditor { Markdown, DocxXml, Book, Spreadsheet, Image, Audio, Video, Model }
+pub enum BuiltinEditor { Markdown, DocxXml, Book, Spreadsheet, Image, Audio, Video, Model, Pdf, Research }
 
-/// Suffixes served without launching another process. Registration order is
-/// also the order the settings page shows.
+/// Built-in suffixes, some of which use isolated helpers for unsafe input.
+/// Registration order is also the order the settings page shows.
 pub const BUILTINS: &[(&str, BuiltinEditor, &[&str])] = &[
     ("builtin.markdown", BuiltinEditor::Markdown, &[".md", ".markdown", ".mark", ".txt"]),
     ("builtin.docxxml", BuiltinEditor::DocxXml, &[".docxxml"]),
     ("builtin.book", BuiltinEditor::Book, &[".mdxb"]),
     ("builtin.spreadsheet", BuiltinEditor::Spreadsheet, &[".xlsx", ".xlsm", ".xlam"]),
+    #[cfg(target_os = "windows")]
+    ("builtin.research", BuiltinEditor::Research, &[".doc", ".dot", ".docx", ".docm", ".dotx", ".dotm", ".odt", ".ott", ".ofd", ".epub", ".rtf", ".tex", ".ltx", ".sty", ".cls", ".bst", ".bib", ".ris", ".enw", ".nbib", ".csl", ".rmd", ".qmd", ".typ"]),
+    #[cfg(not(target_os = "windows"))]
+    ("builtin.research", BuiltinEditor::Research, &[".docx", ".docm", ".dotx", ".dotm", ".odt", ".ott", ".ofd", ".rtf", ".tex", ".ltx", ".sty", ".cls", ".bst", ".bib", ".ris", ".enw", ".nbib", ".csl", ".rmd", ".qmd", ".typ"]),
+    #[cfg(target_os = "windows")]
+    ("builtin.pdf", BuiltinEditor::Pdf, &[".pdf", ".caj"]),
     ("builtin.image", BuiltinEditor::Image, &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico", ".avif", ".tif", ".tiff"]),
     ("builtin.audio", BuiltinEditor::Audio, &[".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".wma"]),
     ("builtin.video", BuiltinEditor::Video, &[".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi", ".wmv"]),
@@ -191,8 +197,16 @@ mod tests {
             ("voice.mp3", BuiltinEditor::Audio), ("sound.flac", BuiltinEditor::Audio),
             ("clip.mp4", BuiltinEditor::Video), ("screen.webm", BuiltinEditor::Video),
             ("角色.glb", BuiltinEditor::Model), ("mesh.stl", BuiltinEditor::Model),
+            ("合同.RTF", BuiltinEditor::Research), ("paper.QMD", BuiltinEditor::Research),
+            ("contract.DOCM", BuiltinEditor::Research), ("template.dotx", BuiltinEditor::Research),
+            ("template.dotm", BuiltinEditor::Research), ("template.ott", BuiltinEditor::Research),
+            ("paper.typ", BuiltinEditor::Research), ("references.nbib", BuiltinEditor::Research),
         ] {
             assert_eq!(registry.resolve(Path::new(name)), Some(&Provider::Builtin(editor)), "{name}");
+        }
+        #[cfg(target_os = "windows")]
+        for name in ["contract.doc", "template.DOT", "paper.EPUB"] {
+            assert_eq!(registry.resolve(Path::new(name)), Some(&Provider::Builtin(BuiltinEditor::Research)), "{name}");
         }
         registry.register(manifest("example.game", &[".game", ".balance.JSON"])).unwrap();
         let plugin = registry.resolve(Path::new("角色.balance.json")).unwrap();

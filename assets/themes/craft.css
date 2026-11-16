@@ -83,61 +83,61 @@
   --border-purple: #ddd6ff;
 
   /* 其它界面细节（文档内的选中、悬停、表格工具等） */
-  --token-text-caption: #737477;
-  --token-text-placeholder: #9c9fa0;
-  --token-block-placeholder: #1f222540;
-  --token-text-disabled: #1f22254d;
-  --token-text-code: #303335;
-  --token-primary-500: #3a85f7;
+  --token-text-caption: #666666;
+  --token-text-placeholder: #737373;
+  --token-block-placeholder: #17171740;
+  --token-text-disabled: #1717174d;
+  --token-text-code: #262626;
+  --token-primary-500: #0070f3;
   --token-primary-fill-1: #f0f5fe;
-  --token-bg-overlay: #f7f7f7;
+  --token-bg-overlay: #f5f5f5;
   --token-line-divider: #0000000f;
   --token-line-border: #00000014;
   --token-fill-hover: #0000000b;
   --token-fill-hover-strong: #0000000f;
   --token-fill-pressed: #00000017;
   --token-fill-turninto-active: #e3edfd;
-  --token-block-hover: #3a85f714;
-  --token-block-selected: #3a85f724;
+  --token-block-hover: #0070f314;
+  --token-block-selected: #0070f324;
   --token-handle-active: #0000000f;
-  --token-size-cell: #f7f7f7;
-  --token-size-cell-border: #eaebeb;
+  --token-size-cell: #f5f5f5;
+  --token-size-cell-border: #e5e5e5;
   --token-size-cell-active: #9cc0fa;
   --token-size-cell-disabled: #e3edfd;
   --token-swatch-border: #00000014;
   --token-block-bg-area: #00000008;
   --token-scrollbar-thumb: #00000038;
   --token-shadow: #00000014;
-  --token-code-hover-ring: #3a85f759;
-  --token-pinned: #3a85f7;
-  --token-table-bar-hover: #dedfe0;
+  --token-code-hover-ring: #0070f359;
+  --token-pinned: #0070f3;
+  --token-table-bar-hover: #d4d4d4;
   --token-table-bar-selected: #c6dafc;
   --token-danger-bar: #ff6467;
   --token-danger-cell: #fef2f2;
   --token-danger: #e7000b;
-  --token-sidebar-text: #1f2225d9;
+  --token-sidebar-text: #171717d9;
   --token-sidebar-hover: #0000000b;
   --token-sidebar-selected: #00000012;
-  --token-sidebar-section: #333739;
+  --token-sidebar-section: #525252;
   --token-button-border: #00000013;
-  --token-code-gutter-line: #e8e8e8;
+  --token-code-gutter-line: #e5e5e5;
   --token-caption: #7e8287;
-  --token-menu-highlight: #3a85f7;
-  --token-popover-bg: #fafafa;
+  --token-menu-highlight: #0070f3;
+  --token-popover-bg: #ffffff;
 }
 
 .page {
   background-color: #ffffff;
-  color: #1f2225;
+  color: #171717;
   font-family: system-ui;
   font-size: 15px;
   line-height: 22px;
   max-width: 820px;
-  caret-color: #3a85f7;
+  caret-color: #0070f3;
 }
 
 ::selection {
-  background-color: #3a85f73d;
+  background-color: #0070f33d;
 }
 
 p {
@@ -248,19 +248,19 @@ strong {
 }
 
 a {
-  color: #105592;
+  color: #0c4f8b;
   text-decoration: none;
   text-decoration-color: inherit;
 }
 
 a:hover {
-  color: #144571;
+  color: #0f3e68;
 }
 
 code {
   color: inherit;
-  background-color: #f8f8f8;
-  border-color: #e2e3e3;
+  background-color: #f5f5f5;
+  border-color: #e5e5e5;
   border-radius: 3px;
   padding-left: 4px;
 }
@@ -270,20 +270,20 @@ pre {
   font-size: 13px;
   line-height: 20px;
   color: #4c4d50;
-  background-color: #fbfbfb;
-  border-color: #eaebeb;
+  background-color: #fafafa;
+  border-color: #e5e5e5;
   border-radius: 6px;
 }
 
 .line-numbers {
   display: block;
-  color: #c2c2c3;
-  background-color: #f8f8f8;
+  color: #737373;
+  background-color: #f5f5f5;
 }
 
 blockquote {
   border-left-width: 4px;
-  border-left-color: #1f2225d1;
+  border-left-color: #171717d1;
   padding-left: 16px;
   color: inherit;
   font-style: normal;
@@ -308,19 +308,19 @@ ol li::marker {
 }
 
 .task:checked {
-  background-color: #3a85f7;
+  background-color: #0070f3;
   color: #ffffff;
 }
 
 .task-done {
-  color: #1f222580;
+  color: #17171780;
   text-decoration: line-through;
 }
 
 hr {
   border-top-style: dotted;
   border-top-width: 1.5px;
-  border-top-color: #1f222580;
+  border-top-color: #17171780;
 }
 
 table {

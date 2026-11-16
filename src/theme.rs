@@ -1,4 +1,4 @@
-//! Design tokens: the app's palette, type scale, shapes and shadows (light).
+//! Design tokens: neutral surfaces, type scale, shapes and shadows.
 //! The layout departs in one place: a sunken sidebar on the window surface
 //! and a full-bleed white note plane instead of floating panels.
 
@@ -66,12 +66,23 @@ pub fn adapt(c: Hsla) -> Hsla {
     d
 }
 
-/// Lightness mirrored in OKLab: white → L 0.23 (the page, #1c1c1c), the
+/// Neutral UI steps use the shared dark scale. Other colours mirror OKLab lightness:
 /// text (L 0.25) → L 0.91, black → white. Chroma and hue are kept; vivid
 /// colours (chroma ≥ 0.14) keep their own lightness within 0.62–0.86, pale
 /// ones follow the mirror, with a smooth blend between.
 fn to_dark(c: Hsla) -> Hsla {
     let Rgba { r, g, b, a } = Rgba::from(c);
+    // Neutral steps from Geist's sRGB gray scale (vercel.com/geist/colors),
+    // shared with the web reader; document-defined chromatic colours retain OKLab adaptation.
+    for (light, dark) in [(craft::N00, 0x0a0a0a), (craft::N50, 0x111111), (craft::N100, 0x171717),
+        (craft::N200, 0x222222), (craft::N300, 0x333333), (craft::N350, 0x404040), (craft::N400, 0x737373),
+        (craft::N500, 0xa3a3a3), (craft::N600, 0xa3a3a3), (craft::N650, 0xb3b3b3), (craft::N700, 0xcccccc),
+        (craft::N800, 0xd4d4d4), (craft::N900, 0xededed), (craft::N950, 0xfafafa), (craft::N1000, 0xffffff)] {
+        let v = (light & 0xff) as f32 / 255.;
+        if (r - v).abs() < 0.001 && (g - v).abs() < 0.001 && (b - v).abs() < 0.001 {
+            let mut mapped: Hsla = rgb(dark).into(); mapped.a = a; return mapped
+        }
+    }
     let [ll, oa, ob] = oklab(r, g, b);
     let chroma = (oa * oa + ob * ob).sqrt();
     let mirror = (1.137 - 0.907 * ll).clamp(0., 1.);
@@ -148,7 +159,7 @@ pub fn c(hex: u32) -> Hsla {
 /// A surface above the page (menus, dialogs, toasts, buttons, the picked
 /// segment): `light` in the light look; in dark mode a step lighter than the
 /// page, as raised surfaces are.
-pub fn raised(light: Hsla) -> Hsla { if dark() { rgbaf(0x2c, 0x2c, 0x2e, 1.) } else { light } }
+pub fn raised(light: Hsla) -> Hsla { if dark() { c(craft::N100) } else { light } }
 
 /// A literal colour, never adapted (shadows, scrims, glyphs over images).
 pub fn rgbaf(r: u8, g: u8, b: u8, a: f32) -> Hsla {
@@ -175,34 +186,34 @@ pub fn mix(a: u32, b: u32, t: f32) -> Hsla {
 /// The palette on the ramp names the code was written against
 /// (`N*` neutrals, `B*` accent, `R*` / `O*` reds and oranges), so every
 /// `craft::N300` still means "border", `N600` "secondary text" and so on.
-/// Neutrals are measured greys; `B*` is built around the accent
-/// (#3A85F7); `R*` / `O*` are Tailwind v4 ramps.
+/// Neutrals and the blue accent follow Geist's sRGB scale
+/// (vercel.com/geist/colors); `R*` / `O*` retain the document palette.
 #[allow(dead_code)]
 pub mod craft {
     pub const N00: u32 = 0xffffff;
     /// Code block fill.
-    pub const N50: u32 = 0xfbfbfb;
+    pub const N50: u32 = 0xfafafa;
     /// Popover / quick-entry body.
-    pub const N100: u32 = 0xf7f7f7;
+    pub const N100: u32 = 0xf5f5f5;
     /// Inactive chrome.
-    pub const N200: u32 = 0xf1f2f3;
+    pub const N200: u32 = 0xededed;
     /// Code block border, card hairlines (opaque on white).
-    pub const N300: u32 = 0xeaebeb;
+    pub const N300: u32 = 0xe5e5e5;
     /// Selected sidebar row, opaque.
-    pub const N350: u32 = 0xdedfe0;
-    pub const N400: u32 = 0xc9cacb;
+    pub const N350: u32 = 0xd4d4d4;
+    pub const N400: u32 = 0xb3b3b3;
     /// Quaternary text, inactive glyphs.
-    pub const N500: u32 = 0x9c9fa0;
+    pub const N500: u32 = 0x737373;
     /// Secondary text (dates, meta).
-    pub const N600: u32 = 0x737477;
-    pub const N650: u32 = 0x5d6064;
+    pub const N600: u32 = 0x666666;
+    pub const N650: u32 = 0x525252;
     /// Sidebar rows (text at 85% on the sidebar).
-    pub const N700: u32 = 0x3f4143;
+    pub const N700: u32 = 0x404040;
     /// Toolbar glyphs.
-    pub const N800: u32 = 0x303335;
+    pub const N800: u32 = 0x262626;
     /// Text (`.page` color).
-    pub const N900: u32 = 0x1f2225;
-    pub const N950: u32 = 0x141517;
+    pub const N900: u32 = 0x171717;
+    pub const N950: u32 = 0x0a0a0a;
     pub const N1000: u32 = 0x000000;
     pub const B50: u32 = 0xf0f5fe;
     pub const B100: u32 = 0xe3edfd;
@@ -211,7 +222,7 @@ pub mod craft {
     pub const B350: u32 = 0x80aef9;
     pub const B400: u32 = 0x5d99f8;
     /// The accent: caret, primary button, menu highlight.
-    pub const B500: u32 = 0x3a85f7;
+    pub const B500: u32 = 0x0070f3;
     pub const B600: u32 = 0x2f74e0;
     pub const B700: u32 = 0x2660c0;
     pub const B800: u32 = 0x1d4b96;
@@ -257,9 +268,9 @@ pub mod craft {
     /// Window surfaces (measured on the key window).
     /// The sunken surface: the sidebar material, here the whole window
     /// behind the note.
-    pub const WINDOW: u32 = 0xeff0f1;
+    pub const WINDOW: u32 = N50;
     /// The chrome between floating panels.
-    pub const CHROME: u32 = 0xe6e7e8;
+    pub const CHROME: u32 = N100;
 }
 
 /// Shadows stay black; on the dark page they need more weight to show.
@@ -329,6 +340,8 @@ impl Theme {
     /// A hovered link or document chip: a step closer to the text colour.
     pub fn link_hover() -> Hsla { mix(0x0087ff, craft::N900, 0.65) }
     pub fn primary() -> Hsla { c(craft::B500) }
+    /// Solid controls keep a white label in either appearance.
+    pub fn primary_button() -> Hsla { rgb(craft::B500).into() }
     pub fn primary_500() -> Hsla { c(craft::B500) }
     pub fn primary_fill_1() -> Hsla { c(craft::B50) }
     /// The note: white page.
@@ -380,14 +393,14 @@ impl Theme {
     // ---- MarkdownX shell
     /// A light gray tint separates the sidebar from the white page while keeping wallpaper colors quiet.
     /// The document pane paints its own opaque white surface.
-    pub fn window() -> Hsla { if crate::native_header::supported() { ca(craft::WINDOW, 0.) } else if crate::theme::glass() { ca(craft::WINDOW, 0.84) } else { ca(craft::WINDOW, 1.) } }
+    pub fn window() -> Hsla { if crate::native_header::supported() { ca(craft::WINDOW, 0.) } else if cfg!(target_os = "macos") && crate::theme::glass() { ca(craft::WINDOW, 0.84) } else { ca(craft::WINDOW, 1.) } }
     /// Sidebar row label: text at 85%.
     pub fn sidebar_text() -> Hsla { ca(craft::N900, 0.85) }
     pub fn sidebar_hover() -> Hsla { ca(craft::N1000, 0.045) }
     /// Selected sidebar row (measured #DEDEDF).
     pub fn sidebar_selected() -> Hsla { ca(craft::N1000, 0.072) }
     /// Section headers on the sidebar.
-    pub fn sidebar_section() -> Hsla { c(0x333739) }
+    pub fn sidebar_section() -> Hsla { c(craft::N650) }
     /// Chrome glyphs (sidebar rows, header buttons): lighter than text so
     /// they don't pull the eye from the labels and the page. Inferred: the
     /// SF Symbols sit near secondary label; this is between N700 and N600.
@@ -404,21 +417,21 @@ impl Theme {
     /// White pill buttons on the note (back / + / share): hairline.
     pub fn button_border() -> Hsla { ca(craft::N1000, 0.075) }
     /// Inline code chip: #F8F8F8 in a #E2E3E3 rim (measured).
-    pub fn code_chip() -> Hsla { c(0xf8f8f8) }
-    pub fn code_chip_border() -> Hsla { c(0xe2e3e3) }
+    pub fn code_chip() -> Hsla { c(craft::N100) }
+    pub fn code_chip_border() -> Hsla { c(craft::N300) }
     /// Code block surfaces.
-    pub fn code_bg() -> Hsla { c(0xfbfbfb) }
-    pub fn code_gutter() -> Hsla { c(0xf8f8f8) }
-    pub fn code_gutter_line() -> Hsla { c(0xe8e8e8) }
-    pub fn code_border() -> Hsla { c(0xeaebeb) }
-    pub fn code_line_number() -> Hsla { c(0xc2c2c3) }
+    pub fn code_bg() -> Hsla { c(craft::N50) }
+    pub fn code_gutter() -> Hsla { c(craft::N100) }
+    pub fn code_gutter_line() -> Hsla { c(craft::N300) }
+    pub fn code_border() -> Hsla { c(craft::N300) }
+    pub fn code_line_number() -> Hsla { c(craft::N500) }
     /// Captions under media and code (weight 300).
     #[allow(dead_code)]
     pub fn caption() -> Hsla { c(0x7e8287) }
     /// Menu row highlight (native NSMenu: accent, white label).
-    pub fn menu_highlight() -> Hsla { c(craft::B500) }
+    pub fn menu_highlight() -> Hsla { Self::primary_button() }
     /// Menus / popovers body (quick-entry & native menus).
-    pub fn popover_bg() -> Hsla { c(0xfafafa) }
+    pub fn popover_bg() -> Hsla { c(craft::N00) }
     /// Dotted separator: dots at half the text colour.
     pub fn separator_dots() -> Hsla { ca(craft::N900, 0.5) }
     /// Open task box rim.
@@ -563,3 +576,34 @@ pub fn heading_weight(level: u8) -> gpui::FontWeight {
 /// reference `.pageTitle`, to match preview typography; the larger title is
 /// an intentional deviation, not a measurement.
 pub const TITLE: BlockMetrics = BlockMetrics { size: 34.0, line_height: 55.25, mt: 0.0, mb: 0.0 };
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    fn luminance(color: Hsla) -> f32 {
+        let Rgba { r, g, b, .. } = Rgba::from(color);
+        let linear = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+    fn contrast(a: Hsla, b: Hsla) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn shell_text_remains_readable_on_light_and_dark_surfaces() {
+        for dark in [false, true] {
+            let color = |hex| { let c = rgb(hex).into(); if dark { to_dark(c) } else { c } };
+            for ink in [craft::N900, craft::N600, craft::N500] {
+                for surface in [craft::N00, craft::N50, craft::N100] {
+                    let minimum = if ink == craft::N500 { 4. } else { 4.5 };
+                    assert!(contrast(color(ink), color(surface)) >= minimum, "ink {ink:x}, surface {surface:x}, dark {dark}");
+                }
+            }
+            assert!(contrast(color(craft::B500), color(craft::N00)) >= 4.5);
+            assert!(luminance(color(craft::N00)) < luminance(color(craft::N100)) || !dark);
+        }
+        assert!(contrast(rgb(craft::B500).into(), gpui::white()) >= 4.5, "solid buttons need readable white labels");
+    }
+}

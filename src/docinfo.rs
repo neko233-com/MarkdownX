@@ -69,7 +69,7 @@ pub fn char_count(s: &str) -> usize {
 
 /// Title plus body, the text the counts run over.
 pub fn doc_text(doc: &Document) -> String {
-    format!("{}\n{}", doc.title.text, doc.plain_text())
+    format!("{}\n{}", doc.title.plain_text(), doc.plain_text())
 }
 
 pub fn format_size(n: u64) -> String {

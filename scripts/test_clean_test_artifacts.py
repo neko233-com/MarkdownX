@@ -8,6 +8,14 @@ import clean_test_artifacts as cleaner
 
 
 class InstallerRetentionTests(TestCase):
+    def test_agent_bytecode_is_a_repository_test_artifact(self):
+        with TemporaryDirectory(prefix="markdownx-clean-test-") as tmp:
+            root = Path(tmp)
+            cache = root / "tools" / "agent" / "__pycache__"
+            cache.mkdir(parents=True)
+            with patch.object(cleaner, "ROOT", root):
+                self.assertIn(cache, cleaner.targets())
+
     def test_keeps_installed_version_until_update_is_installed(self):
         with TemporaryDirectory(prefix="markdownx-clean-test-") as tmp:
             root = Path(tmp)

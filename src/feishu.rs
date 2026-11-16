@@ -113,7 +113,7 @@ fn parse_response(bytes: Vec<u8>) -> Result<Imported, ImportError> {
 /// Create a new editable file in the chosen workspace without replacing data.
 pub fn save_in_workspace(root: &std::path::Path, protected: &[PathBuf], imported: &Imported) -> anyhow::Result<(PathBuf, bool)> {
     use std::io::Write;
-    let title: String = imported.document.title.text.chars().take(48).map(|c| {
+    let title: String = imported.document.title.plain_text().chars().take(48).map(|c| {
         if c.is_alphanumeric() || matches!(c, '-' | '_') { c } else { '-' }
     }).collect();
     let title = title.trim_matches('-');

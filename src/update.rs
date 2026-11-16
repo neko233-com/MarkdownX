@@ -1,19 +1,9 @@
-//! 自动更新. A copy installed from a release package reads
-//! `https://github.com/neko233-com/MarkdownX/releases/download/latest/update-<platform>.json` (written last by
-//! the release tooling) 10s after launch and every 12h while
-//! 自动检查更新 is on; 检查更新… asks at once. Nothing is downloaded until the
-//! user asks: the package is fetched with `curl`, its minisign signature checked
-//! against packaging/update-key.pub (the trusted comment must be the package's
-//! own file name, so an old signed package cannot pose as a newer version),
-//! and on macOS the unpacked app must also carry this copy's code signature
-//! team. 重启以更新 quits through the usual save path; a detached helper waits
-//! for this process to exit, then swaps the bundle (macOS) or runs the Inno
-//! installer silently (Windows), and starts the new version.
+//! Stable release notifications and the optional signed updater.
+//! Public builds check GitHub's latest stable release after 10s and every 12h;
+//! Settings > About also checks manually, including with automatic checks off.
+//! Results persist in the UI, with an explicit link to the release download page.
+//! No package is fetched or executed by the public notification channel.
 //!
-//! `MARKDOWNX_UPDATE_URL` points the check at another folder (testing; it also
-//! enables the check in unsigned builds). The public key can be replaced at
-//! build time with `MARKDOWNX_UPDATE_PUBKEY`.
-
 use gpui::*;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -43,6 +33,8 @@ pub enum State {
     Unsupported,
     Checking,
     Current,
+    NoRelease,
+    ReleaseAvailable(Release),
     Available(Manifest),
     Downloading(Manifest),
     /// Verified and unpacked: the new `.app` (macOS) or the installer (Windows).
@@ -66,13 +58,18 @@ fn set(state: State, cx: &mut App) {
 /// Release check without a signature: it only tells the user a newer
 /// GitHub release exists and where to read it. The signed updater below is
 /// still used when a release key is configured.
-struct ReleaseCheck { last: Option<std::time::Instant>, told: Option<String> }
+struct ReleaseCheck { last: Option<std::time::Instant>, told: Option<String>, manual: bool }
 impl Global for ReleaseCheck {}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Release { pub version: String, pub url: String }
+
+const RELEASES: &str = "https://github.com/neko233-com/MarkdownX/releases";
 
 /// Starts the periodic check.
 pub fn init(cx: &mut App) {
-    cx.set_global(ReleaseCheck { last: None, told: None });
-    if ENABLED { cx.set_global(Updater { state: State::Idle, told: None, last: None }); }
+    cx.set_global(ReleaseCheck { last: None, told: None, manual: false });
+    cx.set_global(Updater { state: State::Idle, told: None, last: None });
     cx.spawn(async |cx| {
         cx.background_executor().timer(Duration::from_secs(10)).await;
         loop {
@@ -92,52 +89,77 @@ pub fn check_if_stale(cx: &mut App) {
     check(false, cx);
 }
 
-/// Latest public release, without downloading or installing anything.
-fn fetch_release() -> Result<Option<(String, String)>, String> {
-    let body = match curl(&["--max-time", "20", "-H", "Accept: application/vnd.github+json", "https://api.github.com/repos/neko233-com/MarkdownX/releases/latest"]) {
-        Ok(body) => body,
-        // No published release yet: the installed version is the newest one.
-        Err(e) if e.contains("404") => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-    let tag = v.get("tag_name").and_then(|x| x.as_str()).unwrap_or_default().trim_start_matches('v');
-    let url = v.get("html_url").and_then(|x| x.as_str()).unwrap_or("https://github.com/neko233-com/MarkdownX/releases");
-    if tag.is_empty() || !newer(tag, env!("CARGO_PKG_VERSION")) { return Ok(None) }
-    Ok(Some((tag.to_string(), url.to_string())))
+fn parse_release(body: &[u8], status: &str, current: &str) -> Result<State, String> {
+    if status == "404" { return Ok(State::NoRelease) }
+    if status != "200" {
+        return Err(if status == "403" || status == "429" { crate::settings::tr("检查过于频繁，请稍后重试。", "Update checks are rate limited. Try again later.").into() }
+            else { crate::localized_format!("更新服务器返回 HTTP {}，请稍后重试。", "The update server returned HTTP {}. Try again later.", status) });
+    }
+    let invalid = || crate::settings::tr("更新信息无法识别，请稍后重试。", "Unrecognised update information. Try again later.").to_string();
+    let v: serde_json::Value = serde_json::from_slice(body).map_err(|_| invalid())?;
+    let tag = v.get("tag_name").and_then(|x| x.as_str()).ok_or_else(invalid)?;
+    let version = tag.strip_prefix('v').unwrap_or(tag);
+    if version.split('.').count() != 3 || version.split('.').any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) || p.parse::<u64>().is_err()) ||
+        v.get("draft").and_then(|x| x.as_bool()) != Some(false) || v.get("prerelease").and_then(|x| x.as_bool()) != Some(false) { return Err(invalid()) }
+    // Build the destination ourselves: a server response can never supply an executable or foreign URL.
+    Ok(if newer(version, current) { State::ReleaseAvailable(Release { version: version.into(), url: format!("{RELEASES}/tag/{tag}") }) } else { State::Current })
+}
+
+/// Latest stable public release. No package is downloaded or executed.
+fn fetch_release() -> Result<State, String> {
+    let url = "https://api.github.com/repos/neko233-com/MarkdownX/releases/latest";
+    #[cfg(feature = "devtools")]
+    let testing = crate::devtools::scripted().then(|| std::env::var("MARKDOWNX_TEST_RELEASE_URL").ok()).flatten();
+    #[cfg(feature = "devtools")]
+    let url = testing.as_deref().filter(|u| u.starts_with("http://127.0.0.1:")).unwrap_or(url);
+    let out = command("curl").args(["-sSL", "--proto", "=https,http", "--proto-redir", "=https", "--connect-timeout", "10", "--max-time", "20",
+        "--max-filesize", "1048576", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: MarkdownX", "--write-out", "\n%{http_code}", url])
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).output()
+        .map_err(|_| crate::settings::tr("无法启动更新检查，请确认系统已安装 curl。", "Could not start the update check. Make sure curl is installed.").to_string())?;
+    if !out.status.success() { return Err(crate::settings::tr("无法连接更新服务器，请检查网络后重试。", "Could not reach the update server. Check your connection and retry.").into()) }
+    let split = out.stdout.iter().rposition(|b| *b == b'\n').ok_or_else(|| "Missing HTTP status".to_string())?;
+    parse_release(&out.stdout[..split], &String::from_utf8_lossy(&out.stdout[split + 1..]), env!("CARGO_PKG_VERSION"))
 }
 
 fn check_release(manual: bool, cx: &mut App) {
-    if manual {
-        let window = cx.active_window().or_else(|| cx.windows().first().copied()).and_then(|w| w.downcast::<crate::app::Workspace>());
-        if let Some(w) = window { let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Info, crate::settings::tr("正在检查更新…", "Checking for updates…"), cx)); }
-    }
+    let Some(u) = cx.try_global::<ReleaseCheck>() else { return };
+    if matches!(state(cx), State::Checking) { if manual { cx.global_mut::<ReleaseCheck>().manual = true; } return }
+    if !manual && u.last.is_some_and(|t| t.elapsed() < Duration::from_secs(3600)) { return }
+    let u = cx.global_mut::<ReleaseCheck>();
+    u.last = Some(std::time::Instant::now()); u.manual = manual;
+    set(State::Checking, cx);
     let task = cx.background_executor().spawn(async { fetch_release() });
     cx.spawn(async move |cx| {
         let result = task.await;
         let _ = cx.update(|cx| {
             if cx.try_global::<ReleaseCheck>().is_none() { return }
-            cx.global_mut::<ReleaseCheck>().last = Some(std::time::Instant::now());
+            let manual = cx.global::<ReleaseCheck>().manual;
+            let state = result.unwrap_or_else(State::Failed);
+            set(state.clone(), cx);
             let window = cx.active_window().or_else(|| cx.windows().first().copied()).and_then(|w| w.downcast::<crate::app::Workspace>());
             let Some(w) = window else { return };
-            match result {
-                Ok(Some((version, url))) => {
+            match state {
+                State::ReleaseAvailable(Release { version, .. }) => {
                     if manual || cx.global::<ReleaseCheck>().told.as_ref() != Some(&version) {
                         cx.global_mut::<ReleaseCheck>().told = Some(version.clone());
-                        let msg = crate::localized_format!("MarkdownX {} 已发布：{}", "MarkdownX {} is available: {}", version, url);
+                        let msg = crate::localized_format!("MarkdownX {} 已发布，可在「关于」中打开下载页。", "MarkdownX {} is available. Open the download page in About.", version);
                         let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Info, &msg, cx));
                     }
                 }
-                Ok(None) if manual => {
+                State::Current if manual => {
                     let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Info, crate::settings::tr("已是最新版本。", "MarkdownX is up to date."), cx));
                 }
-                Err(e) if manual => {
+                State::Failed(e) if manual => {
                     let _ = w.update(cx, |ws, _, cx| ws.show_toast_kind(crate::ui::ToastKind::Error, &e, cx));
                 }
                 _ => {}
             }
         });
     }).detach();
+}
+
+pub fn open_release(cx: &mut App) {
+    if let State::ReleaseAvailable(release) = state(cx) { cx.open_url(&release.url); }
 }
 
 /// Asks the server for the newest version. `manual` (检查更新…) also reports
@@ -420,7 +442,7 @@ fn start_installer(setup: &Path) -> Result<(), String> {
     let script = format!(
         "Wait-Process -Id {} -ErrorAction SilentlyContinue; Start-Process -FilePath {} -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/UPDATE=1'",
         std::process::id(), quote(&setup.to_string_lossy()));
-    command("powershell.exe").args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
+    command("pwsh.exe").args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn().map(drop).map_err(|e| e.to_string())
 }
@@ -433,7 +455,22 @@ fn start_installer(_: &Path) -> Result<(), String> { Err("unsupported".into()) }
 // was not kept. Only this fixture keeps the historical names.
 #[cfg(test)]
 mod tests {
-    use super::{newer, signed, validate, Manifest};
+    use super::{newer, parse_release, signed, validate, Manifest, Release, State};
+
+    #[test]
+    fn stable_release_results_and_destinations() {
+        let release = |tag: &str| format!(r#"{{"tag_name":"{tag}","draft":false,"prerelease":false,"html_url":"https://untrusted.test/setup.exe"}}"#);
+        assert_eq!(parse_release(release("v0.1.100").as_bytes(), "200", "0.1.45"), Ok(State::ReleaseAvailable(Release {
+            version: "0.1.100".into(), url: "https://github.com/neko233-com/MarkdownX/releases/tag/v0.1.100".into() })));
+        for tag in ["v0.1.45", "0.1.44"] { assert_eq!(parse_release(release(tag).as_bytes(), "200", "0.1.45"), Ok(State::Current)); }
+        assert_eq!(parse_release(b"", "404", "0.1.45"), Ok(State::NoRelease));
+        for status in ["403", "429", "500", "000"] { assert!(parse_release(b"{}", status, "0.1.45").is_err()); }
+        for tag in ["", "v", "v0.1", "v0.1.46-beta.1", "v0.1.46/../../evil", "vv0.1.46", "v0.1.+46", "v0.1.18446744073709551616"] {
+            assert!(parse_release(release(tag).as_bytes(), "200", "0.1.45").is_err(), "{tag}");
+        }
+        for body in [b"not JSON".as_slice(), b"{}", br#"{"tag_name":"v0.1.46","draft":true,"prerelease":false}"#,
+            br#"{"tag_name":"v0.1.46","draft":false,"prerelease":true}"#] { assert!(parse_release(body, "200", "0.1.45").is_err()); }
+    }
 
     #[test]
     fn versions_compare_numerically() {

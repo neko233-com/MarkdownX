@@ -34,7 +34,7 @@ pub fn toast_el(kind: ToastKind, msg: &SharedString, t0: std::time::Instant, win
     let (fill, mark, mark_size) = match kind {
         ToastKind::Success => (theme::c(craft::old::G500), "check", 10.),
         ToastKind::Error => (Theme::danger(), "x", 10.),
-        ToastKind::Info => (Theme::primary(), "info-mark", 12.),
+        ToastKind::Info => (Theme::primary_button(), "info-mark", 12.),
     };
     let vw = window.viewport_size().width;
     let card = div()
@@ -142,7 +142,7 @@ pub fn primary_button(id: &'static str, label: &'static str) -> Stateful<Div> {
         .justify_center()
         .rounded(px(9.))
         .cursor_pointer()
-        .bg(Theme::primary())
+        .bg(Theme::primary_button())
         .shadow(theme::shadow_button())
         .hover(|s| s.bg(theme::c(craft::B600)))
         .active(|s| s.bg(theme::c(craft::B700)))
@@ -912,6 +912,6 @@ pub(crate) fn checkbox(on: bool) -> Div {
         .items_center()
         .justify_center()
         .rounded(px(4.))
-        .when(on, |d| d.bg(Theme::primary()).child(icon("todo-check", 12., Theme::bg_body())))
+        .when(on, |d| d.bg(Theme::primary_button()).child(icon("todo-check", 12., Theme::bg_body())))
         .when(!on, |d| d.border_1().border_color(Theme::todo_box()).bg(crate::theme::raised(Theme::bg_body())))
 }

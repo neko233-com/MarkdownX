@@ -25,9 +25,10 @@ use std::time::{Duration, Instant};
 pub(super) const MIN: f32 = 32.;
 /// Size of an image whose pixels can't be measured.
 const FALLBACK: (f32, f32) = (480., 270.);
-const FORMATS: [&str; 6] = ["jpeg", "jpg", "png", "gif", "webp", "bmp"];
+const FORMATS: [&str; 7] = ["jpeg", "jpg", "png", "gif", "webp", "bmp", "svg"];
 const MAX_BYTES: u64 = 20 * 1024 * 1024;
-pub(super) const BAD_FORMAT: &str = "图片格式仅支持 jpeg、jpg、png、gif、webp、bmp";
+const EMBEDDED_CACHE_LIMIT: usize = 64 * 1024 * 1024;
+pub(super) const BAD_FORMAT: &str = "图片格式仅支持 jpeg、jpg、png、gif、webp、bmp、svg";
 const BAD_DIMS: &str = "识别图片宽高失败";
 const TOO_BIG: &str = "上传图片大小不能超过 20 MB";
 const FULL: [f32; 4] = [0., 0., 1., 1.];
@@ -144,8 +145,86 @@ struct Lightbox {
     rotated: Option<(u8, BlockId, Option<Arc<RenderImage>>)>,
 }
 
+/// Decode data URLs into an ephemeral cache so the normal image renderer can
+/// handle embedded images without changing the Markdown or the user's files.
+#[derive(Default)]
+struct EmbeddedImages {
+    dir: Option<tempfile::TempDir>,
+    paths: HashMap<String, PathBuf>,
+    bytes: usize,
+}
+
+impl EmbeddedImages {
+    fn save(&mut self, key: &str, ext: &str, bytes: &[u8]) -> Option<PathBuf> {
+        if self.bytes.checked_add(bytes.len())? > EMBEDDED_CACHE_LIMIT { return None; }
+        if self.dir.is_none() { self.dir = Some(tempfile::Builder::new().prefix("markdownx-images-").tempdir().ok()?); }
+        let path = self.dir.as_ref()?.path().join(format!("{}.{ext}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, bytes).ok()?;
+        self.bytes += bytes.len();
+        self.paths.insert(key.to_string(), path.clone());
+        Some(path)
+    }
+
+    fn local(&mut self, src: &str) -> Option<PathBuf> {
+        if let Some(path) = self.paths.get(src) { return Some(path.clone()); }
+        let (ext, bytes) = decode_embedded_image(src)?;
+        self.save(src, ext, &bytes)
+    }
+
+    fn local_svg_view(&mut self, path: &Path, fragment: &str) -> Option<PathBuf> {
+        use base64::Engine;
+        let meta = path.metadata().ok()?;
+        let key = format!("{}#{fragment}:{:?}:{}", path.display(), meta.modified().ok()?, meta.len());
+        if let Some(path) = self.paths.get(&key) { return Some(path.clone()); }
+        let bytes = crate::store::read_bounded(path, MAX_BYTES).ok()?;
+        let viewed = crate::svg_view::apply(&bytes, fragment)?;
+        let data = format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(viewed));
+        let (ext, bytes) = decode_embedded_image(&data)?;
+        self.save(&key, ext, &bytes)
+    }
+}
+
+/// Decode only supported image data and remove external references from SVGs.
+/// The HTML/PDF exporter uses the same rules as desktop image rendering.
+pub(crate) fn decode_embedded_image(src: &str) -> Option<(&'static str, Vec<u8>)> {
+    use base64::Engine;
+    let (header, payload) = src.strip_prefix("data:")?.split_once(',')?;
+    let mime = header.strip_suffix(";base64")?;
+    if payload.len() > (MAX_BYTES as usize).div_ceil(3) * 4 { return None; }
+    let (payload, fragment) = if mime == "image/svg+xml" {
+        payload.split_once('#').map_or((payload, None), |(payload, fragment)| (payload, Some(format!("#{fragment}"))))
+    } else { (payload, None) };
+    let decoded = base64::engine::general_purpose::STANDARD.decode(payload).ok()?;
+    if decoded.is_empty() || decoded.len() > MAX_BYTES as usize { return None; }
+    if mime == "image/svg+xml" {
+        let decoded = if let Some(fragment) = fragment { crate::svg_view::apply(&decoded, &fragment)? } else { decoded };
+        static FONTS: std::sync::LazyLock<Arc<usvg::fontdb::Database>> = std::sync::LazyLock::new(|| {
+            let mut db = usvg::fontdb::Database::new();
+            db.load_system_fonts();
+            Arc::new(db)
+        });
+        let mut opts = usvg::Options::default();
+        opts.fontdb = FONTS.clone();
+        opts.image_href_resolver.resolve_string = Box::new(|_, _| None);
+        let tree = usvg::Tree::from_data(&decoded, &opts).ok()?;
+        let bytes = tree.to_string(&usvg::WriteOptions { preserve_text: true, ..Default::default() }).into_bytes();
+        return (bytes.len() <= MAX_BYTES as usize).then_some(("svg", bytes));
+    }
+    let format = image::guess_format(&decoded).ok()?;
+    let ext = match (mime, format) {
+        ("image/png", image::ImageFormat::Png) => "png",
+        ("image/jpeg" | "image/jpg", image::ImageFormat::Jpeg) => "jpg",
+        ("image/gif", image::ImageFormat::Gif) => "gif",
+        ("image/webp", image::ImageFormat::WebP) => "webp",
+        ("image/bmp", image::ImageFormat::Bmp) => "bmp",
+        _ => return None,
+    };
+    Some((ext, decoded))
+}
+
 pub struct ImageUi {
     dims: RefCell<HashMap<PathBuf, Option<(f32, f32)>>>,
+    embedded: RefCell<EmbeddedImages>,
     /// Box of every image drawn this frame (window coordinates).
     pub(super) boxes: Rc<RefCell<HashMap<BlockId, Bounds<Pixels>>>>,
     /// Width of the column each image was last laid out in.
@@ -165,6 +244,8 @@ pub struct ImageUi {
     /// Bumped when remote images arrive or are retried (every row re-measures).
     pub(super) generation: u64,
     retried: HashMap<String, Instant>,
+    uploading: std::collections::HashSet<BlockId>,
+    inline_uploading: std::collections::HashSet<(BlockId, usize)>,
     /// Where dragged-in files would land, and the drop line.
     pub(super) file_drop: Option<(BlockId, DropPlace, Bounds<Pixels>)>,
 }
@@ -173,6 +254,7 @@ impl ImageUi {
     pub fn new(cx: &mut App) -> Self {
         ImageUi {
             dims: RefCell::default(),
+            embedded: RefCell::default(),
             boxes: Rc::default(),
             containers: RefCell::default(),
             hover: None,
@@ -188,6 +270,8 @@ impl ImageUi {
             remote_dir: Store::assets_dir().join("remote"),
             generation: 0,
             retried: HashMap::new(),
+            uploading: Default::default(),
+            inline_uploading: Default::default(),
             file_drop: None,
         }
     }
@@ -197,6 +281,9 @@ impl ImageUi {
     }
 
     fn resolve(&self, src: &str) -> Src {
+        if src.starts_with("data:") {
+            return self.embedded.borrow_mut().local(src).map(Src::Local).unwrap_or(Src::Failed);
+        }
         if src.starts_with("http://") || src.starts_with("https://") {
             if self.remote.borrow().get(src) == Some(&Remote::Failed) {
                 return Src::Failed;
@@ -212,6 +299,13 @@ impl ImageUi {
             }
             self.remote.borrow_mut().entry(src.to_string()).or_insert(Remote::Queued);
             return Src::Pending;
+        }
+        if !image_path(src).is_some_and(|path| path.is_file())
+            && let Some((path, fragment)) = fdl_core::html_assets::svg_fragment(src)
+            && let Some(path) = image_path(path)
+        {
+            if !path.is_file() { return Src::Missing; }
+            return self.embedded.borrow_mut().local_svg_view(&path, fragment).map(Src::Local).unwrap_or(Src::Failed);
         }
         match image_path(src) {
             Some(p) if self.dims.borrow().contains_key(&p) || p.exists() => Src::Local(p),
@@ -229,12 +323,18 @@ impl ImageUi {
             .ok()
             .and_then(|r| r.with_guessed_format().ok())
             .and_then(|r| r.into_dimensions().ok())
-            .map(|(w, h)| (w as f32, h as f32));
+            .map(|(w, h)| (w as f32, h as f32))
+            .or_else(|| {
+                if !p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("svg")) { return None; }
+                let bytes = crate::store::read_bounded(p, 16 * 1024 * 1024).ok()?;
+                let tree = usvg::Tree::from_data(&bytes, &usvg::Options::default()).ok()?;
+                Some((tree.size().width(), tree.size().height()))
+            });
         self.dims.borrow_mut().insert(p.to_path_buf(), d);
         d
     }
 
-    fn local(&self, src: &str) -> Option<PathBuf> {
+    pub(super) fn local(&self, src: &str) -> Option<PathBuf> {
         match self.resolve(src) {
             Src::Local(p) => Some(p),
             _ => None,
@@ -635,6 +735,14 @@ impl R<'_> {
 }
 
 impl Editor {
+    pub(crate) fn cleanup_embedded_images(&self) {
+        *self.img.embedded.borrow_mut() = EmbeddedImages::default();
+    }
+
+    pub(super) fn inline_image_under(&self, point: Point<Pixels>) -> Option<Pos> {
+        self.cache.borrow().iter().find_map(|(id, layout)| layout.images.iter().find(|(_, bounds)| bounds.contains(&point)).map(|(offset, _)| Pos::new(*id, *offset)))
+    }
+
     /// The image showing as selected (toolbar, handles, accent ring).
     pub(super) fn active_image(&self, focused: bool) -> Option<BlockId> {
         if let Some(id) = self.img.caption_focus {
@@ -950,6 +1058,76 @@ impl Editor {
 
     // ---- toolbar
 
+    fn inline_image_toolbar_origin(&self, at: Pos) -> Option<Point<Pixels>> {
+        let rect = self.cache.borrow().get(&at.block)?.images.iter().find(|(offset, _)| *offset == at.offset)?.1;
+        let viewport = self.list.viewport_bounds();
+        if !rect.intersects(&viewport) { return None; }
+        let x = clampf(f32::from(rect.center().x) - 20., f32::from(viewport.left()) + 8., f32::from(viewport.right()) - 48.);
+        let above = f32::from(rect.top()) - 48.;
+        let y = if above >= f32::from(viewport.top()) { above } else { f32::from(rect.bottom()) + 8. };
+        Some(point(px(x), px(y)))
+    }
+
+    /// Upload an image embedded in text without changing its surrounding runs.
+    pub(super) fn inline_image_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.read_only || !self.focus.is_focused(window) || self.core.in_block_mode() || self.core.cell_sel.is_some()
+            || !self.core.sel.is_collapsed() || self.dragging || self.menu.is_some() || self.slash.is_some() { return None; }
+        let at = self.core.sel.head;
+        let image = self.core.object_at(at)?.image()?;
+        if image.src.starts_with("http://") || image.src.starts_with("https://") || image.src.starts_with("data:") || self.img.local(&image.src).is_none() { return None; }
+        let origin = self.inline_image_toolbar_origin(at)?;
+        let uploading = self.img.inline_uploading.contains(&(at.block, at.offset));
+        let button = div().id("inline-image-picgo").size(px(28.)).flex().items_center().justify_center().rounded(px(ROW_RADIUS))
+            .cursor_pointer().hover(|style| style.bg(Theme::fill_hover_strong()))
+            .tip_above(if uploading { crate::settings::tr("正在上传", "Uploading") } else { crate::settings::tr("上传到 PicGo 图床", "Upload to PicGo") }, None)
+            .child(icon("upload", 18., if uploading { Theme::text_disabled() } else { Theme::text_code() }))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |editor, _, window, cx| {
+                cx.stop_propagation(); window.prevent_default(); editor.upload_inline_to_picgo(at, window, cx);
+            }));
+        Some(super::overlays::at(self.rel(origin), Corner::TopLeft, popover().id("inline-image-toolbar").occlude().p(px(6.)).child(button)))
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scripted_inline_image_point(&self) -> Point<Pixels> {
+        self.cache.borrow().values().flat_map(|layout| &layout.images).map(|(_, bounds)| bounds.center()).next().expect("inline image was not laid out")
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scripted_inline_upload_point(&self) -> Point<Pixels> {
+        let position = self.core.sel.head;
+        assert!(self.core.object_at(position).and_then(Inline::image).is_some(), "inline image was not selected");
+        let origin = self.inline_image_toolbar_origin(position).expect("inline toolbar is outside the viewport");
+        point(origin.x + px(20.), origin.y + px(20.))
+    }
+
+    fn upload_inline_to_picgo(&mut self, at: Pos, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only || !self.img.inline_uploading.insert((at.block, at.offset)) { return; }
+        let Some(snapshot) = self.core.text_of(at.block).cloned() else { self.img.inline_uploading.remove(&(at.block, at.offset)); return };
+        let Some(image) = self.core.object_at(at).and_then(Inline::image) else { self.img.inline_uploading.remove(&(at.block, at.offset)); return };
+        if image.src.starts_with("http://") || image.src.starts_with("https://") { self.img.inline_uploading.remove(&(at.block, at.offset)); return; }
+        let Some(path) = image_path(&image.src).filter(|path| path.is_file()) else {
+            self.img.inline_uploading.remove(&(at.block, at.offset));
+            self.toast(crate::settings::tr("找不到本地图片", "Local image not found"), cx); return;
+        };
+        self.toast_kind(ToastKind::Info, crate::settings::tr("正在通过 PicGo 上传图片", "Uploading image through PicGo"), cx);
+        let task = cx.background_executor().spawn(async move { crate::picgo::upload(&path) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |editor, window, cx| {
+                editor.img.inline_uploading.remove(&(at.block, at.offset));
+                match result {
+                    Ok(url) if !editor.read_only && editor.core.replace_inline_image_source(at, &snapshot, &url) => {
+                        editor.changed(window, cx);
+                        editor.toast_kind(ToastKind::Success, crate::settings::tr("已上传到 PicGo，本地图片已保留", "Uploaded to PicGo; the local image was kept"), cx);
+                    }
+                    Ok(_) => editor.toast_kind(ToastKind::Info, crate::settings::tr("图片或所在文字已更改，未替换链接", "The image or its surrounding text changed; its link was not replaced"), cx),
+                    Err(error) => editor.toast(&crate::localized_format!("PicGo 上传失败：{}", "PicGo upload failed: {}", crate::settings::diagnostic(&error)), cx),
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
     /// 裁剪 · 重置图片 | 添加描述 | 左 · 中 · 右 above the selected image.
     pub(super) fn image_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let focused = self.focus.is_focused(window);
@@ -1051,6 +1229,15 @@ impl Editor {
             w += 1.;
             n += 1;
         }
+        if ok && !cropping && !self.read_only && !src.starts_with("http://") && !src.starts_with("https://") && !src.starts_with("data:") {
+            let uploading = self.img.uploading.contains(&id);
+            bar = bar.child(btn("itb-picgo")
+                .tip_above(if uploading { crate::settings::tr("正在上传", "Uploading") } else { crate::settings::tr("上传到 PicGo 图床", "Upload to PicGo") }, None)
+                .child(icon("upload", 18., if uploading { Theme::text_disabled() } else { Theme::text_code() }))
+                .on_mouse_down(MouseButton::Left, act(|e, id, window, cx| e.upload_to_picgo(id, window, cx))));
+            w += 24.;
+            n += 1;
+        }
         bar = bar
             .child(
                 btn("itb-caption")
@@ -1099,6 +1286,140 @@ impl Editor {
             })
             .child(bar);
         Some(at(self.rel(point(px(x), px(y))), Corner::TopLeft, el))
+    }
+
+    fn upload_to_picgo(&mut self, id: BlockId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only || !self.img.uploading.insert(id) { return; }
+        let Some(BlockKind::Image { src, .. }) = self.core.kind_of(id) else { self.img.uploading.remove(&id); return };
+        let old = src.clone();
+        if old.starts_with("http://") || old.starts_with("https://") { self.img.uploading.remove(&id); return; }
+        let Some(path) = image_path(&old).filter(|p| p.is_file()) else { self.img.uploading.remove(&id); self.toast(crate::settings::tr("找不到本地图片", "Local image not found"), cx); return };
+        self.toast_kind(ToastKind::Info, crate::settings::tr("正在通过 PicGo 上传图片", "Uploading image through PicGo"), cx);
+        let task = cx.background_executor().spawn(async move { crate::picgo::upload(&path) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |editor, window, cx| {
+                editor.img.uploading.remove(&id);
+                match result {
+                    Ok(url) if !editor.read_only && editor.core.replace_image_source(id, &old, &url) => {
+                        editor.changed(window, cx);
+                        editor.toast_kind(ToastKind::Success, crate::settings::tr("已上传到 PicGo，本地图片已保留", "Uploaded to PicGo; the local image was kept"), cx);
+                    }
+                    Ok(_) => editor.toast_kind(ToastKind::Info, crate::settings::tr("图片已更改，未替换链接", "The image changed; its link was not replaced"), cx),
+                    Err(error) => editor.toast(&crate::localized_format!("PicGo 上传失败：{}", "PicGo upload failed: {}", crate::settings::diagnostic(&error)), cx),
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn check_rich_title(&self) {
+        let title = &self.core.doc.title;
+        let image = title.runs.iter().find_map(|run| run.marks.inline.as_ref()?.image()).expect("title image missing");
+        assert!(image_path(&image.src).is_some_and(|path| path.is_file()), "title image path missing");
+        assert!(title.runs.iter().any(|run| run.marks.inline.as_ref().and_then(crate::model::Inline::equation).is_some()), "title equation missing");
+        let cache = self.cache.borrow();
+        let layout = cache.get(&crate::editor::core::TITLE).expect("title was not laid out");
+        assert!(!layout.images.is_empty() && layout.decoded_inline_images > 0, "title image did not decode");
+        crate::logging::write("rich-title: desktop PASS");
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn check_embedded_images(&self) {
+        use base64::Engine;
+        let images = self.core.doc.blocks.iter().filter_map(|block| match &block.kind {
+            BlockKind::Image { src, .. } if src.starts_with("data:image/") => Some((block, src)), _ => None,
+        }).collect::<Vec<_>>();
+        assert_eq!(images.len(), 2, "expected PNG and SVG blocks");
+        for (block, src) in images {
+            let path = self.img.local(src).expect("embedded image path missing");
+            assert!(path.is_file() && self.img.dims(&path).is_some() && self.img.boxes.borrow().contains_key(&block.id), "embedded image was not laid out");
+        }
+        let table = self.core.doc.blocks.iter().find_map(|block| if let BlockKind::Table(table) = &block.kind { Some(table) } else { None }).expect("table missing");
+        let cell = &table.rows[1][1].blocks[0];
+        let inline = cell.text.runs.iter().find_map(|run| run.marks.inline.as_ref()?.image()).expect("inline image missing");
+        assert!(inline.src.starts_with("data:image/") && self.img.local(&inline.src).is_some());
+        let cache = self.cache.borrow();
+        let layout = cache.get(&cell.id).expect("table image was not laid out");
+        assert!(!layout.images.is_empty() && layout.decoded_inline_images > 0, "inline embedded image did not decode");
+        let mut isolated = EmbeddedImages::default();
+        assert!(isolated.local("data:text/html;base64,PHNjcmlwdD4=").is_none());
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><image href="file:///secret.png" width="10" height="10"/><rect width="10" height="10"/><text x="10" y="30">镜头 01</text></svg>"#.as_bytes();
+        let svg_uri = format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(svg));
+        let path = isolated.local(&svg_uri).expect("SVG cache missing");
+        let safe_svg = std::fs::read_to_string(&path).unwrap();
+        assert!(!safe_svg.contains("secret.png"));
+        assert!(safe_svg.contains("rect") || safe_svg.contains("path"));
+        assert!(safe_svg.contains("镜头 01"), "SVG text was lost");
+        drop(isolated);
+        assert!(!path.exists());
+        crate::logging::write("embedded-images: desktop PASS");
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn check_html_images(&self) {
+        let image = self.core.doc.blocks.iter().find(|block| matches!(block.kind, BlockKind::Image { .. })).expect("standalone HTML image missing");
+        let BlockKind::Image { src, width, .. } = &image.kind else { unreachable!() };
+        assert_eq!(*width, Some(120.));
+        let path = image_path(src).expect("standalone HTML image path");
+        assert!(path.is_file() && self.img.dims(&path).is_some() && self.img.boxes.borrow().contains_key(&image.id), "standalone HTML image was not laid out");
+        let table = self.core.doc.blocks.iter().find_map(|block| if let BlockKind::Table(table) = &block.kind { Some(table) } else { None }).expect("table missing");
+        let cell = &table.rows[1][1].blocks[0];
+        let inline = cell.text.runs.iter().find_map(|run| run.marks.inline.as_ref()?.image()).expect("inline HTML image missing");
+        assert!(image_path(&inline.src).is_some_and(|path| path.is_file()), "inline HTML image path missing");
+        let cache = self.cache.borrow();
+        let layout = cache.get(&cell.id).expect("table image was not laid out");
+        assert!(!layout.images.is_empty() && layout.decoded_inline_images > 0, "inline HTML image did not decode");
+        crate::logging::write("html-images: desktop PASS");
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn check_svg_views(&self) {
+        use base64::Engine;
+        let block = self.core.doc.blocks.iter().find(|block| matches!(block.kind, BlockKind::Image { .. })).expect("SVG view block missing");
+        let BlockKind::Image { src, .. } = &block.kind else { unreachable!() };
+        let (original, fragment) = fdl_core::html_assets::svg_fragment(src).expect("SVG view reference missing");
+        let original = image_path(original).expect("original image path missing");
+        let bytes = std::fs::read(&original).expect("original SVG missing");
+        let uri = format!("data:image/svg+xml;base64,{}{fragment}", base64::engine::general_purpose::STANDARD.encode(&bytes));
+        let expected = decode_embedded_image(&uri).expect("view could not be rendered").1;
+        let rendered = self.img.local(src).expect("view image path missing");
+        assert_ne!(rendered, original);
+        assert_eq!(std::fs::read(&rendered).unwrap(), expected);
+        assert!(self.img.dims(&rendered).is_some() && self.img.boxes.borrow().contains_key(&block.id));
+        let table = self.core.doc.blocks.iter().find_map(|block| if let BlockKind::Table(table) = &block.kind { Some(table) } else { None }).expect("table missing");
+        let cell = &table.rows[1][1].blocks[0];
+        let inline = cell.text.runs.iter().find_map(|run| run.marks.inline.as_ref()?.image()).expect("table SVG view missing");
+        let inline_path = self.img.local(&inline.src).expect("table SVG view did not resolve");
+        assert_eq!(std::fs::read(inline_path).unwrap(), expected);
+        let cache = self.cache.borrow();
+        let layout = cache.get(&cell.id).expect("table view was not laid out");
+        assert!(!layout.images.is_empty() && layout.decoded_inline_images > 0, "table view did not decode");
+        crate::logging::write("svg-views: desktop PASS");
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scripted_image_host(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if action == "svg" {
+            let svg = self.core.doc.blocks.iter().find_map(|b| match &b.kind {
+                BlockKind::Image { src, .. } if src.ends_with(".svg") => Some(src), _ => None,
+            }).expect("SVG image block");
+            let path = image_path(svg).expect("SVG image path");
+            assert_eq!(self.img.dims(&path), Some((20., 10.)));
+            crate::logging::write("image-host: svg PASS");
+            return;
+        }
+        let image = self.core.doc.blocks.iter().find(|b| matches!(b.kind, BlockKind::Image { .. })).expect("image block");
+        let id = image.id;
+        let BlockKind::Image { src, .. } = &image.kind else { unreachable!() };
+        match action {
+            "local" => assert!(Path::new(src).is_file(), "local image missing"),
+            "upload" => { self.upload_to_picgo(id, window, cx); return; }
+            "remote" => assert_eq!(src, "https://example.test/uploaded.png"),
+            _ => panic!("unknown image host action"),
+        }
+        crate::logging::write(&format!("image-host: {action} PASS"));
     }
 
     /// 添加描述 / 编辑描述: shows the description and puts the caret in it.
@@ -1709,7 +2030,7 @@ impl Editor {
         let mut blocks = vec![];
         let mut err = None;
         for p in pics {
-            match image_block_from_file(p) {
+            match image_block_from_file(p, self.image_base.as_deref()) {
                 Ok(b) => blocks.push(b),
                 Err(e) => err = Some(e),
             }
@@ -1811,8 +2132,8 @@ fn decode_rotated(path: &Path, crop: [f32; 4], rot: u8) -> Option<Arc<RenderImag
 
 /// A new image block for pasted or picked bytes, stored in the assets
 /// folder (format, size and pixel checks on upload).
-pub(super) fn image_block_from(bytes: &[u8], ext: &str) -> Result<Block, &'static str> {
-    let path = store_image(bytes, ext)?;
+pub(crate) fn image_block_from_in(bytes: &[u8], ext: &str, base: Option<&Path>) -> Result<Block, &'static str> {
+    let path = store_image_in(bytes, ext, base)?;
     let mut b = Block::new(
         BlockKind::Image { src_kind: "src".into(), src: path.to_string_lossy().to_string(), width: None, height: None, caption: None, crop: None },
         RichText::default(),
@@ -1823,6 +2144,11 @@ pub(super) fn image_block_from(bytes: &[u8], ext: &str) -> Result<Block, &'stati
 
 /// Checks picked or pasted image bytes and copies them into the assets folder.
 pub(super) fn store_image(bytes: &[u8], ext: &str) -> Result<PathBuf, &'static str> {
+    store_image_in(bytes, ext, None)
+}
+
+fn store_image_in(bytes: &[u8], ext: &str, base: Option<&Path>) -> Result<PathBuf, &'static str> {
+    use std::io::Write;
     let ext = ext.to_ascii_lowercase();
     if !FORMATS.contains(&ext.as_str()) {
         return Err(BAD_FORMAT);
@@ -1830,17 +2156,29 @@ pub(super) fn store_image(bytes: &[u8], ext: &str) -> Result<PathBuf, &'static s
     if bytes.len() as u64 > MAX_BYTES {
         return Err(TOO_BIG);
     }
-    image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()
-        .and_then(|r| r.into_dimensions().ok())
-        .ok_or(BAD_DIMS)?;
-    let path = Store::assets_dir().join(format!("{}.{ext}", uuid::Uuid::new_v4()));
-    std::fs::write(&path, bytes).map_err(|_| BAD_DIMS)?;
+    if ext == "svg" {
+        usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|_| BAD_DIMS)?;
+    } else {
+        image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.into_dimensions().ok())
+            .ok_or(BAD_DIMS)?;
+    }
+    let dir = if let Some(base) = base {
+        let root = base.canonicalize().map_err(|_| "无法保存图片")?;
+        let dir = base.join("assets");
+        std::fs::create_dir_all(&dir).map_err(|_| "无法保存图片")?;
+        if !dir.canonicalize().map_err(|_| "无法保存图片")?.starts_with(root) { return Err("无法保存图片"); }
+        dir
+    } else { Store::assets_dir() };
+    let path = dir.join(format!("{}.{ext}", uuid::Uuid::new_v4()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|_| "无法保存图片")?;
+    if file.write_all(bytes).is_err() { drop(file); let _ = std::fs::remove_file(&path); return Err("无法保存图片"); }
     Ok(path)
 }
 
-fn image_block_from_file(p: &Path) -> Result<Block, &'static str> {
+fn image_block_from_file(p: &Path, base: Option<&Path>) -> Result<Block, &'static str> {
     let ext = p.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
     if !p.is_file() || !FORMATS.contains(&ext.as_str()) {
         return Err(BAD_FORMAT);
@@ -1849,7 +2187,7 @@ fn image_block_from_file(p: &Path) -> Result<Block, &'static str> {
         return Err(TOO_BIG);
     }
     let bytes = std::fs::read(p).map_err(|_| BAD_DIMS)?;
-    image_block_from(&bytes, &ext)
+    image_block_from_in(&bytes, &ext, base)
 }
 
 /// File name of a remote image's download in `assets/remote`.
@@ -1867,12 +2205,16 @@ pub fn cached_remote(url: &str) -> Option<PathBuf> {
 /// Pasted HTML images: `data:` URIs and local files become owned assets;
 /// unreadable ones are dropped. Remote images stay remote.
 pub(crate) fn localize_pasted_images(blocks: &mut Vec<Block>) {
+    localize_pasted_images_in(blocks, None);
+}
+
+pub(super) fn localize_pasted_images_in(blocks: &mut Vec<Block>, base: Option<&Path>) {
     use base64::Engine;
     blocks.retain_mut(|b| {
-        localize_pasted_images(&mut b.children);
+        localize_pasted_images_in(&mut b.children, base);
         if let BlockKind::Table(t) = &mut b.kind {
             for cell in t.rows.iter_mut().flatten() {
-                localize_pasted_images(&mut cell.blocks);
+                localize_pasted_images_in(&mut cell.blocks, base);
                 if cell.blocks.is_empty() && !cell.is_covered() {
                     cell.blocks.push(Block::text(""));
                 }
@@ -1883,9 +2225,12 @@ pub(crate) fn localize_pasted_images(blocks: &mut Vec<Block>) {
             let Some((head, payload)) = data.split_once(',') else { return false };
             let ext = head.split(';').next().unwrap_or_default().replace("jpeg", "jpg");
             let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(payload.trim()) else { return false };
-            image_block_from(&bytes, &ext)
-        } else if src.starts_with('/') {
-            image_block_from_file(Path::new(src.as_str()))
+            image_block_from_in(&bytes, &ext, base)
+        } else if src.starts_with("file:") {
+            let path = url::Url::parse(src).ok().and_then(|url| url.to_file_path().ok());
+            match path { Some(path) => image_block_from_file(&path, base), None => Err(BAD_FORMAT) }
+        } else if Path::new(src.as_str()).is_absolute() {
+            image_block_from_file(Path::new(src.as_str()), base)
         } else {
             return true;
         };

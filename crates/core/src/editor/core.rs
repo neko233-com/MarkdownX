@@ -979,7 +979,8 @@ impl Core {
     /// Replace the object at `p` with one of `kind` (one undo step, except
     /// that an equation's live edits coalesce).
     fn set_object(&mut self, p: Pos, kind: InlineKind) {
-        let obj = crate::docxml::to_inline(kind);
+        let display = matches!(&kind, InlineKind::Equation(_)) && self.object_at(p).is_some_and(Inline::is_display_equation);
+        let obj = match kind { InlineKind::Equation(src) if display => crate::docxml::to_display_equation(&src), kind => crate::docxml::to_inline(kind) };
         if self.object_at(p).is_none_or(|old| old.kind == obj.kind) {
             return;
         }
@@ -1600,6 +1601,36 @@ impl Core {
     }
 
     // ---- block kind changes
+
+    /// Replace only the image that still has the source an async operation read.
+    pub fn replace_image_source(&mut self, id: BlockId, expected: &str, next: &str) -> bool {
+        if !matches!(self.kind_of(id), Some(BlockKind::Image { src, .. }) if src == expected) || expected == next { return false; }
+        self.checkpoint(EditKind::Other);
+        if let Some(Block { kind: BlockKind::Image { src, src_kind, .. }, .. }) = self.block_mut(id) {
+            *src = next.to_owned();
+            *src_kind = "src".into();
+        }
+        self.break_coalescing();
+        true
+    }
+
+    /// Complete an asynchronous upload only while its containing text is unchanged.
+    pub fn replace_inline_image_source(&mut self, at: Pos, expected: &RichText, next: &str) -> bool {
+        let Some(end) = at.offset.checked_add(EQUATION.len()) else { return false };
+        if self.text_of(at.block) != Some(expected) || expected.text.get(at.offset..end) != Some(EQUATION) { return false; }
+        let Some(mut inline) = self.object_at(at).cloned() else { return false };
+        let Some(mut image) = inline.image().cloned() else { return false };
+        if image.src == next { return false; }
+        image.src = next.to_string();
+        image.src_kind = "src".into();
+        if crate::docxml::remap_inline_image(&mut inline, image).is_err() { return false; }
+        self.checkpoint(EditKind::Other);
+        if let Some(text) = self.text_mut(at.block) {
+            text.update_marks(at.offset..end, |marks| marks.inline = Some(inline.clone()));
+        }
+        self.break_coalescing();
+        true
+    }
 
     pub fn turn_into(&mut self, ids: &[BlockId], kind: BlockKind) {
         let ids: Vec<BlockId> = ids.iter().copied().filter(|id| *id != TITLE).collect();
@@ -3280,6 +3311,41 @@ mod tests {
     }
 
     #[test]
+    fn asynchronous_image_replacement_is_conditional_and_undoable() {
+        let mut c = doc("<title>T</title><img href=\"assets/a.png\"/>");
+        let image = id(&c, 1);
+        assert!(!c.replace_image_source(image, "old.png", "https://example.test/a.png"));
+        assert!(c.replace_image_source(image, "assets/a.png", "https://example.test/a.png"));
+        assert!(xml(&c).contains("https://example.test/a.png"));
+        assert!(!c.replace_image_source(image, "assets/a.png", "https://example.test/b.png"));
+        c.undo();
+        assert!(xml(&c).contains("assets/a.png"));
+        c.redo();
+        assert!(xml(&c).contains("https://example.test/a.png"));
+    }
+
+    #[test]
+    fn asynchronous_inline_image_replacement_is_conditional_and_undoable() {
+        let mut c = doc("<title>T</title><p>前<inline-image src=\"assets/a.png\" alt=\"甲\" custom=\"keep\"/>中<inline-image src=\"assets/a.png\" alt=\"乙\"/>后</p>");
+        let block = id(&c, 1);
+        let text = c.text_of(block).unwrap().clone();
+        let at = Pos::new(block, text.text.find(EQUATION).unwrap());
+        assert!(!c.replace_inline_image_source(Pos::new(block, at.offset + 1), &text, "https://example.test/a.png"));
+        let mut stale = text.clone();
+        stale.push("edit", Marks::default());
+        assert!(!c.replace_inline_image_source(at, &stale, "https://example.test/a.png"));
+        assert!(c.replace_inline_image_source(at, &text, "https://example.test/a.png"));
+        assert!(xml(&c).contains("custom=\"keep\""));
+        assert_eq!(xml(&c).matches("https://example.test/a.png").count(), 1);
+        assert_eq!(xml(&c).matches("assets/a.png").count(), 1);
+        assert!(!c.replace_inline_image_source(at, &text, "https://example.test/other.png"));
+        c.undo();
+        assert_eq!(xml(&c).matches("assets/a.png").count(), 2);
+        c.redo();
+        assert_eq!(xml(&c).matches("https://example.test/a.png").count(), 1);
+    }
+
+    #[test]
     fn select_all_twice_deletes_a_folded_tail() {
         let mut c = doc("<title>T</title><h1>a</h1><h2 folded=\"true\">b</h2><p>hidden</p>");
         c.sel = Selection::caret(Pos::new(id(&c, 1), 0));
@@ -3631,6 +3697,19 @@ mod tests {
         assert_eq!(c.equation_source(p).as_deref(), Some(""));
         c.undo();
         assert_eq!(c.text_of(b).unwrap().text, "ab");
+    }
+
+    #[test]
+    fn display_equation_edits_keep_layout_and_undo() {
+        let mut c = doc("<title>T</title><p><latex display=\"block\">x</latex></p>");
+        let p = Pos::new(id(&c, 1), 0);
+        assert!(c.object_at(p).unwrap().is_display_equation());
+        c.set_equation_source(p, "\\frac{a}{b}");
+        assert_eq!(c.equation_source(p).as_deref(), Some("\\frac{a}{b}"));
+        assert!(c.object_at(p).unwrap().is_display_equation());
+        c.undo();
+        assert_eq!(c.equation_source(p).as_deref(), Some("x"));
+        assert!(c.object_at(p).unwrap().is_display_equation());
     }
 
     #[test]

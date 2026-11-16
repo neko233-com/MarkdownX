@@ -563,6 +563,7 @@ impl Render for TextField {
             found: vec![],
             eq_counter: 0,
             button_edit: None,
+            inline_images: Default::default(),
         };
         let entity = cx.entity();
         let focus = self.focus.clone();

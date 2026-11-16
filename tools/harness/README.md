@@ -30,9 +30,43 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 - `python3 tools/harness/workspace_startup.py` 用隔离目录验证多目录并存、重启恢复、跨目录搜索、保存和文件管理，以及不可用目录的保护；不会读取真实文档目录。
 - `python3 tools/harness/onboarding.py` 在隔离目录验证中英文首次启动、示例文件与目录树、重启和切换语言、已有文件保护、旧版未改/已改指南及启动参数。
 - `python3 tools/harness/feishu_interactive.py` 使用模拟飞书 CLI、临时工作目录和屏幕外窗口验证在线导入及单位圆、抛体画布控件；不会连接真实飞书账号。
+- `python tools/harness/pdf_preview.py -Quiet` 在隔离目录验证 PDF 的只读预览、缩放、滚动、键盘翻页、中英文按页查找、无文字页面和 CAJ 内存转换路径，并检查源文件不变。
+- `python tools/harness/pdf_attachment.py -Quiet` 在隔离工作区点击 DocxXML 卡片和行内 PDF 附件，验证相对路径及只读预览。
 - `python3 tools/harness/spreadsheet_number_format.py` 使用隔离工作区和屏幕外窗口验证数字格式应用、撤销、重做、隐藏公式、单元格样式与 openpyxl 兼容性；需先构建 `devtools` 版本并安装 openpyxl。
 - `python3 tools/harness/spreadsheet_conditional.py` 在隔离桌面窗口中验证条件格式、公式重算、撤销、大区域保护和原文件兼容性；需先构建 `devtools` 版本并安装 openpyxl。
 - `python3 tools/harness/book_languages.py` 在隔离库中验证双语书导入、重启、`.mdxb` 导出和 Markdown 文件夹重打包。
+- `python tools/harness/book_xml_resources.py -Quiet` 在隔离工作区验证通过桌面界面打包 DocxXML 正文、译文、封面和相对附件。
+- `python tools/harness/inline_model.py -Quiet` 在隔离工作区和屏幕外窗口验证 Markdown 内模型加载、拖动旋转、缩放、重置及原文件不被修改。
+- `python tools/harness/indented_code.py -Quiet` 在隔离工作区验证缩进代码示例不读取图片，真实相对图片可打开且源文件不变。
+- `python tools/harness/nested_list_save.py -Quiet` 在隔离工作区编辑中文编号子项，验证自动保存保留缩进、原始图片引用及换行。
+- `python tools/harness/list_media.py -Quiet` 在隔离窗口中播放列表内音视频和 Canvas，验证相对路径与源文件保护。
+- `python tools/harness/media_sources.py -Quiet` 在隔离窗口验证表格内嵌套音视频资源及两种相对路径的实际播放，并检查源文件不变。
+- `python tools/harness/picgo_settings.py -Quiet` 在隔离窗口验证图床地址设置、重启后上传和原图保护。
+- `python tools/harness/image_host.py -Quiet` 在隔离工作区和屏幕外窗口验证本地图片存储、相对链接以及向本机模拟 PicGo 服务的主动上传。
+- `python tools/harness/html_images.py -Quiet` 在隔离工作区验证 Markdown 中独立及表格混排的 HTML 图片实际加载，并检查源文件不变。
+- `python tools/harness/rich_title.py -Quiet` 验证 Markdown 一级标题中的图片和公式加载，并保护原始文件。
+- `python tools/harness/embedded_images.py -Quiet` 验证内嵌 PNG、SVG 和表格图片的桌面显示、SVG 外部引用隔离及临时缓存清理。
+- `python tools/harness/relative_links.py -Quiet` 在隔离工作区验证相对文件导航、切换前保存、PDF 预览和工作区边界。
+- `python tools/harness/math_resources.py -Quiet` 验证公式中的图片和引用写法不会被误打包，真实相对图片仍能嵌入。
+- `python tools/harness/display_math.py -Quiet` 在隔离窗口验证独立公式布局、编辑自动保存和 HTML 导出。
+- `python tools/harness/cli_conversion.py -Quiet` 用真实 CLI 和本机浏览器验证 HTML/PDF 导出、相对资源及失败时的输出保护。
+- `python tools/harness/cli_office.py -Quiet` 在本机 Pandoc 可用时验证 DOCX/ODT/RTF/EPUB、参考文献、图片和样式模板。
+- `python tools/harness/create_demo.py -Quiet` 在隔离目录验证手动创建演示文件夹、打开示例和保护已有同名目录。
+- `python tools/harness/caj_preview.py <CAJ 样本> -Quiet` 用单独提供的文件验证只读预览与原文件完整性；测试副本位于临时目录。
+- `python tools/harness/caj_page_link.py -Quiet` 验证相对页码链接可打开 PDF 数据包装的 CAJ 并跳到指定页，不修改原件。
+- `python tools/harness/inline_html.py -Quiet` 在 Windows 屏幕外窗口验证 Canvas 点击、视频播放、路径与网络隔离、菜单遮挡、滚动释放和控件定位。
+- `python tools/harness/inline_image_host.py -Quiet` 在隔离窗口验证混排图片的工具栏上传、失败重试、表格与引用格式保留及并发编辑保护。
+- `python tools/harness/inline_html_boundary.py -Quiet` 验证互动资源越过工作区或缺失时显示错误，不运行控件或改动源文件。
+- `python tools/harness/module_widget.py -Quiet` 验证内联及外置 ES 模块的相对依赖、点击和源文件保护。
+- `python tools/harness/wrapped_widget.py -Quiet` 在隔离窗口验证容器内 Canvas、相对脚本与样式及源文件保护。
+- `python tools/harness/inline_css.py -Quiet` 在屏幕外窗口验证外置 CSS 的相对图片、嵌套样式及 Canvas 点击。
+- `python tools/harness/research_preview.py -Quiet` 验证 OFD、DOCX、RTF 与 Quarto 源文件的只读文本预览不会修改正文或原文件。
+- `python tools/harness/docx_layout.py -Quiet` 在隔离桌面窗口验证 DOCX 只读版式、表格和图片，不修改源文件。
+- `python tools/harness/docx_revisions.py -Quiet` 检查 DOCX 插入和删除修订在版式及文本预览中均保留。
+- `python tools/harness/ofd_layout.py -Quiet` 在隔离桌面窗口验证 OFD 双页绘制、翻页、签名提示和源文件只读保护。
+- `python tools/harness/legacy_doc.py -Quiet` 验证旧版 Word 文件通过受限子进程只读预览，且不改动原件。
+- `python tools/harness/office_templates.py -Quiet` 验证 Office 宏文档及模板的只读预览，使用本地合成样本，不执行宏。
+- `python tools/harness/epub_preview.py -Quiet` 在隔离桌面窗口验证 EPUB 章节、图片、公式及原文件只读保护。
 - Windows 上运行 `python tools/harness/window_controls.py`，在隔离窗口和临时文档库中验证标题栏命中、最小化、最大化/还原、全屏控件、关闭时保存和外部修改冲突保护。
 
 ## 脚本命令
@@ -56,6 +90,7 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 | `bench <n> <命令>` | 把一条命令跑 n 次，每次同步画一帧，输出耗时 |
 | `record <文件.mp4>` / `record stop` / `glide` / `scroll` / `caption` | 录制演示视频 |
 | `open-folder` | 触发打开文件夹操作，配合 `pick` 使用 |
+| `create-demo` | 创建演示文件夹，配合 `pick` 指定其父目录 |
 | `open-file` / `new-folder-file` | 触发打开文件 / 在目录中新建文件，配合 `pick` 使用 |
 | `check-folder-state <目录>` | 只读检查已打开的目录、侧栏和首个文件 |
 | `check-workspace-startup <阶段> <目录>` | 检查临时目录中的默认、选择、恢复和启动参数覆盖行为 |
@@ -93,3 +128,5 @@ Windows 的脚本窗口默认放在屏幕之外，避免与用户操作相互干
 - 不用 `open` 命令。
 - 需要选文件时，用 `pick a|b` 代替系统对话框。
 - 不要拿用户的真实文档库当 `lib_dir`。确实需要时只读复制一份，产物里也不要提交用户的内容。
+
+- `python tools/harness/update_checks.py -Quiet` 在隔离桌面库中通过回环 HTTP 验证手动检查、重复请求保护、关闭自动检查后的手动操作、正式版本、网络失败重试及浅深色切换；正式构建不包含测试服务入口。

@@ -62,9 +62,9 @@ DocxXML 是飞书 / Lark 的文档 XML 格式。`crates/core/tests/fixtures/all-
 
 - 只丢掉**源码排版产生的空白**：一个换行加缩进，以及嵌套 block 前面的空格和 Tab。其余空白都是内容，例如 `<p> </p>` 保留那个空格。
 - 不认识的元素原样保留，写出时原样输出：block 级的是 `BlockKind::Raw`。
-- 行内对象（公式、文件、按钮、日期提醒、@文档，以及不认识的行内元素）在文本里各占一个 U+FFFC，样式里存一个 `Inline { kind, xml }`：
+- 行内对象（公式、文件、按钮、日期提醒、@文档，以及不认识的行内元素）在文本里各占一个 U+FFFC，样式里存一个 `Inline { kind, xml }`： Markdown 中完整的单行或多行 `$$` 公式转换为独立公式，源码换行在未编辑时保留。
   - `xml` 是读入时的原文，写出时原样输出，所以不认识的属性也不会丢；
-  - `kind` 是读入时解析出来的类型，视图和导出只看它。
+  - `kind` 是读入时解析出来的类型；公式的 `<latex display="block">` 还保留独立公式布局，编辑后仍保留该属性。
   - 编辑器新建或修改对象时，经 `docxml::to_inline` 先拼出规范 XML 再读回一遍，两者始终一致，存盘再读回也不变。
 
 ### 本地扩展
@@ -168,13 +168,25 @@ Markdown 用围栏代码块，info 是 `mdxb-canvas` 或 `mdxb-html`，正文是
 ```
 ````
 
-围栏长度按 `source` 里最长的反引号串加一，至少三个；读入时 JSON 解析失败或 `source` 为空会退回普通代码块。`canvas` 的 Web 和桌面端均实现 `quadratic`、`unitcircle`、`projectile`，未知 `kind` 显示提示。`html` 在 Web 阅读器中通过 `iframe sandbox="allow-scripts"` 运行：允许内联脚本、Canvas 和 data/blob 资源，内容安全策略阻止外部脚本、资源和脚本网络连接；桌面端暂不执行 HTML。
+围栏长度按 `source` 里最长的反引号串加一，至少三个；读入时 JSON 解析失败或 `source` 为空会退回普通代码块。`canvas` 的 Web 和桌面端均实现 `quadratic`、`unitcircle`、`projectile`，未知 `kind` 显示提示。`html` 在 Windows 桌面通过 WebView2、在 Web 阅读器通过浏览器运行，均使用 `iframe sandbox="allow-scripts"`；允许内联脚本和 Canvas，限制脚本网络连接与外部资源。Windows 还拦截交互框架的页面跳转，只将明确引用的本地图片、音视频、脚本及样式映射到临时的本机地址，滚动离开时释放控件；Web 框架本身仍可能导航。独立 `script[src]` 和 `link[rel=stylesheet][href]` 会按章节目录解析并打包；外置 CSS 的本地 `url()` 和嵌套 `@import` 按样式文件目录解析并嵌入，HTML 内联样式的相对资源按章节目录解析。JS 动态请求和模块依赖尚不会递归收集。macOS 和 Linux 桌面 HTML 仍需 Web 阅读器。
+
+HTML 中 `img`、`video`、`audio`、`source`、`track` 和 `model-viewer` 的 `src` 以及 `video` 的 `poster` 可以使用相对于当前章节文件的路径，推荐 `./`；打包器会将本地资源嵌入书籍并改写为资源键。Markdown 翻译章节相对于翻译文件解析；缺失或超出书籍目录的本地资源会使文件夹打包失败。单个资源仍受 16 MiB、全书资源受 64 MiB 限制。脚本、样式和注释中的普通示例文字不会被改写。阅读器只把类型匹配的嵌入媒体转换为 data URL，沙箱仍禁止外部连接。
+
+Markdown 中独占一块且有闭合标签的 `<video>`、`<audio>`、`<canvas>` 和 `<model-viewer>` 也会成为交互块；前三种后紧邻的 `<script>` 在 Windows 桌面和 Web 沙箱中一并运行。普通代码围栏内的示例仍是代码；未闭合的媒体标签保留为文本。直接编辑工作区 Markdown 的其他内容时，原有 HTML 和路径会保持不变。独立且不含脚本的 `<model-viewer src="./model.glb"></model-viewer>` 在桌面和 Web 中显示 3D 模型；打包时 glTF/GLB 的本地 `buffers` 与 `images` 依赖被嵌入并改写为相对模型的资源路径。桌面预览只显示几何，Web 的 OBJ 材质库和需要额外解码器的压缩模型暂不支持。
+
+GFM 表格单元格也可放一个完整的单行媒体或 Canvas 标签与脚本；单元格内的 `|` 按 GFM 写成 `\|`。导出多行交互块时，单元格使用 MarkdownX 的 `<markdownx-interactive data-base64="…"></markdownx-interactive>` 扩展，base64 是包含 `kind`、`title`、`height`、`source` 的 UTF-8 JSON；其他 Markdown 阅读器可能不显示该扩展。源文件原本使用的单行 HTML 在编辑其他单元格时保持原样。
 
 ### 导入导出
 
 桌面端「下载为 → MarkdownX 书 (.mdxb)」把当前页和它的子页按文档树顺序打包：当前页是第一章，子页依次成章。导入时第一章建为根文档，其余章用 `Meta.parent` 挂到根文档下；资源写到独立目录，正文 `src` 改写为库内相对路径。
 
 「文件 → 打包成电子书…」是另一条入口：把工作目录中的 Markdown 和 `.docxxml` 按文件名顺序装成章节，读取 `book.json` 中的章节 ID、双语标题、翻译文件和书籍配置。它不依赖文档库，适合 agent 或脚本生成的书籍目录。
+
+Markdown 图片以各自章节或翻译文件所在目录为基准，推荐 `./shots/frame.svg`，也支持 `shots/frame.svg`。正文和表格中支持 Markdown 图片以及单行 HTML `<img src="…">`；独立 HTML 图片标签可跨行并读取像素宽高，文字混排图片按行内布局缩放。桌面打包与 Agent CLI 会嵌入识别到的章节及翻译图片，代码和注释中的示例不改写。资源必须在书籍目录内，识别到的缺失或越界本地图片会导致这些打包步骤报错；旧书中已有的 `assets/...` key 继续可用。浏览器会将 HTML 图片转换为安全的图片元素，不执行原标签的事件处理器。DocxXML 翻译中新加入的相对图片尚未自动收集。
+
+文件夹打包的章节可选保存 `source_path` 和 `source_en_path`，均为书籍目录内的原始相对路径；缺省字段兼容旧书。阅读器以当前章节或翻译的来源目录解析指向书内其他章节的相对链接，不猜测重名文件，并支持标题片段（如 `./chapter.md#标题`）。标题片段保留 Unicode 字母、数字、下划线和连字符，空白转为连字符、其余标点省略；重复标题依次追加 `-1`、`-2`。路径不得越界或在不同章节间重复；外部文件不会映射成章节链接。 打包时，本地 PDF 链接也可嵌入 `assets/`，保留可选的 `#page=数字` 页码；相对路径以对应章节或译文目录为准，超出书籍目录的资源会被拒绝。导入桌面文档时资源路径改写到该书的专属资源目录；浏览器阅读器从嵌入数据创建 PDF 副本打开。
+
+引用式图片支持单行定义，例如 `![画面][镜头]` 和 `[镜头]: ./shots/frame.svg`；打包时展开图片引用并嵌入资源，工作区原文不改动。支持前向引用、空标签和同名简写；跨行定义及其他不受支持的写法不自动转换。
 
 「下载为 → Markdown 文件夹 (.md)」会写出 Markdown、可恢复结构的同名 `.xml`、`book.json` 和资源。较新的 Markdown 优先于 XML；英文正文按其原格式保存为 `.en.md` 或 `.en.xml`，由 `content_en_file` 和 `format_en` 标记。Markdown 的展示细节可能退化，XML 保留编辑器结构。缺失资源或无法安全合并不同原书的资源时，导出报错，不静默丢弃翻译。
 

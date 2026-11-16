@@ -67,6 +67,10 @@ pub fn is_external(path: &Path) -> bool {
     matches!(catalog().registry.resolve(path), Some(Provider::External(_)))
 }
 
+pub fn is_research(path: &Path) -> bool {
+    core::builtin_editor(path) == Some(core::BuiltinEditor::Research)
+}
+
 pub fn suffixes() -> Vec<String> {
     catalog().registry.external_suffixes()
 }
@@ -136,11 +140,30 @@ impl crate::app::Workspace {
     fn open_extension_path_now(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.status = crate::app::SaveStatus::Idle;
         let display = path.clone();
-        let task = cx.background_executor().spawn(async move { render(&path) });
+        let task = cx.background_executor().spawn(async move {
+            #[cfg(target_os = "windows")]
+            if path.extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("epub")) {
+                let (text, layout) = crate::epub_preview::prepare(&path).map_err(anyhow::Error::msg)?;
+                return Ok((fdl_core::research::preview_epub_text(&path, &text)?, Some(layout)));
+            }
+            #[cfg(target_os = "windows")]
+            if path.extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("doc") || s.eq_ignore_ascii_case("dot")) {
+                let text = crate::doc_text::index(&path).map_err(anyhow::Error::msg)?;
+                return Ok((fdl_core::research::preview_legacy_doc(&path, &text)?, None));
+            }
+            #[cfg(target_os = "windows")]
+            if path.extension().and_then(|s| s.to_str()).is_some_and(|s| ["docx", "docm", "dotx", "dotm"].iter().any(|ext| s.eq_ignore_ascii_case(ext)))
+                && let Ok((markdown, layout)) = crate::docx_preview::prepare(&path) { return Ok((markdown, Some(layout))); }
+            #[cfg(target_os = "windows")]
+            if path.extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("ofd"))
+                && let Ok((markdown, layout)) = crate::ofd_preview::prepare(&path) { return Ok((markdown, Some(layout))); }
+            let markdown = if is_research(&path) { fdl_core::research::preview_markdown(&path)? } else { render(&path)? };
+            Ok::<_, anyhow::Error>((markdown, None::<String>))
+        });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |workspace, window, cx| match result {
-                Ok(markdown) => workspace.show_extension_document(display, markdown, window, cx),
+                Ok((markdown, layout)) => workspace.show_extension_document(display, markdown, layout, window, cx),
                 Err(error) => workspace.show_toast_kind(crate::ui::ToastKind::Error,
                     &crate::localized_format!("扩展无法打开此文件：{}", "The extension could not open this file: {}", crate::settings::diagnostic(&error.to_string())), cx),
             });
@@ -149,8 +172,19 @@ impl crate::app::Workspace {
 
     /// Show the extension's Markdown as a read-only document. It is not bound
     /// to a Markdown file, so saving never rewrites the original format.
-    fn show_extension_document(&mut self, path: PathBuf, markdown: String, window: &mut Window, cx: &mut Context<Self>) {
-        let (doc, _) = crate::markdown_source::parse(&path, &markdown);
+    fn show_extension_document(&mut self, path: PathBuf, markdown: String, layout: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let (mut doc, _) = crate::markdown_source::parse(&path, &markdown);
+        #[cfg(target_os = "windows")]
+        let layout_unavailable = layout.is_none() && path.extension().and_then(|s| s.to_str()).is_some_and(|s| ["docx", "docm", "dotx", "dotm", "ofd"].iter().any(|ext| s.eq_ignore_ascii_case(ext)));
+        if let Some(source) = layout {
+            let interactive = crate::model::Interactive { kind: crate::model::InteractiveKind::Html,
+                title: crate::settings::tr("版式预览（只读）", "Layout preview (read-only)").into(), height: 520, source };
+            doc.blocks.insert(doc.blocks.len().min(1), crate::model::Block::new(crate::model::BlockKind::Interactive(interactive), crate::model::RichText::default()));
+        }
+        #[cfg(target_os = "windows")]
+        if layout_unavailable {
+            doc.blocks.insert(doc.blocks.len().min(1), crate::model::Block::text(crate::settings::tr("版式预览不可用，请查看下方提取的文字或使用其他应用打开原文件。", "Layout preview is unavailable; see the extracted text below or open the original in another app.")));
+        }
         let modified = crate::app::file_modified(&path);
         let editor = cx.new(|cx| {
             let mut editor = crate::editor::view::Editor::new(doc, modified, crate::store::PageWidth::default(), window, cx);
@@ -160,6 +194,7 @@ impl crate::app::Workspace {
         });
         self.bind_editor(editor.clone(), window, cx);
         if !self.search_open { editor.read(cx).focus(window); }
+        self.file_read_editor = None;
         self.editor = Some(editor);
         self.current = None;
         self.file = Some(path);
