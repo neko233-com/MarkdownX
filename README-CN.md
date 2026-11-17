@@ -75,7 +75,7 @@ pwsh -File scripts/install-windows.ps1
 
 不需要管理员权限。优先使用当前构建的 MSI；应用装到 `%LOCALAPPDATA%\Programs\MarkdownX`，服务器令牌和工作区保留在 `%LOCALAPPDATA%\MarkdownX\server`，并在「应用和功能」中管理。安装脚本不会强制结束运行中的安装版应用或服务器。
 
-release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-<version>-x64.msi`。MSI 会装好应用、可选协作服务器、Web UI、模板、快捷方式和 `.mdxb` 关联；协作服务仅在主动打开「MarkdownX Collaboration」时启动，不随登录启动。内置本机阅读器按需启动，仅提供应用内置的静态资源。构建时只需要 WiX Toolset 3.14。
+release 构建后运行 `pwsh -File scripts/build-msi.ps1`，生成 `dist\MarkdownX-<version>-x64.msi`。MSI 会装好应用、可选协作服务器、Web UI、模板、快捷方式和 `.mdxb` 关联，并将 MarkdownX 注册为 `.md` 文件的可选打开应用。在 MarkdownX 的「设置 → 通用 → 默认应用」打开 Windows 设置，为 `.md` 选择 MarkdownX，也可通过文件的「打开方式」选择。Windows 会保留原有默认应用，直到用户自行更改。协作服务仅在主动打开「MarkdownX Collaboration」时启动，不随登录启动。内置本机阅读器按需启动，仅提供应用内置的静态资源。构建时只需要 WiX Toolset 3.14。
 
 「我的文档」默认显示系统文档目录下的 `MarkdownX-Demo`；Windows 通常为 `C:\Users\<用户名>\Documents\MarkdownX-Demo`。目录不存在时自动创建。使用「我的文档」旁的加号、设置或 **文件 → 打开文件夹…** 添加多个目录，各目录树同时显示并在重启后恢复。目录旁的「…」可更改显示名称或目录、刷新、移除工作区；移除只影响列表，不删除磁盘文件。不可用的目录会保留提示，不影响其他目录。启动参数指定的文件夹仅本次生效。
 

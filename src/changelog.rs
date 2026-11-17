@@ -15,6 +15,9 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.46", &[
+        ("Windows 支持将 MarkdownX 设为 .md 文件的默认应用，并可从设置打开系统选择页面", "Register MarkdownX as a Windows default app for .md and open the system choice page from settings"),
+    ]),
     ("0.1.45", &[
         ("统一桌面与网页阅读器的中性灰阶，改善浅色与深色文字层级", "Unify desktop and web neutral colors with clearer light and dark contrast"),
         ("手动检查更新显示持久状态，支持失败重试和打开正式发布下载页", "Show persistent update results, retry failures and open stable release downloads"),

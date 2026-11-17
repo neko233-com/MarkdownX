@@ -67,6 +67,16 @@ Root: HKCU; Subkey: "Software\Classes\.mdxb"; ValueType: string; ValueData: "Mar
 Root: HKCU; Subkey: "Software\Classes\MarkdownX.Book"; ValueType: string; ValueData: "MarkdownX Book"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\MarkdownX.Book\DefaultIcon"; ValueType: string; ValueData: "{app}\markdownx.exe,0"
 Root: HKCU; Subkey: "Software\Classes\MarkdownX.Book\shell\open\command"; ValueType: string; ValueData: """{app}\markdownx.exe"" ""%1"""
+; Register as a candidate; Windows owns the user's default choice.
+Root: HKCU; Subkey: "Software\Classes\.md\OpenWithProgids"; ValueType: string; ValueName: "MarkdownX.Markdown"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\MarkdownX.Markdown"; ValueType: string; ValueData: "Markdown document"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\MarkdownX.Markdown"; ValueType: string; ValueName: "FriendlyTypeName"; ValueData: "Markdown document"
+Root: HKCU; Subkey: "Software\Classes\MarkdownX.Markdown\DefaultIcon"; ValueType: string; ValueData: "{app}\markdownx.exe,0"
+Root: HKCU; Subkey: "Software\Classes\MarkdownX.Markdown\shell\open\command"; ValueType: string; ValueData: """{app}\markdownx.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\MarkdownX\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "MarkdownX"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\MarkdownX\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Read and edit Markdown documents with MarkdownX."
+Root: HKCU; Subkey: "Software\MarkdownX\Capabilities\FileAssociations"; ValueType: string; ValueName: ".md"; ValueData: "MarkdownX.Markdown"
+Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "MarkdownX"; ValueData: "Software\MarkdownX\Capabilities"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\markdownx.exe"; Description: "Launch MarkdownX"; Flags: nowait postinstall skipifsilent

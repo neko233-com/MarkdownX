@@ -724,6 +724,10 @@ impl Workspace {
                 row(tr("自动检查更新", "Check for updates automatically"), desc(tr("启动后和每 12 小时检查一次 GitHub 发布页；发现新版本会提示下载地址，不自动安装。", "Checks the GitHub releases page after launch and every 12 hours; a new version is announced with its download page, never installed silently.")),
                     switch("pref-update", p.auto_update).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.auto_update = !p.auto_update, cx)))).into_any_element(),
             ]))
+            .when(cfg!(target_os = "windows"), |d| d.child(group(Some(tr("默认应用", "Default app")), vec![
+                row(tr("Markdown 文件 (.md)", "Markdown files (.md)"), desc(tr("在 Windows 设置中选择 MarkdownX 作为 .md 的默认应用。", "Choose MarkdownX as the default app for .md in Windows Settings.")),
+                    button("default-markdown-app", tr("打开系统设置", "Open system settings")).on_click(cx.listener(|_, _, _, cx| cx.open_url("ms-settings:defaultapps?registeredAppUser=MarkdownX")))).into_any_element(),
+            ])))
             .child(group(Some(tr("图片上传", "Image upload")), vec![
                 row(tr("PicGo 本机地址", "Local PicGo address"), desc(if std::env::var("MARKDOWNX_PICGO_ENDPOINT").ok().is_some_and(|s| !s.trim().is_empty()) {
                     tr("环境变量优先；上传由你主动触发。", "The environment variable takes priority; uploads are manual.")

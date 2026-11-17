@@ -26,3 +26,25 @@ try {
 if ($total -eq 0) { throw 'MSI has no UI control events.' }
 if ($missing.Count) { throw "MSI contains control events without controls: $($missing -join ', ')" }
 Write-Output "Verified $total MSI control events against the Control table."
+
+# Verify the shipped database, not just the WiX source. The existing .md
+# default is deliberately not overwritten; Windows lets the user choose.
+$registry = @{}
+$view = $db.OpenView('SELECT `Root`, `Key`, `Name`, `Value` FROM `Registry`')
+try {
+    $view.Execute()
+    while ($row = $view.Fetch()) {
+        if ($row.IntegerData(1) -eq 1) { $registry[$row.StringData(2) + '|' + $row.StringData(3)] = $row.StringData(4) }
+    }
+} finally { $view.Close() }
+$expected = @{
+    'Software\Classes\.md\OpenWithProgids|MarkdownX.Markdown' = ''
+    'Software\Classes\MarkdownX.Markdown\shell\open\command|' = '"[INSTALLDIR]markdownx.exe" "%1"'
+    'Software\MarkdownX\Capabilities\FileAssociations|.md' = 'MarkdownX.Markdown'
+    'Software\RegisteredApplications|MarkdownX' = 'Software\MarkdownX\Capabilities'
+}
+foreach ($key in $expected.Keys) {
+    if (-not $registry.ContainsKey($key) -or $registry[$key] -cne $expected[$key]) { throw "MSI Markdown registration is missing or invalid: $key" }
+}
+if ($registry.ContainsKey('Software\Classes\.md|')) { throw 'MSI must not overwrite the existing .md default.' }
+Write-Output 'Verified MSI Markdown default-app registration.'

@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "fdl_core"
-version = "0.1.45"
+version = "0.1.46"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3724,7 +3724,7 @@ dependencies = [
 
 [[package]]
 name = "markdownx"
-version = "0.1.45"
+version = "0.1.46"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3771,7 +3771,7 @@ dependencies = [
 
 [[package]]
 name = "markdownx-server"
-version = "0.1.45"
+version = "0.1.46"
 dependencies = [
  "anyhow",
  "axum",

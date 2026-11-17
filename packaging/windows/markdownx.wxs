@@ -276,6 +276,21 @@
       </Component>
     </DirectoryRef>
 
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="MarkdownAssociation" Guid="{B829A9A2-7D82-42BB-855A-01B92F1D3954}">
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Components" Name="MarkdownAssociation" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\.md\OpenWithProgids" Name="MarkdownX.Markdown" Type="string" Value="" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\MarkdownX.Markdown" Type="string" Value="Markdown document" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\MarkdownX.Markdown" Name="FriendlyTypeName" Type="string" Value="Markdown document" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\MarkdownX.Markdown\DefaultIcon" Type="string" Value="[INSTALLDIR]markdownx.exe,0" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\MarkdownX.Markdown\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]markdownx.exe&quot; &quot;%1&quot;" />
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Capabilities" Name="ApplicationName" Type="string" Value="MarkdownX" />
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Capabilities" Name="ApplicationDescription" Type="string" Value="Read and edit Markdown documents with MarkdownX." />
+        <RegistryValue Root="HKCU" Key="Software\MarkdownX\Capabilities\FileAssociations" Name=".md" Type="string" Value="MarkdownX.Markdown" />
+        <RegistryValue Root="HKCU" Key="Software\RegisteredApplications" Name="MarkdownX" Type="string" Value="Software\MarkdownX\Capabilities" />
+      </Component>
+    </DirectoryRef>
+
     <Feature Id="MainFeature" Title="MarkdownX" Level="1">
       <ComponentRef Id="AppExe" />
       <ComponentRef Id="ServerExe" />
@@ -296,6 +311,7 @@
       <ComponentRef Id="AppShortcuts" />
       <ComponentRef Id="DesktopShortcut" />
       <ComponentRef Id="FileAssociation" />
+      <ComponentRef Id="MarkdownAssociation" />
     </Feature>
 
     <UIRef Id="WixUI_Minimal" />
