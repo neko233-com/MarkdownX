@@ -33,8 +33,8 @@ MarkdownX 只发布 **Windows x64** 与 **macOS arm64** 两个目标。所有安
 
 | 平台 | 文件 |
 |---|---|
-| Windows x64 | `markdownx-cli-<version>-windows-amd64.zip` |
-| macOS arm64 | `markdownx-cli-<version>-darwin-arm64.tar.gz` |
+| Windows x64 | `markdownx-cli-<tag>-windows-amd64.zip`（例如 `v0.1.47`） |
+| macOS arm64 | `markdownx-cli-<tag>-darwin-arm64.tar.gz`（例如 `v0.1.47`） |
 
 解压后把目录加入 `PATH` 即可。校验所有下载文件：
 
