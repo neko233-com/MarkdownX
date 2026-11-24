@@ -1,47 +1,22 @@
-# 性能测试
+# 性能
 
-README 里的数字来自这里的测试流程。任何人都可以用同一套脚本在自己的机器上复现。
+MarkdownX 的 Go 重写目前没有发布官方性能数字。仓库里早先的 Rust/GPUI 数据来自
+已删除的实现，不能和当前二进制直接比较。
 
-## 环境
+## 可以确定的范围
 
-| 项 | 值 |
-|---|---|
-| 日期 | 2026-11-03 |
-| 源码 | `0e92b51`，`cargo build --release --locked` |
-| 机器 | Apple M5 Pro / 48 GiB，macOS 26.5 |
-| 窗口 | 1280 × 800 pt，2× 缩放，Craft 主题 |
-| 文档 | [样例生成器](../tools/promo/gen_library.py) 生成的 1,001,307 字符、549 章，含段落、列表、表格和代码 |
+- 构建是纯 Go、`CGO_ENABLED=0`；桌面应用是一个几 MB 到十几 MB 的单二进制。
+- 编辑器把文档解析成块列表，渲染只读文档；没有 webview 和 JavaScript 运行时。
+- 导入是纯 Go 解析；docx、xlsx、epub、ofd 按 ZIP + XML 读取所需条目。
+- 协作服务器内嵌网页资源，单进程运行；历史操作走本机 Git。
 
-## 方法
-
-[harness](../tools/harness/README.md) 回放 [readme-performance.txt](../tools/harness/examples/readme-performance.txt)：打开百万字文档，在首段末尾依次插入 100 个 `x`，随后退格 100 次，再向下滚动 100 次。
-
-`bench` 每发送一次操作后同步调用 `window.draw`，记录这一帧的处理耗时（日志里的 `frame`）。P50 为中位数，P95 为第 95 百分位。它统计应用内的帧处理时间，不包含屏幕呈现延迟，不等同于键盘到屏幕的端到端延迟。这是单机实测，不代表所有设备，也不是和其他应用的对比。
-
-## 结果
-
-| 操作 | 帧处理 P50 | 帧处理 P95 | 最大 |
-|---|---:|---:|---:|
-| 连续输入 | 5.06 ms | 5.78 ms | 6.94 ms |
-| 连续退格 | 4.99 ms | 5.55 ms | 5.69 ms |
-| 连续滚动 | 2.08 ms | 4.14 ms | 9.23 ms |
-
-原始输出（ms）：
-
-```text
-bench "type x" x100: step [p50 0.03 p95 0.05 max 5.29] frame [p50 5.06 p95 5.78 max 6.94] editor render [p50 3.77 p95 4.31 max 4.99] ms
-bench "key backspace" x100: step [p50 0.02 p95 0.05 max 3.91] frame [p50 4.99 p95 5.55 max 5.69] editor render [p50 3.64 p95 4.12 max 4.24] ms
-bench "wheel 900 500 40" x100: step [p50 0.01 p95 0.02 max 0.02] frame [p50 2.08 p95 4.14 max 9.23] editor render [p50 0.02 p95 0.03 max 1.83] ms
-```
-
-## 复现
-
-测试只使用临时文档库，不会碰 `~/Documents/MarkdownX`。
+## 自己测量
 
 ```sh
-cargo build --release --locked --features devtools
-python3 tools/promo/gen_library.py /tmp/markdownx-perf/library
-printf '{"english":true,"theme":"craft"}\n' > /tmp/markdownx-perf/library/preferences.json
-python3 tools/harness/run.py tools/harness/examples/readme-performance.txt /tmp/markdownx-perf/library /tmp/markdownx-perf/run
-grep -a bench /tmp/markdownx-perf/run/log
+go test ./...
+go tool mygo build -platform windows/amd64 -o dist
 ```
+
+需要帧时间或内存数据时，用系统性能工具对 `dist/windows-amd64/MarkdownX.exe`
+采样，并在 issue 里附上机器、文档大小和操作步骤。发布性能数字前应先在
+Windows x64 与 macOS arm64 上各跑一遍，避免把单机结果当成通用结论。

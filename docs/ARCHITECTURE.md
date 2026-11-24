@@ -1,236 +1,97 @@
-# 架构
+﻿# 架构
 
-MarkdownX 的桌面端是一个单进程 GPUI 应用（Rust，约 4 万行）；`server/` 是同一个 workspace 里的 Rust 协作服务器，负责可选的多人协作。一篇文档在内存里是一棵 block 树（`model.rs`），在磁盘上是一份 DocxXML 文件（`docxml.rs`）。编辑器把这棵树画成一个虚拟化列表。
+MarkdownX 是一个单进程的 Go 桌面应用，界面由
+[MyGo](https://github.com/egoist/mygo) 的原生 UI 绘制：没有 webview，没有 C 依赖，
+两个目标平台（Windows x64、macOS arm64）都由同一条 `CGO_ENABLED=0` 构建链产出。
 
-仓库是一个 Cargo workspace，分两个 crate：
+## 入口与包
 
-- **`crates/core`（`fdl_core`，约 1 万行）**：文档引擎。包括模型、DocxXML、编辑内核和撤销、磁盘上的文档库、Markdown / HTML 导入和 Markdown 导出，以及 `.mdxb` 书的打包/解包。它不依赖 GPUI，可以单独编译和测试（`cargo test -p fdl_core`），fuzzer 也在这里。
-- **根 crate（`markdownx`）**：GPUI 应用，即窗口、视图、渲染、菜单和浮层。`main.rs` 把 `fdl_core` 的模块重新导出到 crate 根，`editor/mod.rs` 重新导出 `editor::core` 和 `editor::table_ops`，所以应用里仍然写 `crate::model`、`super::core`。
+| 路径 | 职责 |
+|---|---|
+| `cmd/markdownx` | 桌面应用入口；接收一个可选的 Markdown 路径 |
+| `cmd/markdownx-convert` | 把 docx / xlsx / epub / ofd / pdf / rtf / html 转成 Markdown |
+| `cmd/markdownx-server` | 协作服务器：HTTP API、Git 提交、SSE、网页编辑器 |
+| `cmd/mdx-enc` | `encrypt` / `decrypt` / `genkey` 加密工具 |
+| `internal/doc` | 文档模型、Markdown 读取与导出；格式的唯一真相来源 |
+| `internal/editor` | 块编辑器内核：光标、选区、拆分/合并、缩进、undo |
+| `internal/convert` | 各格式的纯 Go 读取器 |
+| `internal/export` | 单文件、自包含 HTML 导出 |
+| `internal/book` | `.mdxb` 书籍信封、章节与资源 |
+| `internal/server` | 协作服务器实现，`web/` 用 `go:embed` 内嵌 |
+| `internal/app` | MyGo 窗口、菜单、侧栏、模板、预览、设置 |
+| `internal/rage` | scrypt + NaCl secretbox 的密码 / 服务端密钥加密 |
 
-依赖只能从应用指向 core。core 里的模块只引用 core 里的模块。
+依赖方向只有一条：`cmd` → `internal/app` / `internal/server`；`internal/app` 可以
+依赖 `doc`、`editor`、`book`、`convert`、`export`、`rage`；`doc` 不依赖 UI。
 
-工作区 Markdown 的阅读模式先完成待保存编辑，再保留原编辑器实体并显示独立只读视图；脚注只在临时视图中转换，原文件来源和撤销栈保持不变。脚注可跳转并返回引用；阅读视图禁用批注，回到编辑模式后恢复原批注面板。保存失败或文件被外部修改时不会进入阅读视图，亦不会把临时视图写回 Markdown。
+## 文档模型与 Markdown
 
-## 文件扩展机制
+`internal/doc` 把一篇文档表示成块（`Block`）的有序列表。每个块有稳定的
+`BlockID`、`BlockKind` 和 `RichText`；`RichText` 是文本 + 样式 run，样式包括粗体、
+斜体、下划线、删除线、行内代码、链接、文字/背景色，以及占一个 `U+FFFC` 的行内对象
+（公式、图片、按钮、提及等）。
 
-`crates/core/src/extensions.rs` 集中登记内置格式和外部扩展的版本化清单。匹配按文件名后缀、不区分 ASCII 大小写，复合后缀优先；重复后缀或保留的内置标识会被拒绝，注册失败不会留下部分映射。清单中的程序路径必须相对扩展目录，登记清单本身不会启动程序。`discover` 读取扩展目录下每个子目录的 `plugin.json`，坏清单单独返回错误，不影响其他扩展。
+Markdown 是磁盘上的唯一格式。读取时连续普通行合并成一个段落块；写出时再由块还原成
+CommonMark/GFM。硬换行、列表续行、表格对齐、有序列表起始编号、嵌套列表、公式分隔符、
+转义和本地资源路径都有往返测试（`internal/doc` 与 `internal/editor`）。
 
-`crates/core/src/extension_rpc.rs` 提供 LSP 风格的 `Content-Length` JSON-RPC 消息分帧，并限制消息与头部大小。`extension_host.rs` 拥有外部进程的生命周期：`initialize` 校验协议版本和扩展声明的后缀必须与清单一致，`textDocument/open` 返回 Markdown，`textDocument/save` 交回 Markdown，超时、响应错乱或传输中断都会停止该进程。`crates/core/src/bin/mdx_plugin_fixture.rs` 是可运行的参考扩展，集成测试用它覆盖握手、打开、保存和失败路径。
-
-内置媒体预览也走同一张后缀表：`builtin.image`、`builtin.audio`、`builtin.video`、`builtin.model`。`media_ui.rs` 是预览弹层，`media_thumb.rs` 在 Windows 上取资源管理器同款缩略图；core 的 `media/audio.rs` 用 symphonia 解码波形，`media/video.rs` 只读 ISO 容器头，`media/model.rs` 解析 OBJ/STL/glTF/GLB 并软件光栅化，全部有独立测试。插件与内置媒体后缀冲突时整体被拒绝。
-
-Markdown 中完整的媒体标签或包含媒体的平衡 `div` 容器转换为互动块，识别时忽略注释、脚本及样式中的伪标签；原始文件保持不变。
-
-Windows 文档内 HTML 使用 `native_widget.rs` 的 WebView2 子窗口：它按 GPUI 内容裁剪区域定位，在菜单覆盖时隐藏，滚动出视口时关闭。`widget_server.rs` 为每个可见块创建短生命周期的 loopback 服务，仅映射块中明确引用的本地媒体，支持 HTTP Range；WebView2 内的无同源权限 iframe 运行脚本，禁止外部导航、下载、权限请求和脚本网络连接。媒体解析仍以 Markdown 文件所在目录为基准。macOS 和 Linux 桌面当前使用 Web 阅读器运行 HTML。
-
-本地 Markdown 图片与 HTML 媒体的查询参数仅用于引用，不参与文件查找；解析与打包基于文档目录，原始 Markdown 保留查询文本。音视频 src 的时间片段在预览、打包和 HTML 导出时保留；本地脚本查询在查找文件时忽略，但会按浏览器 URL 规则规范化后通过 data URL 片段保留 ES 模块身份；旧书中未规范化的身份也会在读取时转换。SVG 图片片段保留到书籍和 HTML，桌面渲染将命名视图、`svgView` 视口与支持的 `:target` 选择器转换为静态 SVG；不支持的 CSS 和视图规格仍受底层引擎限制，源文件不改写。
-
-HTML 互动块中图片与 `<source>` 的 `srcset` 候选资源按各自路径打包并在桌面和 Web 阅读器解析，保留密度或宽度描述符和已有 data URL；CLI 内置 HTML/PDF 导出使用相同的书籍资源转换。普通 Markdown 图片的行为不受影响。
-
-从目录打包书籍时，DocxXML 正文与译文分别以各自文件目录解析标题、封面、图片、附件和互动资源，书籍清单封面以书籍根目录解析；资源嵌入前检查真实路径是否仍在书籍目录内。相同资源复用书籍资源表，不改写源文件。
-
-Windows 的 PDF 与受支持的 CAJ 预览由系统 PDF 渲染器逐页显示；CAJ 在内存转换。按页查找使用 `pdf_text.rs` 的独立子进程通过管道读取 PDF，限制文件、页数、提取文本、运行时间和子进程内存；关闭预览时取消，进程异常不会终止编辑器。原文件不写入，文件变化或提取失败会提示。扫描件需要 OCR，特殊字体可能导致文字不完整，匹配页定位不等于页面内文字高亮。
-
-Windows 的文档卡片和行内 PDF 附件通过工作区事件打开同一只读预览；工作区 DocxXML 的相对附件优先按文件所在目录查找，省略 `./` 时允许根目录 `assets/` 回退，并在解析后校验工作区边界。文档模型与原文件保持原始引用。
-
-Windows 的旧版 Word `.doc` 文本预览使用 `doc_text.rs`：父进程以 32 MiB 为上限读取一次文件，子进程只通过管道接收文件快照，在现有 Windows Job 内执行、限制内存和时间，并限制输出大小。解析结果包含正文、脚注、尾注及部分页眉页脚，作为只读文本显示；原版排版、图片与批注可能缺失，文件加密、损坏或不受支持时会报告失败，不修改原件。
-
-Windows 的 EPUB 只读预览由 `epub_preview.rs` 在同一套受限子进程机制中解析；压缩包先限大小、条目数和解压总量，并拒绝带 `META-INF/encryption.xml` 的文件。按 spine 顺序读取章节，将可支持的正文、图片、MathML 和静态 SVG 过滤为惰性 HTML，在 WebView2 沙箱显示；脚本、远程资源及不支持的内容不会执行或加载，文本回退与版式预览来自同一快照。原文件从不写回。
-
-Windows x64 的 Pandoc 与 Typst 在对应转换首次需要且 PATH 中缺失时，从固定官方发布地址下载并验证 SHA-256，只提取可执行文件及许可证到独立的用户工具目录；跨进程锁避免并发下载，先暂存再原子发布，已有不完整目录不会覆盖。离线开关 `MARKDOWNX_FORMATS_OFFLINE=1` 阻止下载。
-
-本地图床默认使用文档旁的 `assets`；PicGo 地址保存在偏好设置中，仅允许回环 HTTP。非空环境变量可覆盖地址，认证令牌只从环境读取。上传只由用户触发；响应按 HTTP 长度或分块结束读取，无需等待本机服务关闭连接。
-
-CSS 的资源由 `css_assets.rs` 解析：外置样式以样式表所在目录为基准，HTML `style` 属性及 `<style>` 块以章节目录为基准；`url()` 和 `@import` 的本地依赖在工作区边界内转换为 data URL。书籍打包与桌面临时服务共用该逻辑，原始 Markdown 不变。读取大小、总量与导入深度受限，缺失、循环引用或越界会失败，外部地址仍受 CSP 限制。Python 打包器实现相同的常用 CSS 引用解析。`js_assets.rs` 为模块脚本递归嵌入相对静态导入、重导出及字符串字面量动态导入；Python 打包器使用独立扫描器实现相同的常见语法。字面量 `new URL(..., import.meta.url)` 也会嵌入模块目录下的图片与媒体，保留资源片段并忽略查询参数。内联及外置 JavaScript 的字面量 fetch 路径以 Markdown 所在目录为基准嵌入，`new URL(..., import.meta.url)` 仍以模块目录为基准；同一代码块中显式创建的不可变 Image/音视频元素，其字面量 src 属性赋值或 setAttribute，以及 new Audio 的字面量参数，按文档目录嵌入；保留普通对象、跨作用域或计算式赋值。脚本 CSP 只允许请求 data URL，不允许网络请求。模块和资源均限定在根目录，循环、越界、过深或过大的依赖报错；计算式 fetch 路径及导入仍不支持。
-
-应用层 `src/extensions.rs` 从 `MARKDOWNX_PLUGIN_DIR` 或应用数据目录的 `markdownx/plugins` 读取扩展；设置 › 扩展的「安装扩展…」把选中的文件夹原子校验后复制进来，已存在的 id 不会被覆盖，也可以逐个开关，关闭的扩展只保留清单、不占用后缀。工作区里匹配扩展后缀的文件在打开时启动扩展，返回的 Markdown 以只读文档显示；预览不写回原格式。外部扩展目前提供只读预览和协议级保存，尚未接入 MarkdownX 自己的可编辑扩展界面。
-
-```
-main.rs ─ 窗口
-  └─ app.rs  Workspace（窗口根视图）
-       ├─ store.rs        文档库：docs/*.xml + index.json（见 FORMAT.md）           [core]
-       ├─ sidebar / home / search / trash / tree / docmenu / docinfo / modes
-       └─ editor::Editor（view.rs）   打开的那篇文档
-            └─ editor::Core（core.rs） 文档 + 选区 + 撤销栈                        [core]
-```
-
-## 分层
-
-| 层 | 文件 | 职责 | 规则 |
-|---|---|---|---|
-| 模型 | `model.rs` | `Document` / `Block` / `BlockKind` / `RichText`（文本 + 样式 run）/ 行内对象 `Inline { kind, xml }` | 纯数据。`BlockKind::nests()` 决定哪些 block 能有子级 |
-| 格式 | `docxml.rs` | DocxXML ⇄ `Document` | 未知元素原样保留为 `Raw`；行内对象保留原文、读入时解析一次类型；写出的格式稳定，见 FORMAT.md |
-| 编辑内核 | `editor/core.rs`、`editor/table_ops.rs` | 所有改文档的操作：输入、删除、合并、缩进、转换、拖动、表格、折叠、行内对象、撤销 | 在 `fdl_core` 里，不碰 GPUI，能直接单测和 fuzz |
-| 编辑视图 | `editor/view.rs` + 其余 `editor/*` | 键鼠事件 → Core 调用；浮层、菜单、各 block 的交互 | 改文档只经过 Core（下文） |
-| 渲染 | `editor/render.rs`、`editor/text.rs` | block → GPUI 元素；`text.rs` 是自绘富文本元素 | 只读文档 |
-| 应用 | `app.rs` 等顶层模块 | 侧栏、主页、搜索、回收站、文档树、导入导出、打印 | 通过 `Store` 读写磁盘 |
+书籍 `.mdxb` 是另一种容器：一个 JSON 信封，章节内容可以是 DocxXML 或 Markdown，
+资源以 base64 内嵌，支持中英双语章节与阅读主题。版本常量在 `internal/book`。
 
 ## 编辑流程
 
-一次编辑的顺序是固定的：
+1. 视图收到输入，调用 `Core.Checkpoint(kind)` 记录 undo 快照。
+2. 调用 Core 的结构化方法修改文档或选区（拆分、合并、缩进、表格、行内对象等）。
+3. `Core.ResetBuffers()` 重建渲染缓冲；视图只读文档。
+4. 有改动时标记 dirty，保存时由 `internal/doc` 导出 Markdown 写盘。
 
-1. 视图收到事件，调用 `core.checkpoint(kind)`。它记一个撤销快照，把 `generation` 加一，并置 `dirty`。连续输入（同一 block、相邻两次间隔不到 700ms）合成一步。
-2. 调用 Core 的操作方法修改 `core.doc` / `core.sel`。
-3. 调用 `Editor::changed()`：
-   - 先 `core.reveal_caret()`：如果选区（或块选区）两端被折叠藏起来了，就展开把它藏起来的标题或列表项；
-   - 有改动时发 `EditorEvent::Changed`，同时刷新查找结果、斜杠菜单和 @ 面板。
-4. `Workspace` 收到 `Changed` 后调用 `schedule_save`，500ms 后 `flush()` 写盘。写盘失败时改动保持未保存，顶栏显示错误，切换文档、新建、退出前会询问。保存失败对话框支持重试、重新载入磁盘内容、另存恢复副本；重新载入同时重置编辑器及同文档窗口的状态。退出检查所有窗口，处理单个冲突后重新检查，仍有冲突时不会退出。系统退出阶段仍保存失败的正文存入本地应用数据目录的 `markdownx/recovery/<文档库标识>/`，下次打开同一文档库时恢复为新文档，不覆盖磁盘原版。
+结构性修改应经过 Core；视图层不直接改块树。少数只改单个属性或做初始化的地方
+（模板插入、表格单元格初始化、部分块属性）仍在 `internal/app` 里直接写，前后同样
+走 `Checkpoint` / `ResetBuffers`；新增的结构性操作应写进 Core。Core 的不变量由
+`internal/editor` 的测试覆盖：块 id 唯一、run 不越界/不重叠、代码块里没有样式和
+行内对象、存盘再读回一致、undo 到底再重做到头回到同一状态。
 
-Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机编辑后检查：
+## 应用层
 
-- 选区落在可见的光标停靠点上，两端在同一作用域（同一单元格或正文）；
-- block id 唯一，run 不越界、不重叠；行内对象的 run 里只有 U+FFFC；
-- 分栏比例和为 1，表格的合并格不重叠；
-- 只有 `nests()` 的 block 和容器（引用、高亮块、分栏、列）有子级；
-- 代码块里没有样式和行内对象；
-- 存盘再读回结果不变；
-- 撤销到底再重做到头，回到同一状态。
+`internal/app` 保存窗口状态：当前文件、工作区根、侧栏页签、最近文件、未保存标记、
+查找状态和编辑器 Core。`Run` 注册 MyGo 菜单、创建窗口、恢复上次工作区，并处理
+未保存关闭确认、模板、导出、密码保存和拖放打开。
 
-### 直接修改的例外
+设置写到 `os.UserConfigDir()/MarkdownX/settings.json`；用户模板写到同一目录下的
+`templates/`。用户文档本身永远是普通 Markdown 文件，不进入应用私有数据库。
 
-结构性修改（增删、移动 block，合并、拆分文本）全部在 Core 里。少数**只改单个 block 属性**的地方仍在视图模块里通过 `core.block_mut(id)` 直接写，前后同样是 `checkpoint` / `changed`：
+## 导入与导出
 
-- 图片尺寸、裁剪、描述（`image.rs`）
-- 倒计时设置（`countdown.rs`）
-- 代码块名称（`caption.rs`）
-- 图标、封面（`cover.rs`）
-- 标题重命名（`view.rs`）
-- 若干勾选、折叠切换（`view.rs`、`render.rs`）
+`internal/convert` 的每个读取器只依赖标准库和纯 Go 包：
 
-它们不改树结构，所以不会破坏上面的不变量。新增的结构性操作一律写进 Core，并在 fuzzer 的 `step` 里加一种随机操作。
+- docx / xlsx / epub / ofd 按 ZIP + XML 读取；
+- pdf 做有界的文本提取，不执行脚本；
+- rtf 解析控制字；
+- html 用宽松的标签/实体解析。
 
-## 撤销
-
-- 每一步是整篇 `Document` 的快照（`Snapshot`），存在 `VecDeque` 里。上限是 500 步，并且约 256MB；文档再长也至少保留 20 步。
-- 文档图标和折叠状态不进历史：撤销和重做时，`keep_outside_history` 保留它们当前的值。
-- `generation` 在每次改动（包括折叠）时递增。渲染缓存、目录、字数统计都靠它判断是否需要重算。
-
-快照方案简单可靠，代价是长文档每一步要复制整篇。百万字文档的历史实测中，输入同步帧处理 p50 为 5.06ms；这不包含屏幕呈现延迟，测试版本和口径见 README。
-
-## 渲染与虚拟化
-
-- 页面是一个 GPUI `List`。条目依次是：标题区（`Item::Header`）、每个可见的顶层 block、`Item::Below`（引用列表）。
-- 文本、标题、列表这类 block 的子级各自成一行（`flattens`）。容器类 block 的子级画在容器那一行里面。
-- `sync_items` 给每一行算一个 key，即 `hash_block`。它和上一帧的 key 比较，只 `splice` 前后缀之外变化的区间，所以只有变化的行重新测量高度。
-- `hash_block` 对文本只取长度。原因：列表每帧都会重新测量可见行，同长度的修改（比如对整段 ⌘B）最多让屏幕外某一行的缓存高度暂时过期。对文本本身做哈希，在百万字文档上每次按键要多花约 3ms。实测记录在 `render.rs` 的注释里。
-- 滚动条用 vendor GPUI 新增的 `ListState::estimated_scroll_metrics`：没量过的行按平均行高估算（见 vendor/PATCHES.md）。
-
-## 模块地图
-
-文档引擎（`crates/core/src/`）：
-
-| 模块 | 内容 |
-|---|---|
-| `model.rs` | 文档模型，包括行内对象类型、`display_title` |
-| `docxml.rs` | DocxXML 解析与序列化；`to_inline` 构造行内对象 |
-| `store.rs` | 文档库读写、索引恢复、回收站、设置；`image_path` |
-| `paste.rs` | HTML / Markdown → block（粘贴和导入共用） |
-| `markdown.rs` | 导出 Markdown |
-| `book.rs` | `.mdxb` 单文件书：`Book`/`Chapter`/`Localized`、打包、解包、资源校验 |
-| `annotations.rs` | 批注 sidecar：作者、回复、锚点、CRUD/批量、合并、`@name` 扫描 |
-| `wiki.rs` | 文件夹 `[[双链]]` 解析、文件索引与反向引用（不依赖 GPUI） |
-| `collab.rs` | 预留实时协作协议：session/presence/op log/apply；无网络和 UI |
-| `lang.rs` | 代码语言表 |
-| `palette.rs` | 文字色、背景色、高亮块色板（RGBA，不依赖 GPUI；`theme.rs` 转成 GPUI 颜色） |
-| `time.rs` | 日期换算、本地时区、当前时间 |
-| `editor/core.rs` | 编辑内核 |
-| `editor/table_ops.rs` | 表格操作和单元格选区（`CellSel`） |
-| `editor/fuzz_tests.rs` | 随机编辑 fuzzer |
-
-应用顶层（`src/`）：
-
-| 模块 | 内容 |
-|---|---|
-| `main.rs` | 入口；`FDL_SCRIPT` 脚本模式（仅 `devtools` 特性）；重新导出 `fdl_core` 的模块 |
-| `guides.rs` | 文档库是空的时放入内置的「开始指南」（只放一次） |
-| `app.rs` | `Workspace`：两栏窗口、打开 / 新建 / 保存 / 删除、保存状态、提醒调度、文件夹工作区 |
-| `workspace_fs.rs` | 文件夹扫描、目录树、模糊/内容搜索（不依赖文档库） |
-| `workspaces.rs` / `workspace_files.rs` | 多工作区持久化、后台扫描，以及防覆盖的文件管理和系统回收站 |
-| `git_workspace.rs` | 找 `.git` 根、按文件提交、补本地身份；桌面文件保存后的自动提交 |
-| `annotations_panel.rs` | 右侧批注面板：作者、输入、列表、解决/编辑/删除、批量操作 |
-| `html.rs` / `printing.rs` / `transfer.rs` | 导出 HTML / PDF、打印、导入导出（含 `.mdxb` 的树打包、Markdown 文件夹导出、文件夹打包与导入） |
-| `clipboard.rs` | 系统剪贴板的 HTML 读取，以及脚本模式的模拟剪贴板 |
-| `sidebar.rs` / `tree.rs` | 左栏与文档树（子文档、移动到） |
-| `home.rs` / `trash.rs` | 主页、回收站 |
-| `search.rs` | 搜索弹窗、高级搜索 |
-| `docmenu.rs` / `docinfo.rs` / `modes.rs` | 「…」菜单、文档信息、编辑 / 阅读切换和快捷键面板 |
-| `theme.rs` | 设计 token：`craft` 色阶、语义颜色 `Theme::*`、命名颜色的显示色、阴影 `shadow_*`、字阶、笔记面板尺寸 |
-| `ui.rs` / `input.rs` | 共用小部件（菜单外壳、菜单行、白色药丸按钮、提示、Toast）、单行输入框 |
-| `highlight.rs` | 代码高亮 |
-| `assets.rs` | 编进二进制的图标、字体、封面图库 |
-| `devtools.rs` | 脚本驱动，只在 `--features devtools` 构建里编入（见 tools/harness/README.md） |
-
-编辑器（`src/editor/`）：
-
-| 模块 | 内容 |
-|---|---|
-| `view.rs` | `Editor` 实体：状态、键鼠处理、`changed()` |
-| `keymap.rs` / `menus.rs` | 快捷键绑定、斜杠菜单和转换菜单的数据 |
-| `render.rs` / `text.rs` | 页面渲染、富文本元素 |
-| `overlays.rs` | 手柄、斜杠 / + 菜单、块菜单、浮动工具栏 |
-| `drag.rs` / `gap.rs` | 拖动 block、点击 block 间隙 |
-| `table.rs` / `grid.rs` | 表格（界面部分；操作在 core 的 `table_ops.rs`）、分栏 |
-| `image.rs` / `file.rs` / `cover.rs` | 图片、视频或文件、图标与封面 |
-| `math.rs` | 公式（katex-rs 生成 HTML，再自行排版） |
-| `link.rs` / `links.rs` | 链接面板与卡片；@文档 与引用列表 |
-| `button.rs` / `countdown.rs` / `reminder.rs` / `subpages.rs` | 按钮、倒计时、日期提醒、子页面列表 |
-| `interactive.rs` | Canvas / HTML 交互卡片；桌面原生 `quadratic`、`unitcircle`、`projectile`，HTML 由 Web 阅读器执行 |
-| `home.rs` | 主页：`书架`（根文档）/ `所有页面` / `收藏`，新建与导入卡片，列表/宫格 |
-| `emoji.rs` / `emoji_picker.rs` | 表情数据与面板 |
-| `catalogue.rs` / `find.rs` / `reading.rs` / `scrollbar.rs` / `caption.rs` | 目录、查找替换、阅读模式与信息行、滚动条、代码块名和图片描述 |
-
-## 书与浏览器阅读器
-
-`.mdxb` 是 JSON 单文件（格式见 [FORMAT.md](FORMAT.md)）。`transfer.rs` 导入章节并改写资源路径；`book_source.rs` 用页面 ID 关联原书翻译和资源，`book_folder.rs` 按 `book.json` 重新打包。Feishu 在线导入由 `feishu.rs` 调用官方 CLI，`feishu_ui.rs` 将 DocxXML 和原始响应写入当前工作目录；授权由 CLI 管理。Windows 安装器注册 `.mdxb`；启动时 `main.rs` 从 argv 取第一本书，交给 `open_book_path` 走同一条导入并打开路径。
-
-`web/` 是独立的无构建阅读器：`mdxb.js` 校验并归一化书，`docxml.js` / `markdown.js` 把章节转成同一套块对象，`app.js` 负责目录、章节、语言、主题和进度，`widgets.js` 挂载 Canvas / HTML 交互块。它不依赖 Rust 构建产物；桌面发行版同时内嵌只读本机阅读器资源。阅读器以离线 KaTeX 生成 MathML；两边共享的契约是 `.mdxb` 和 DocxXML，而不是界面代码。
+`internal/export` 把文档渲染成一个自包含 HTML 文件，本地图片等资源以 data URL
+内嵌，离线可打开。
 
 ## 协作服务器
 
-`server/` 是 Cargo workspace 里的 Rust 二进制（`markdownx-server`），不嵌入桌面进程。它面向“一个团队共用一个仓库”的场景：`-root` 直接指向 `.git` 所在目录，文档 ID 是仓库相对路径（如 `design/game/combat.md`），每个被接受的保存都在该仓库里形成一次提交。HTTP/WebSocket 消息定义在 `crates/core/src/protocol.rs`，浏览器编辑器和未来的桌面协作客户端共用同一套 wire 类型。
+`internal/server` 提供：
 
-| 模块 | 职责 |
-|---|---|
-| `server/src/store.rs` | 仓库相对 ID（含中文/嵌套路径）、递归列表、读写、标题提取、原子保存 |
-| `server/src/templates.rs` | 游戏/产品/影视/内容模板，用 `include_str!` 编进二进制 |
-| `server/src/git.rs` | 初始化仓库、提交单个文件、`log` / `show` / `diff` / `merge-file`；不把提交写进父仓库 |
-| `server/src/live.rs` | 内存房间：当前内容 + revision、最近 256 个快照、presence、WebSocket 广播、三方合并与冲突 |
-| `server/src/api.rs` | HTTP JSON API（query 风格 `id`）、Bearer token、`/ws/doc?id=` 升级、模板列表 |
-| `server/src/main.rs` | 配置、静态编辑器、优雅退出 |
-| `server/web` | 浏览器编辑器（纯文本编辑、版本面板、diff、冲突提示） |
+- `GET /api/docs`、`GET /api/doc?path=`、`PUT /api/doc`、`GET /api/events`；
+- 历史、diff、restore 接口；
+- 每次接受保存后以当前 Git 分支提交；
+- 可选的 token 鉴权和磁盘端到端加密（`internal/rage` 的服务端密钥信封）。
 
-一致性模型是乐观并发，不是 CRDT：客户端带 `base` revision 保存；`base` 落后时，服务器用 Git 的 `merge-file` 对 base/current/incoming 做三方合并，干净就提交，重叠就返回冲突且不写文件。revision 只在房间内存中有效，服务重启后从磁盘重新开始；持久历史以 Git 提交为准。协议类型放在 core，文档模型本身不依赖网络。
+网页编辑器在 `internal/server/web/`，通过 `go:embed` 编进二进制，不需要单独部署
+静态文件。
 
-桌面当前以单机模式运行，没有远程协作连接或服务器地址、密钥设置界面。后续桌面客户端应允许用户自定义服务器地址，并将认证密钥交给系统凭据存储，不放进 Markdown、书籍或普通偏好文件；连接必须由用户主动配置和启用。该段描述预留方向，不代表远程客户端已经实现或测试。
+## 构建与发布
 
-`server/README.md` 记录启动参数、HTTP/WebSocket 消息、安全边界和 Docker 用法。
+`mygo.json` 是应用元数据的唯一来源：名称、版本、图标、文件关联、macOS 最低版本、
+Windows 安装目录。`go tool mygo build` 负责：
 
-## 文件夹工作区与批注
+- 编译桌面应用（链接名称、标识符、版本，Windows 下无控制台窗口）；
+- macOS：`.app`、ad-hoc 签名、`.dmg`；
+- Windows：per-user NSIS 安装器、图标、文件关联、卸载项。
 
-`workspace_fs.rs` 扫描文件系统并输出 `WorkspaceDir` / `FileNode` / `Hit`，也负责带外部修改检查的原子文件写入。`Workspace` 用 `file: Option<PathBuf>` 表示“正在直接编辑的 Markdown”，`folder: Option<WorkspaceDir>` 表示当前编辑文件所属目录；`workspace_roots` 保存同时显示的多个目录及各自的加载、展开和错误状态。默认目录是系统文档目录下的 `MarkdownX-Demo`，用户添加的目录保存在文档库的 `preferences.json` 中；启动参数只为本次窗口添加临时目录。目录选择保持用户所选路径，不因位于 Git 仓库内而扩大目录树；直接打开文件仍可找到其所属的 Git 根。选过的目录不可用时保留原选择，不创建它或静默切换。每个目录在后台独立扫描，不可用的目录保留错误提示；刷新和窗口重新获得焦点时重扫目录、双链与搜索结果，保留展开状态和打开的编辑器。工作区移除只修改列表；文件操作检查工作区边界和受保护目录，创建与重命名不覆盖已有文件，删除经确认后交给系统回收站。`flush` 在文件模式下先比较最近读取或保存的文件内容，再将文档重新导出为 Markdown，保留 BOM 和主要换行风格并写回；检测到外部修改、标题或正文往返丢失、资源缺失或同名资源内容不同时保留未保存内容；资源先检查并复制，不覆盖已有不同内容的文件；检查不能证明所有 Markdown 语义都能保留，比较和替换之间也不提供跨进程锁。成功写回后，对该文件（及复制出的资源）提交一次 `edit: <relative>`；提交失败只记录日志，不回滚已完成的保存。`.mdxb` 在文件夹里被点击时走 `import_book`，但不清空目录树。
-
-`Ctrl+K` / `⌘K` 打开全局搜索：合并文档库与所有工作目录的路径和正文结果。各目录的正文搜索在后台独立执行、逐步返回，按查询代次丢弃过期结果，并在新结果到达时保持键盘选中的目标；`Ctrl+J` / `⌘J` 保留原有搜索入口。
-
-批注不写进正文：core 的 `annotations.rs` 管理 JSON sidecar，`annotations_panel.rs` 渲染右侧面板。锚点是从根开始的 block 索引路径，不是 `BlockId`（DocxXML 不保存 BlockId）。多用户离线修改通过 `tools/agent/mdxb.py merge-annotations` 按 `updated` 合并。
-
-双链与协作：
-
-- `wiki.rs` 只认 `[[Target]]` / `[[Target|Label]]`，跳过代码围栏；`Index::build` 接收 `(path, text)`，桌面在打开文件夹、保存文件后重建。侧栏显示当前文件的出链和反链，解析按文件名 stem、相对路径或 H1 标题。
-- `collab.rs` 是预留层：`Session` 维护 `revision`、`epoch`、peer presence 和 op log；`Operation` 带 `protocol`/`seq`/`base`，`apply` 返回 `Applied` / `Duplicate` / `Stale` / `Future` / `WrongProtocol`。目前没有传输层、持久化或 UI，后续接 WebSocket/CRDT 时不改文档模型。
-- `annotations.rs` 的 `mentions` 扫描 `@name`（跳过邮箱），批注面板只负责高亮；正文块本身还没有 @ 自动补全。
-
-`agent/` 与 `tools/agent/` 是给编码 agent 的入口：章节保持 `NN-topic.md`，`mdxb.py` 负责 check / pack / unpack / search / merge-annotations；它和桌面端读写同一份 `.mdxb` 契约。
-
-## 界面语言
-
-界面支持简体中文与英文。当前选择保存在 `Preferences::language`（`auto` / `zh` / `en`），`Preferences::english` 是给旧版本看的兼容位；旧偏好没有 `language` 时继续使用原来的 `english`。`auto` 在 Windows 和 macOS 优先读取用户显示语言，在 Linux 读取系统 locale，未知语言回退英文。静态文案使用 `settings::text` / `label` 的统一映射，成对文案使用 `settings::tr`，带参数的文案使用 `localized_format!`。菜单表保留稳定的原始标签，在显示时翻译；搜索同时匹配英文标签与原有关键词。输入框保留原始 placeholder，在渲染时翻译，切换语言时刷新所有窗口。
-
-首次建库之前先解析界面语言，`guides` 从中英文两份指南初始化新的文档库；中断后恢复仍使用原来的语言。空的默认工作目录另生成一份同语言的可编辑 Markdown 示例，并在后台扫描后打开；只创建新文件，不覆盖非空目录。已保存工作区的最近文件在后台确认仍属于目录树后恢复，命令行指定的文件或目录优先。旧版英文欢迎页只有与原始内置文件完全一致时才会触发安全引导，不改写原文件；已经编辑的页面保持原样。语言切换不翻译任何已有文档。
-
-用户标题、正文、附件名和已保存的按钮文字不作为翻译键；只有空标题等界面默认值随语言变化。Core 的存储诊断在应用层用已知模板翻译，保留路径、文档 ID 和系统错误原文，文档引擎不依赖界面语言。语言回归检查覆盖界面翻译键、菜单表、日期提醒，以及用户内容和诊断参数的保留。
-
-## 更新检查与安装
-
-`update::init` 在启动 10 秒后查询 GitHub `releases/latest`，之后每 12 小时一次；窗口重新获得焦点且距上次检查超过 1 小时也会补查。没有正式发布时 API 返回 404，明确显示「暂无正式发布版本」。自动和手动检查共用持久状态，防重复请求，限时与限响应大小；手动检查不受自动检查开关与间隔限制。设置 › 关于显示检查中、已是最新、可用正式版本和可重试的失败结果；发现新版时侧栏与关于页提供发布下载页入口。下载地址由受校验的版本号构造，只指向本仓库 GitHub Releases，不下载、不执行安装包。签名更新器（`ENABLED = true` 且配置公钥）保留为后续发布通道。
-
-Windows 使用 WiX MSI 安装到 `%LOCALAPPDATA%\Programs\MarkdownX`，注册 `.mdxb`、快捷方式和卸载项；协作服务器仅由用户按需启动，重装保留用户文档与服务器 token。`install.ps1` 校验包并请求应用正常保存退出，仅在没有活动连接且控制台未共享时正常停止已有服务器；安装后恢复之前运行的服务和窗口，不在全新安装时启动协作服务。本机阅读器使用按需启动的随机 loopback 地址，只提供编译进程序的静态资源，不依赖协作服务。macOS Apple Silicon 使用 DMG，`install.sh` 挂载、验证后复制到当前用户的 Applications；未签名测试包需显式选择。
+命令行工具用普通 `go build` 产出，和桌面应用一起进入 GitHub Release。
+版本号只改 `mygo.json`；发布标签必须与它一致。

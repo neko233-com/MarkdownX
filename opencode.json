@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "codegraph233": {
+        "type": "local",
+        "command": ["codegraph233", "serve", "--root", "."],
+        "cwd": ".",
+        "environment": {
+          "CODEGRAPH233_NO_UPDATE": "1"
+        }
+      }
+    }
+  }
+}

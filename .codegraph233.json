@@ -4,6 +4,23 @@
   "roots": [
     { "key": "markdownx", "path": ".", "role": "full" }
   ],
-  "languages": ["rust", "go", "typescript", "javascript", "python", "powershell"],
-  "exclude": ["target", "node_modules", ".dsh-server", ".dsh-ui", ".codegraph233", ".git"]
+  "languages": ["go", "typescript", "javascript", "python", "powershell"],
+  "exclude": [
+    ".git",
+    ".codegraph233",
+    "dist",
+    "node_modules",
+    ".vercel",
+    ".vercel-out",
+    ".screenshots",
+    "logs",
+    "test-results",
+    "playwright-report",
+    "assets",
+    "web/lib",
+    "MarkdownX-Demo",
+    "shared-mock",
+    "templates",
+    "examples"
+  ]
 }

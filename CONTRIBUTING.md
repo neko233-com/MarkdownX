@@ -1,110 +1,108 @@
 # Contributing
 
-Code style and commit conventions are in [AGENTS.md](AGENTS.md) (the same as CLAUDE.md). Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before you start.
+Code style, commit conventions and the hard constraints are in
+[AGENTS.md](AGENTS.md) (the same as [CLAUDE.md](CLAUDE.md)).
+
+MarkdownX is a Go desktop app built on [MyGo](https://github.com/egoist/mygo). Only two
+targets are maintained: **Windows x64** and **macOS arm64**.
 
 ## Building from source
 
-macOS needs the Xcode Command Line Tools; Windows needs the Visual Studio 2022 C++ Build Tools and the Windows SDK. The Rust version is pinned in `rust-toolchain.toml`, and rustup picks it up automatically.
+Install Go 1.27.3 or newer. Nothing else is needed: the build is pure Go with
+`CGO_ENABLED=0`, so no C toolchain, SDK or cross-compiler is involved. MyGo is pinned as
+a `go.mod` tool.
 
 ```sh
-cargo build --release --locked
-./target/release/markdownx                          # uses ~/Documents/MarkdownX
-MARKDOWNX_HOME=/tmp/lib ./target/release/markdownx   # uses another library
+go tool mygo build -platform windows/amd64 -o dist
+go tool mygo build -platform darwin/arm64 -o dist
 ```
 
-While developing, point `MARKDOWNX_HOME` at a scratch directory; don't test against your real library.
+MyGo produces the Windows per-user installer (`markdownx-setup-<version>-amd64.exe`) and
+the macOS `MarkdownX.app`; on macOS it also writes the `.dmg`. Cross-compiling both from
+any machine:
 
-The desktop project is a Cargo workspace: `crates/core` is the document engine (`fdl_core`), which does not depend on GPUI, and the root crate is the app. `server/` is a workspace member that builds `markdownx-server`. GPUI, taffy and xattr are locally patched copies in `vendor/`; the changes are listed in [vendor/PATCHES.md](vendor/PATCHES.md). `target/debug` can grow past 10 GB; if you only build release, `cargo clean --profile dev` clears it.
+```sh
+./scripts/cross-build.sh
+```
+
+Or one at a time:
+
+```sh
+# Windows x64
+.\scripts\build-windows.cmd
+
+# macOS arm64
+./scripts/build-macos-arm64.sh
+```
+
+The Windows installer needs NSIS (`makensis`); the macOS disk image needs macOS
+(`hdiutil`). `scripts/package.ps1` builds a local Windows package with a SHA-256 manifest.
+
+## Code navigation
+
+The repository ships a project-local [codegraph233](docs/CODEGRAPH233.md) MCP config.
+Use `cg233_file_outline`, `cg233_find_symbol`, `cg233_find_referencing_symbols` and
+`cg233_impact` before editing, and rebuild the index with `codegraph233 index --root .`
+after a large change.
+
+## Converting documents
+
+`cmd/markdownx-convert` turns any supported format into Markdown on stdout:
+
+```sh
+go run ./cmd/markdownx-convert report.docx > report.md
+```
+
+Supported: `.docx`, `.xlsx`, `.epub`, `.ofd`, `.pdf`, `.rtf`, `.html`, and plain Markdown.
 
 ## Testing
 
 ```sh
-scripts/check.sh                                        # tests + clippy with zero warnings; run before committing
-cargo test --release -p fdl_core                        # the document engine only, without building GPUI
-FDL_FUZZ_SEEDS=2000 cargo test --release random_edits   # more random edits, for the editing core
-cargo test -p markdownx-server                          # Rust collaboration server
-cargo clippy -p markdownx-server --all-targets -- -D warnings
+go vet ./...
+go test ./...
 ```
 
-- The editing core has a random test: starting from a document with every block type, it makes random selections, typing, structural, style, table and undo edits, checks the model's invariants after each step, and saves and reloads every 25 steps.
-- The document format has a regression test: `crates/core/tests/fixtures/all-blocks.xml` must read and write back byte for byte.
-- UI screenshots and scripted runs are covered in [tools/harness/README.md](tools/harness/README.md).
+- `internal/doc` covers the document model, the Markdown reader and writer, hard-break
+  round trips, tables, equations and list continuation merging.
+- `internal/editor` covers splitting, merging, indentation, marks, duplicate and undo.
+- `internal/convert` covers every reader; `TestDemoDocuments` also converts the real
+  sample documents in `MarkdownX-Demo/` when that folder is present.
+- `internal/export` covers the self-contained HTML export.
+- `internal/server` covers auth, saves, conflicts, history and restore.
 
-To run the checks on every commit: `git config core.hooksPath scripts/hooks`.
+## Releasing
+
+The version lives in `mygo.json`; the tag must match it. See
+[docs/RELEASE.md](docs/RELEASE.md) for the full pipeline. The short version:
+
+```sh
+git tag v0.1.47
+git push origin v0.1.47
+```
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `cmd/markdownx` | the desktop app |
+| `cmd/markdownx-server` | the collaboration server |
+| `cmd/markdownx-convert` | the headless converter |
+| `cmd/mdx-enc` | the encryption tool |
+| `internal/doc` | document model, Markdown read/write |
+| `internal/editor` | the block editor core |
+| `internal/book` | `.mdxb` books: envelope, DocxXML, assets |
+| `internal/convert` | import readers |
+| `internal/export` | HTML export |
+| `internal/server` | HTTP API, Git history, live updates, web editor |
+| `internal/rage` | scrypt + secretbox envelopes |
+| `internal/app` | MyGo native UI |
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, the editing flow, invariants, undo, rendering, the module map |
-| [docs/FORMAT.md](docs/FORMAT.md) | Library layout, index recovery, DocxXML read/write rules, `.mdxb` books and interactive blocks |
-| [docs/THEMES.md](docs/THEMES.md) | Writing document themes in CSS: selectors, properties, named colors |
-| [AGENTS.md](AGENTS.md) | Code style, pre-commit checks, testing conventions |
-
-Most of these, AGENTS.md included, are written in Chinese for now.
-
-## Building release packages
-
-Before a release, `scripts/check.sh` must pass and CI must be green on that commit. After packaging, verify the signatures, notarization (macOS) and the SHA-256 of the downloads. The Windows CI build does not replace installing, uninstalling and editing on a real machine.
-
-The declared macOS minimum is 13, not yet verified on real hardware. Intel packages can be cross-compiled on Apple Silicon; real Intel hardware validation is still needed.
-
-### macOS
-
-`scripts/release.sh` builds for the local architecture, generates the app icon, signs with a Developer ID Application certificate, submits for Apple notarization, staples the ticket and runs a Gatekeeper check, then writes a ZIP and its SHA-256. It does not upload to GitHub or launch the app.
-
-Install the signing certificate, with its private key, in the login keychain and set up a notarytool keychain profile, then run:
-
-```sh
-SIGNING_IDENTITY="Developer ID Application: …" NOTARY_PROFILE="markdownx" scripts/release.sh
-```
-
-The script stops if signing or notarization fails; whatever is left in the failed run's directory must not be shipped.
-
-To build both architectures sequentially on one Apple Silicon Mac, install the Intel Rust target once, then run the same signing and notarization flow for each architecture:
-
-```sh
-rustup target add x86_64-apple-darwin
-export SIGNING_IDENTITY="Developer ID Application: …" NOTARY_PROFILE="markdownx"
-scripts/release.sh
-MACOS_TARGET=x86_64-apple-darwin scripts/release.sh
-```
-
-Each run keeps its output in a separate `dist-release.*` directory. Intel ZIPs use `macos-x86_64`; Apple Silicon ZIPs keep `macos-arm64`. CI builds both on its existing ARM runner and verifies the binary architectures and signatures. `SIGNING_IDENTITY=-` skips notarization and creates ad-hoc signed `-unsigned.zip` validation packages, which must not be distributed and are rejected by `publish-downloads.sh`.
-
-### Windows
-
-Uses Inno Setup 7. In a Visual Studio x64 Developer PowerShell:
-
-```powershell
-# An unsigned installer for local testing; nothing is uploaded or published
-.\scripts\package-windows.ps1 -Iscc 'C:\path\to\ISCC.exe'
-
-# Once the certificate is issued and connected through a hardware token or a cloud signing client,
-# pick the current user's certificate by thumbprint
-.\scripts\package-windows.ps1 -Iscc 'C:\path\to\ISCC.exe' `
-  -CertificateThumbprint '<40-character certificate thumbprint>' `
-  -TimestampUrl 'http://time.certum.pl'
-```
-
-Signing uses `signtool.exe` from the Windows SDK; `-SignTool` sets its path. The timestamp URL should be the certificate authority's RFC 3161 service (Certum in the example). The script signs the app, the installer and the uninstaller separately, checks the publisher, the trusted signature and the timestamp, and stops on any failure. The final installer and its SHA-256 go to `dist/windows/signed/` or `dist/windows/unsigned/`; the intermediate directories are not for release.
-
-The installer lets you choose the location and an optional desktop shortcut, and by default installs for the current user only. Uninstalling keeps your books. On Windows, the library lives in `MarkdownX` inside the system Documents folder.
-
-On every platform, never commit credentials, private keys or certificate files.
-
-### Releases and in-app updates
-
-There is no public binary release yet, and the in-app updater is compiled out (`src/update.rs`, `ENABLED = false`). A source build must not fetch an update it cannot verify against a published key. The menu item explains this instead of contacting GitHub.
-
-When releases start, publish signed packages plus `latest/update-<platform>.json` (`macos-arm64`, `macos-x86_64`, `windows-x64`), turn `ENABLED` on together with the release key, and document the minisign verification path there. The update code still checks the package signature, the trusted comment (the package file name) and, on macOS, the signing team before swapping the app.
-
-For a new version, bump the version in both `Cargo.toml` files together, and write the version's highlights in `src/changelog.rs`: after updating, existing users see them once at the bottom of the sidebar.
-
-### Linux (experimental)
-
-Install Rust through rustup, then run `scripts/linux-deps.sh` on Ubuntu/Debian or Arch-based systems. Run `scripts/preview-linux.sh` for an isolated temporary library, or set `MARKDOWNX_HOME` to reuse a test library. `scripts/package-linux.sh` produces a tarball and SHA-256 in `dist/linux`; it includes a desktop entry and a 512×512 icon generated with ImageMagick. The binary is dynamically linked; build on the oldest distribution you intend to support and check `runtime-libraries.txt` on the target system.
-
-The Linux build and full checks run on Ubuntu 24.04. Interactive testing has been done on Omarchy 4.5 with Wayland, floating windows and 250% scaling, including Chinese title input. GNOME Wayland, X11 and systems without Noto fonts still need interactive verification; this is not a claim of support for every desktop distribution. Software Vulkan (`vulkan-swrast` on Arch) is useful in VMs or when no hardware Vulkan driver is available. Global quick-note shortcuts and automatic updates are not supported on Linux yet.
-
-Linux support started in [PR #7](https://github.com/neko233-com/MarkdownX/pull/7) by [VJ-2303](https://github.com/VJ-2303); maintainer follow-ups add desktop integration and runtime fixes.
+| [docs/INSTALL.md](docs/INSTALL.md) | Downloads and installers |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers and the editing flow |
+| [docs/FORMAT.md](docs/FORMAT.md) | Markdown round-trip, `.mdxb`, encryption |
+| [docs/RELEASE.md](docs/RELEASE.md) | Release pipeline |
+| [docs/CODEGRAPH233.md](docs/CODEGRAPH233.md) | Code graph MCP |

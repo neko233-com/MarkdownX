@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MarkdownX 协作</title>
+<style>
+:root{color-scheme:light dark;--fg:#1f2328;--bg:#fff;--muted:#6b7280;--line:#e5e7eb;--panel:#f6f8fa;--accent:#4e83fd;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--bg:#0d1117;--muted:#8b949e;--line:#30363d;--panel:#161b22;--accent:#6ea8fe;--warn:#f0883e}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{display:grid;grid-template-columns:240px 1fr 300px;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
+aside{border-right:1px solid var(--line);overflow:auto;background:var(--panel)}
+#right{border-left:1px solid var(--line);border-right:0}
+header{padding:10px 12px;border-bottom:1px solid var(--line);font-weight:600}
+#docs,#history{list-style:none;margin:0;padding:6px}
+#docs li,#history li{padding:6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#docs li:hover,#history li:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+#docs li.active{background:color-mix(in srgb,var(--accent) 20%,transparent)}
+main{display:flex;flex-direction:column;min-width:0}
+#bar{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+#bar .name{font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button{font:inherit;padding:5px 12px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.45;cursor:default}
+#editor{flex:1;border:0;outline:0;resize:none;padding:20px 24px;font:15px/1.8 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--bg);color:var(--fg)}
+#status{padding:6px 12px;border-top:1px solid var(--line);color:var(--muted);font-size:12px;min-height:28px}
+#diff{white-space:pre;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;padding:10px;margin:0;display:none}
+#diff.show{display:block}
+#diff .add{color:#2f855a}
+#diff .del{color:#c53030}
+.empty{padding:16px;color:var(--muted)}
+#conflict{display:none;padding:10px 12px;background:color-mix(in srgb,var(--warn) 15%,transparent);border-bottom:1px solid var(--line);gap:8px;align-items:center}
+#conflict.show{display:flex}
+</style>
+</head>
+<body>
+<aside>
+  <header>文档</header>
+  <ul id="docs"></ul>
+</aside>
+
+<main>
+  <div id="bar">
+    <span class="name" id="name">未选择文档</span>
+    <button id="save" class="primary" disabled>保存</button>
+    <button id="reload" disabled>重新载入</button>
+  </div>
+  <div id="conflict">
+    <span>文档已被其他人修改。</span>
+    <button id="take">采用服务器版本</button>
+    <button id="overwrite">用我的覆盖</button>
+  </div>
+  <textarea id="editor" spellcheck="false" placeholder="从左侧选择一个文档"></textarea>
+  <div id="status"></div>
+</main>
+
+<aside id="right">
+  <header>历史</header>
+  <ul id="history"></ul>
+  <pre id="diff"></pre>
+</aside>
+
+<script>
+const state = { docs: [], path: '', base: '', dirty: false, timer: 0, events: null };
+
+const $ = (id) => document.getElementById(id);
+const status = (s) => { $('status').textContent = s; };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { credentials: 'same-origin', ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+async function loadDocs() {
+  const { docs } = await api('/api/docs');
+  state.docs = docs;
+  const ul = $('docs');
+  ul.innerHTML = '';
+  if (!docs.length) {
+    ul.innerHTML = '<li class="empty">这个工作区还没有 .md 文档</li>';
+    return;
+  }
+  for (const d of docs) {
+    const li = document.createElement('li');
+    li.textContent = d.path;
+    li.title = d.path;
+    if (d.path === state.path) li.classList.add('active');
+    li.onclick = () => openDoc(d.path);
+    ul.appendChild(li);
+  }
+}
+
+async function openDoc(path) {
+  if (state.dirty && !confirm('有未保存的修改，仍要切换吗？')) return;
+  const doc = await api('/api/doc?path=' + encodeURIComponent(path));
+  state.path = doc.path;
+  state.base = doc.base;
+  state.dirty = false;
+  $('name').textContent = doc.path;
+  $('editor').value = doc.content;
+  $('save').disabled = false;
+  $('reload').disabled = false;
+  $('conflict').classList.remove('show');
+  status('已载入 ' + doc.path);
+  loadDocs();
+  loadHistory();
+}
+
+async function save(force) {
+  if (!state.path) return;
+  try {
+    const doc = await api('/api/doc', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: state.path, content: $('editor').value, base: force ? '' : state.base }),
+    });
+    state.base = doc.base;
+    state.dirty = false;
+    $('conflict').classList.remove('show');
+    status('已保存 · ' + new Date().toLocaleTimeString());
+    loadHistory();
+  } catch (e) {
+    if (e.status === 409) {
+      $('conflict').classList.add('show');
+      status('保存冲突：服务器上的版本更新');
+    } else {
+      status('保存失败：' + e.message);
+    }
+  }
+}
+
+async function loadHistory() {
+  const ul = $('history');
+  ul.innerHTML = '';
+  if (!state.path) return;
+  try {
+    const { commits } = await api('/api/history?path=' + encodeURIComponent(state.path));
+    if (!commits || !commits.length) { ul.innerHTML = '<li class="empty">还没有提交</li>'; return; }
+    for (const c of commits) {
+      const li = document.createElement('li');
+      li.textContent = new Date(c.time).toLocaleString() + ' · ' + c.subject;
+      li.title = c.hash;
+      li.onclick = () => showDiff(c.hash);
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    ul.innerHTML = '<li class="empty">历史不可用：' + e.message + '</li>';
+  }
+}
+
+async function showDiff(hash) {
+  const { diff } = await api('/api/diff?path=' + encodeURIComponent(state.path) + '&commit=' + hash);
+  const pre = $('diff');
+  pre.innerHTML = '';
+  for (const line of diff.split('\n')) {
+    const span = document.createElement('span');
+    span.textContent = line + '\n';
+    if (line.startsWith('+') && !line.startsWith('+++')) span.className = 'add';
+    if (line.startsWith('-') && !line.startsWith('---')) span.className = 'del';
+    pre.appendChild(span);
+  }
+  pre.classList.add('show');
+  const btn = document.createElement('button');
+  btn.textContent = '恢复到这一版';
+  btn.onclick = async () => {
+    const doc = await api('/api/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: state.path, commit: hash }),
+    });
+    state.base = doc.base;
+    $('editor').value = doc.content;
+    state.dirty = false;
+    status('已恢复');
+    loadHistory();
+  };
+  const ul = $('history');
+  ul.prepend(btn);
+}
+
+function subscribe() {
+  if (state.events) state.events.close();
+  const es = new EventSource('/api/events');
+  state.events = es;
+  es.addEventListener('change', (ev) => {
+    let data = {};
+    try { data = JSON.parse(ev.data); } catch {}
+    if (!data.path) return;
+    if (data.path === state.path) {
+      if (data.base === state.base) return;
+      if (state.dirty) {
+        $('conflict').classList.add('show');
+        status('其他人保存了这个文档');
+      } else {
+        $('editor').value = data.content || '';
+        state.base = data.base;
+        status('已同步其他人的修改 · ' + new Date().toLocaleTimeString());
+      }
+    }
+    loadDocs();
+  });
+  es.onerror = () => status('实时连接已断开，正在重试…');
+}
+
+$('editor').addEventListener('input', () => {
+  state.dirty = true;
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => { if (state.dirty) save(false); }, 1500);
+});
+$('editor').addEventListener('keydown', (ev) => {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key === 's') { ev.preventDefault(); save(false); }
+});
+$('save').onclick = () => save(false);
+$('reload').onclick = () => openDoc(state.path);
+$('take').onclick = () => openDoc(state.path);
+$('overwrite').onclick = () => save(true);
+
+loadDocs().catch((e) => status('载入失败：' + e.message));
+subscribe();
+</script>
+</body>
+</html>

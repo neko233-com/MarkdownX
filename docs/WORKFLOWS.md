@@ -1,114 +1,57 @@
-# Team workflows
+# 团队工作流
 
-MarkdownX treats the repository as the workspace. A designer, PM, writer and
-engineer can work in the same folder tree, on the same branches, without a
-second content system.
+MarkdownX 把仓库本身当作工作区：设计、产品、写作和工程文档可以放在同一棵目录树里，
+用普通 Markdown 和 Git 协作。
 
-## The workspace
+## 工作区
 
-Open a subfolder with **File → Open Folder…**. If Git can resolve a parent,
-MarkdownX widens the tree to the repository root (`git rev-parse
---show-toplevel`). Desktop file saves, folder searches and link indexing run in the background. Empty files open with a ready-to-type body. Unchanged source fragments retain their original Markdown syntax and line endings. A save that cannot preserve the edited content or formatting is stopped and offers a recovery copy; external changes are not overwritten.
-The desktop and collaboration server use isolated Git staging for automatic
-commits; if the touched file already has staged changes, the file remains saved
-and the commit is skipped with a warning. A server edit conflicting with an
-external disk change offers both versions for resolution instead of silently
-overwriting the file.
+用 **文件 → 打开文件夹…** 打开一个目录。侧栏列出其中的 Markdown 文件，点击切换；
+最近打开的文件会记在设置里。文档仍是磁盘上的 `.md` 文件，应用不建立私有数据库。
+
+- 编辑时 500ms 防抖自动保存；关闭前若有未保存修改会询问。
+- 外部改动不会被静默覆盖；保存失败会保留编辑内容并提示。
+- 打开的文档可以导出为 Markdown、单文件 HTML 或 `.mdxb` 书籍。
+
+## 模板
+
+内置模板在应用里直接可用；**文件 → 存为模板…** 会把当前文档备份到
+`os.UserConfigDir()/MarkdownX/templates/`，之后从侧栏“模板”页插入。
+模板是普通 Markdown 文件，可以直接用外部编辑器修改。
+
+## 协作服务器
+
+```sh
+markdownx-server -root /srv/studio-repo -addr :8787 -token "$(openssl rand -hex 32)" -init
+```
+
+浏览器打开 `http://localhost:8787/?token=...`。服务器：
+
+- 列出、读取、保存工作区里的 Markdown；
+- 每次接受的保存以当前 Git 分支提交；
+- 提供历史、diff、restore；
+- 通过 SSE 把其他人的保存推给打开的编辑器；
+- 可选 token 鉴权和磁盘端到端加密。
+
+桌面端和浏览器共享同一批文件与 Git 历史，不共享实时编辑会话。
+
+## 分支
+
+- `main`：已审核、可发布的内容。
+- `feature/<slug>`：一个功能、一个章节或一轮 sprint。
+- `review/<name>`：可选的编辑审阅分支。
+
+服务器不会替你创建或合并分支；用 Git 完成。
+
+## 文件组织建议
 
 ```text
 studio-repo/
-├── .git/
-├── design/
-│   ├── game/            # GDD, systems, levels, economy
-│   ├── narrative/       # story, quests, dialogue
-│   └── art/             # art direction, reviews
-├── product/             # PRDs, research, roadmap
-├── film/                # treatments, scripts, shot lists
-├── content/             # articles, campaigns, calendar
-├── docs/                # handbook, meeting notes, decisions
-└── templates/           # starters used by the server and agents
+├── design/       # 设计、设定、评审
+├── product/      # PRD、研究、路线图
+├── docs/         # 手册、会议记录、决策
+├── templates/    # 模板
+└── assets/       # 图片、附件
 ```
 
-The collaboration server points at the same repository:
-
-```sh
-markdownx-server -addr 0.0.0.0:8877 -root /srv/studio-repo \
-  -token "$(openssl rand -hex 32)" -origin https://docs.studio.example
-```
-
-The browser tree lists nested `.md` paths and Chinese filenames. The desktop
-tree also shows those paths, excluding dot-prefixed entries and generated folders. Both commit to the current Git
-branch, so a code review or `git log` is the audit trail.
-
-## Branching
-
-- `main`: reviewed, published design.
-- `feature/<slug>`: a level, a pitch, a campaign, a sprint of docs.
-- `review/<name>`: optional editorial pass before merge.
-
-Small edits commit directly. Large rewrites should happen on a branch; open the
-same folder in the desktop app or the browser and switch branches with Git.
-The server does not create or merge branches for you.
-
-## Game design
-
-Templates: `game-design`, `level-design`, `narrative`.
-
-1. Start a GDD from `templates/game-design.md`.
-2. Link systems and levels with `[[combat]]`, `[[boss-fight]]`.
-3. Put tunable Canvas blocks in the design doc: a damage curve, an economy
-   projection, a level pacing graph.
-4. Review with annotations; resolve them in batch when the milestone closes.
-5. Export a `.mdxb` build for playtest review, or let the team read the same
-   Markdown in the browser.
-
-The GDD is not a wiki page frozen in a tool. It is a folder in the same repo as
-the code and the art.
-
-## Product
-
-Templates: `product-prd`, `meeting-notes`.
-
-Use `product/prd/<initiative>.md` for the problem, scope and acceptance
-criteria; put decisions in `docs/decisions/YYYY-MM-DD-topic.md`. A decision
-record should state the choice, the alternatives and the cost. Link it from the
-PRD with `[[decisions/...]]` so the backlink panel shows every affected spec.
-
-## Film and video
-
-Templates: `film-treatment`.
-
-Keep a treatment in `film/treatment.md`, a shot list in `film/shots.md`, and
-continuity notes in `film/continuity.md`. Tables carry shot number, framing,
-sound and duration. Attach storyboard images next to the Markdown and reference
-them with `assets/...`; the folder stays portable.
-
-## Content and editorial
-
-Templates: `content-article`.
-
-A brief lives in `content/briefs/`, the draft in `content/drafts/`, and the
-calendar in `content/calendar.md`. Use annotations for editor comments and
-`@name` to assign a section. Git history gives the fact-check trail without a
-separate CMS.
-
-## Local and online
-
-- **Local**: desktop app, Git on disk, no account. Good for flights, focus work
-  and private drafts.
-- **Online**: the Rust server over the company intranet, same repository, live
-  presence and three-way merge. Good for review rooms and co-writing.
-- **Handoff**: `.mdxb` for a read-only book build; Markdown folders for a
-  working source tree; Git for everything in between.
-
-The browser and desktop do not share a live session yet. They share the files,
-the Git history and the format. The desktop has a reserved collaboration core;
-the browser editor is the working real-time surface today.
-
-## Etiquette
-
-- One topic per file; link instead of copying.
-- Write the decision, not only the discussion.
-- Keep templates in `templates/`; do not fork them per team.
-- Run the server's `check` equivalent before publishing a `.mdxb` build.
-- Do not put secrets in HTML widgets or in the repository.
+一个文件一个主题；用链接而不是复制。决策记录写清选择、替代方案和代价。
+不要把密钥或 token 写进 Markdown、HTML 或仓库。

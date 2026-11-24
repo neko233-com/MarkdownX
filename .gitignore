@@ -1,7 +1,10 @@
-/target
 /dist
+/build
+/out
+/.mygo/
 /dist-preview
 .DS_Store
+mygo-update.key
 /archive/
 /shared-mock/*
 !/shared-mock/library/
