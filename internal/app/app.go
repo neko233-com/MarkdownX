@@ -4,8 +4,8 @@ package app
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
@@ -20,7 +20,7 @@ import (
 	"github.com/neko233/markdownx/internal/rage"
 )
 
-// Mode is what the window shows beside the outline.
+// Mode is what the window shows beside the file tree.
 type Mode int
 
 const (
@@ -32,33 +32,71 @@ const (
 	ModePreview
 )
 
-// App is the window's state.
-type App struct {
+// documentState is shared by every pane editing the same open document.
+type documentState struct {
 	core  *editor.Core
-	bufs  map[doc.BlockID]*string
 	title *string
 	path  string
-	root  string
-	files []string
-	mode  Mode
 	dirty bool
+	file  markdownFile
+	auto  autoSave
 
-	focus  doc.BlockID
-	status string
+	savedGeneration uint64
+	savedText       string
+	sourceDocument  *sourceDocument
+	sourceDoc       *doc.Document
+	sourceGen       uint64
+	sourceText      string
+	sourceRanges    []doc.SourceRange
+	statGen         uint64
+	statText        string
+	selectionOwner  *documentTab
+	published       documentRevision
+}
+
+// documentTab holds one editor's viewport and input state.
+// A split arranges several such panes under one tab-strip entry.
+type documentTab struct {
+	*documentState
+	split         *documentSplit
+	splitWeight   float32
+	selection     editor.Selection
+	pendingMarks  *doc.Marks
+	selectionCore *editor.Core
+	selectionGen  uint64
+	selectionText [2]string
+	bufs          map[doc.BlockID]*blockBuffer
+	source        *sourceView
+	previewScroll ui.ScrollState
+	focus         doc.BlockID
+	status        string
 
 	// sel is each block's last known selection, as byte offsets.
 	sel map[doc.BlockID][2]int
 	// pending restores a selection after an edit rebuilt the block's text,
 	// as rune offsets for the text input.
-	pending map[doc.BlockID][2]int
+	pending                  map[doc.BlockID][2]int
+	rangeCore                *editor.Core
+	rangeGen                 uint64
+	rangeSel                 editor.Selection
+	rangeSpans               map[doc.BlockID]editor.Span
+	drag                     *selectionDrag
+	inlineEdit               *inlineEditor
+	inlineRequest            *inlineSourceRequest
+	imageEdit                *imageSource
+	inlinePause, inlineClick editor.Pos
+	pendingLink              string
+	pendingNote              editor.Pos
+	noteJump                 footnoteJump
+	revealTitle              bool
+	keepViewportFocus        bool
+	referenceIndex           referenceIndex
+	editScroll               ui.ScrollState
+	editBounds               ui.Rect
 
-	md    markdown.Options
-	win   *mygo.Window
-	winID int
-
-	lastTitle string
-	statGen   uint64
-	statText  string
+	md            markdown.Options
+	imageMD       markdown.Options
+	previewFolder string
 
 	// find bar state
 	finding     bool
@@ -72,78 +110,167 @@ type App struct {
 	// focusReq asks the next frame to focus a block's text input.
 	focusReq doc.BlockID
 
+	reveal                             doc.BlockID
+	lastType                           editor.Pos
+	templateSession                    *workspaceTemplateSession
+	tableRow                           *tableRowSelection
+	diagramClosed, diagramPreviewFocus doc.BlockID
+}
+
+// App is a desktop window with one workspace and one or more document tabs.
+type App struct {
+	*documentTab
+	tabs        []*documentTab
+	closedTabs  []closedDocumentTab
+	tabReveal   bool
+	tabScroll   ui.ScrollState
+	pendingPane *documentTab
+	root        string
+	files       []string
+	mode        Mode
+	autoSaveOn  bool
+	win         *mygo.Window
+	lastTitle   string
+
 	// encDialog drives the password EncryptSave modal.
 	encOpen bool
 	encPw1  string
 	encPw2  string
 
 	// sidebar state
-	recents   []string
-	templates []template
-	sideTab   int
+	recents                    []string
+	templates                  []template
+	hideSide                   bool
+	sidebarPage                sidebarPage
+	sidebarWidth               float32
+	sidebarDrag                *float32
+	outline                    documentOutline
+	zenMode                    bool
+	palette                    commandPalette
+	templateLibraryOpen        bool
+	focusMode                  bool
+	typeMode                   bool
+	inlineColor                ui.Color
+	inlineAccent               ui.Color
+	tree                       *workspaceNode
+	treeNodes                  map[string]*workspaceNode
+	treeView                   *workspaceTreeView
+	treeFocus                  bool
+	treeTarget                 string
+	treeReveal                 string
+	treeCheckAt                time.Time
+	treeWatch                  *workspaceWatch
+	treeOrder                  workspaceOrder
+	treeFilter                 workspaceFilter
+	treeFilterEdit             workspaceFilterDialog
+	treePreview                workspacePreview
+	treeSearch                 workspaceSearchState
+	treeRevision               uint64
+	treeDropTarget             string
+	treeDropExpand             time.Time
+	treeDropCopy, treeDropSeen bool
+	treePointerHeld            bool
+	treeEdit                   workspaceDialog
+	treeUndo                   workspaceUndo
+	quickOpen                  bool
+	quickRecent                bool
+	quickFocus                 bool
+	quickActions               bool
+	quickQuery                 string
+	quickIndex                 int
+	quickCategory              quickCategory
+	services                   ui.Services
+	zoom                       float32
+	prefsOpen                  bool
+	pdfDialog                  pdfDialog
+	pdfJob                     chan pdfResult
+	tableSize                  tableSizeDialog
+	windows                    *desktopWindows
+	equation                   equationDialog
+	mathCache                  map[mathKey]mathImage
+	diagrams                   bool
+	diagramCache               map[diagramKey]diagramImage
 
 	// tmplDialog names a template when saving the document as one.
 	tmplOpen bool
 	tmplName string
-
-	// linkDialog asks for the URL of a link mark.
-	linkOpen  bool
-	linkFocus bool
-	linkURL   string
 }
 
 // New makes an app, opening path when it names a file.
 func New(path string) *App {
 	s := loadSettings()
 	a := &App{
-		bufs:      map[doc.BlockID]*string{},
-		sel:       map[doc.BlockID][2]int{},
-		pending:   map[doc.BlockID][2]int{},
-		title:     new(string),
-		mode:      ModeSplit,
-		recents:   s.Recent,
-		templates: loadTemplates(),
-		sideTab:   s.Tab,
+		mode:         ModeEdit,
+		recents:      s.Recent,
+		templates:    loadTemplates(),
+		hideSide:     s.HideSidebar,
+		sidebarPage:  s.SidebarPage,
+		sidebarWidth: s.SidebarWidth,
+		focusMode:    s.FocusMode,
+		typeMode:     s.Typewriter,
+		treeOrder:    s.TreeOrder,
+		treeFilter:   s.TreeFilter,
+		autoSaveOn:   s.AutoSave,
+		zoom:         1,
+		mathCache:    make(map[mathKey]mathImage),
+		diagrams:     s.Diagrams,
 	}
-	a.core = editor.New(doc.NewDocument())
+	a.documentTab = newDocumentTab(doc.NewDocument())
+	a.tabs = []*documentTab{a.documentTab}
+	a.resetPreview()
 	if path != "" {
-		a.open(path)
+		a.OpenFile(path)
 	}
 	a.ResetBuffers()
 	return a
 }
 
-// OpenFile loads a file of any supported format into the editor.
+// OpenFile loads a supported document or opens a directory as the workspace.
 func (a *App) OpenFile(path string) {
-	if !a.confirmDiscard() {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		a.openWorkspaceFolder(path)
 		return
 	}
-	data, err := os.ReadFile(path)
+	a.openDocument(path, true)
+}
+
+func (a *App) openDocument(path string, useParentFolder bool) {
+	path = absoluteDocumentPath(path)
+	if tab := a.tabAt(path); tab != nil {
+		if tab.documentState != a.documentState {
+			a.selectDocumentTab(tab, false)
+			return
+		}
+		if a.hasOtherPane(a.documentTab) {
+			return
+		}
+	}
+	if !a.hasOtherPane(a.documentTab) && !a.confirmDiscard() {
+		return
+	}
+	tab, err := loadDocumentTab(path)
 	if err != nil {
 		a.status = "打开失败：" + err.Error()
 		return
 	}
-	text, err := convert.Markdown(path, data)
-	if err != nil {
-		a.status = err.Error()
-		return
+	a.parkDocumentTab()
+	if !sameWorkspacePath(a.path, path) && !a.hasOtherPane(a.documentTab) {
+		a.rememberClosedTab(a.documentTab, a.tabIndex())
 	}
-	a.core = editor.New(&doc.Document{Blocks: doc.MarkdownToBlocks(text, doc.Off{File: true})})
-	if a.core.Doc.Blocks == nil {
-		a.core = editor.New(doc.NewDocument())
-	}
-	a.path = path
-	a.dirty = false
-	a.status = ""
-	if a.root == "" {
-		a.root = filepath.Dir(path)
-		a.refreshFiles()
-	}
-	a.ResetBuffers()
-	a.remember()
+	a.replaceDocumentPane(tab)
+	a.showOpenedDocument(useParentFolder)
 }
 
-func (a *App) open(path string) { a.OpenFile(path) }
+func (a *App) showOpenedDocument(useParentFolder bool) {
+	a.resetPreview()
+	if a.root == "" && useParentFolder && a.path != "" {
+		a.root = filepath.Dir(a.path)
+		a.refreshFiles()
+	}
+	a.revealWorkspaceFile()
+	a.tabReveal = true
+	a.remember()
+}
 
 // Save writes the document back in the format it came from, asking for a path
 // the first time.
@@ -153,37 +280,79 @@ func (a *App) Save() {
 		return
 	}
 	if a.path == "" || convert.Detect(a.path) != convert.FormatMarkdown {
-		p, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
-			Parent:      a.win,
-			Title:       "保存",
-			DefaultPath: a.titleText() + ".md",
-			Filters:     []mygo.FileFilter{{Name: "Markdown", Extensions: []string{"md"}}},
-		})
-		if err != nil || p == "" {
-			return
-		}
-		if !strings.HasSuffix(strings.ToLower(p), ".md") {
-			p += ".md"
-		}
-		a.path = p
+		a.SaveAs()
+		return
+	}
+	a.saveMarkdown(a.path)
+}
+
+func (a *App) SaveAs() {
+	name := strings.TrimSuffix(a.DisplayName(), filepath.Ext(a.DisplayName())) + ".md"
+	if a.path != "" {
+		name = filepath.Join(filepath.Dir(a.path), name)
+	}
+	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
+		Parent: a.win, Title: "另存为 Markdown", DefaultPath: name,
+		Filters: []mygo.FileFilter{{Name: "Markdown", Extensions: []string{"md"}}},
+	})
+	if err != nil || path == "" {
+		return
+	}
+	if convert.Detect(path) != convert.FormatMarkdown {
+		path += ".md"
+	}
+	a.saveMarkdown(path)
+}
+
+func (a *App) saveMarkdown(path string) {
+	a.writeDocumentTab(path, true)
+}
+
+func (a *App) writeDocumentTab(path string, remember bool) {
+	if existing := a.tabAt(absoluteDocumentPath(path)); existing != nil && existing.documentState != a.documentState {
+		a.status = "保存失败：该文件已在另一个标签页中打开"
+		return
 	}
 	a.syncAll()
-	a.core.Doc.Title = doc.PlainRich(*a.title)
-	src := doc.Export(a.core.Doc, doc.Options{}).Text
-	if err := os.WriteFile(a.path, []byte(src), 0o644); err != nil {
+	undos := a.workspaceUndosForSave(path)
+	source := a.markdownSource()
+	changed := source != a.file.text
+	if err := a.file.save(path, source); err != nil {
 		a.status = "保存失败：" + err.Error()
 		return
 	}
-	a.dirty = false
+	if len(undos) > 0 {
+		if info, err := os.Lstat(path); err == nil {
+			for _, undo := range undos {
+				if sameWorkspacePath(undo.from, path) {
+					undo.info = info
+				}
+				if changed && undo.images[path].failed {
+					delete(undo.images, path)
+				}
+			}
+		}
+	}
+	if a.path != path {
+		a.path = path
+		if a.root == "" {
+			a.root = filepath.Dir(path)
+		}
+		a.resetPreview()
+		a.refreshFiles()
+		a.revealWorkspaceFile()
+	}
+	a.markSaved()
 	a.status = "已保存 " + filepath.Base(a.path)
-	a.remember()
+	if remember {
+		a.remember()
+	}
 }
 
 // saveBook writes the edited document back into the `.mdxb` it came from,
 // keeping the book's envelope and matching chapters by title.
 func (a *App) saveBook() {
-	a.syncAll()
-	a.core.Doc.Title = doc.PlainRich(*a.title)
+	d := a.currentDocument()
 	data, err := os.ReadFile(a.path)
 	if err != nil {
 		a.status = "保存失败：" + err.Error()
@@ -194,7 +363,7 @@ func (a *App) saveBook() {
 		a.status = "保存失败：" + err.Error()
 		return
 	}
-	b.UpdateFromDocument(a.core.Doc)
+	b.UpdateFromDocument(d)
 	out, err := b.Bytes()
 	if err != nil {
 		a.status = "保存失败：" + err.Error()
@@ -204,15 +373,14 @@ func (a *App) saveBook() {
 		a.status = "保存失败：" + err.Error()
 		return
 	}
-	a.dirty = false
+	a.markSaved()
 	a.status = "已保存书籍 " + filepath.Base(a.path)
 	a.remember()
 }
 
 // ExportHTML writes a self-contained HTML page next to the document.
 func (a *App) ExportHTML() {
-	a.syncAll()
-	a.core.Doc.Title = doc.PlainRich(*a.title)
+	d := a.currentDocument()
 	name := a.titleText()
 	if name == "" {
 		name = "document"
@@ -226,18 +394,18 @@ func (a *App) ExportHTML() {
 	if err != nil || p == "" {
 		return
 	}
-	page := htmlexport.Page(a.core.Doc, htmlexport.Options{Title: name})
+	page := htmlexport.Page(d, htmlexport.Options{Title: name, Diagrams: a.diagrams})
 	if err := os.WriteFile(p, []byte(page), 0o644); err != nil {
 		a.status = "导出失败：" + err.Error()
 		return
 	}
 	a.status = "已导出 " + filepath.Base(p)
+	rememberExport("html")
 }
 
 // ExportBook writes the document as a `.mdxb` book.
 func (a *App) ExportBook() {
-	a.syncAll()
-	a.core.Doc.Title = doc.PlainRich(*a.title)
+	d := a.currentDocument()
 	name := a.DisplayName()
 	if name == "" {
 		name = "book"
@@ -254,7 +422,7 @@ func (a *App) ExportBook() {
 	if !strings.HasSuffix(strings.ToLower(p), ".mdxb") {
 		p += ".mdxb"
 	}
-	b := book.FromDocument(a.core.Doc, a.titleText())
+	b := book.FromDocument(d, a.titleText())
 	data, err := b.Bytes()
 	if err != nil {
 		a.status = "导出失败：" + err.Error()
@@ -265,6 +433,7 @@ func (a *App) ExportBook() {
 		return
 	}
 	a.status = "已导出书籍 " + filepath.Base(p)
+	rememberExport("mdxb")
 }
 
 // ChooseFile opens a document through the system dialog.
@@ -281,7 +450,11 @@ func (a *App) ChooseFile() {
 	if err != nil || len(paths) == 0 {
 		return
 	}
-	a.OpenFile(paths[0])
+	if a.windows != nil {
+		a.windows.openFile(paths[0])
+	} else {
+		a.OpenFile(paths[0])
+	}
 }
 
 // ChooseFolder opens a folder as the workspace.
@@ -294,19 +467,34 @@ func (a *App) ChooseFolder() {
 	if err != nil || len(paths) == 0 {
 		return
 	}
-	a.root = paths[0]
-	a.refreshFiles()
-	a.status = "工作区 " + filepath.Base(a.root)
-	a.remember()
+	a.openWorkspaceFolder(paths[0])
 }
 
-// setSideTab switches the sidebar and remembers the choice.
-func (a *App) setSideTab(i int) {
-	if a.sideTab == i || (i != 0 && i != 1) {
+func (a *App) openWorkspaceFolder(path string) {
+	absolute, ok := workspaceFolderPath(path)
+	if !ok {
+		a.status = "无法打开文件夹 " + filepath.Base(path)
 		return
 	}
-	a.sideTab = i
-	a.remember()
+	a.root = absolute
+	a.refreshFiles()
+	a.focusWorkspaceTree()
+	a.resetPreview()
+	a.status = "工作区 " + filepath.Base(a.root)
+	a.persistWindow(true)
+}
+
+func (a *App) closeWorkspaceFolder() {
+	a.stopWorkspaceWatch()
+	a.root = ""
+	a.treeUndo = workspaceUndo{}
+	a.refreshFiles()
+	a.focusWorkspaceTree()
+	a.resetPreview()
+	a.status = "已关闭文件夹"
+	s := loadSettings()
+	s.Root = ""
+	saveSettings(s)
 }
 
 // SaveAsTemplate opens the naming dialog for "存为模板".
@@ -342,7 +530,7 @@ func (a *App) doSaveTemplate() {
 		return
 	}
 	a.templates = loadTemplates()
-	a.setSideTab(1)
+	a.templateLibraryOpen = true
 	a.status = "已存为模板 " + strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
 }
 
@@ -373,7 +561,7 @@ func (a *App) ImportTemplateFile(path string) error {
 		return err
 	}
 	a.templates = loadTemplates()
-	a.setSideTab(1)
+	a.templateLibraryOpen = true
 	a.status = "已导入模板 " + name
 	return nil
 }
@@ -398,48 +586,18 @@ func (a *App) InsertTemplate(t template) {
 		a.status = "模板为空：" + t.Name
 		return
 	}
+	a.leaveSource()
 	a.syncAll()
-	a.core.Checkpoint(editor.EditOther)
-	a.core.Doc.Blocks = append(a.core.Doc.Blocks, blocks...)
-	a.core.Generation++
-	a.core.Dirty = true
-	a.focus = blocks[len(blocks)-1].ID
-	a.dirty = true
+	a.core.InsertBlocks(editor.Title, blocks...)
 	a.ResetBuffers()
+	a.focusAt(a.core.Sel)
 	a.status = "已插入模板 " + t.Name
 }
 
-func (a *App) refreshFiles() {
-	a.files = a.files[:0]
-	if a.root == "" {
-		return
-	}
-	_ = filepath.WalkDir(a.root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if path != a.root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "dist" || name == "target") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if convert.Detect(path) == convert.FormatMarkdown || convert.Detect(path) == convert.FormatMdxb {
-			rel, err := filepath.Rel(a.root, path)
-			if err == nil {
-				a.files = append(a.files, rel)
-			}
-		}
-		return nil
-	})
-	sort.Strings(a.files)
-}
-
-func (a *App) titleText() string { return strings.TrimSpace(*a.title) }
+func (a *documentTab) titleText() string { return strings.TrimSpace(*a.title) }
 
 // DisplayName is the document's name in the window title and dialogs.
-func (a *App) DisplayName() string {
+func (a *documentTab) DisplayName() string {
 	if a.path != "" {
 		return filepath.Base(a.path)
 	}
@@ -496,19 +654,57 @@ func (a *App) ResetBuffers() {
 	seen := map[doc.BlockID]bool{}
 	a.core.Doc.ForEachBlock(func(b *doc.Block) {
 		seen[b.ID] = true
-		if p, ok := a.bufs[b.ID]; ok {
-			*p = b.Text.Text
-			return
+		if p := a.bufs[b.ID]; p != nil {
+			a.updateBlockBuffer(b, p)
 		}
-		s := b.Text.Text
-		a.bufs[b.ID] = &s
 	})
 	for id := range a.bufs {
 		if !seen[id] {
 			delete(a.bufs, id)
+			delete(a.sel, id)
+			delete(a.pending, id)
 		}
 	}
 	*a.title = a.core.Doc.Title.Text
+	a.updateDirty()
+}
+
+func (a *App) resetDocument(d *doc.Document) {
+	a.templateSession = nil
+	a.core = editor.New(d)
+	a.selectionOwner = a.documentTab
+	a.clearSharedSource()
+	a.source = nil
+	a.tableRow = nil
+	a.drag = nil
+	a.inlineEdit = nil
+	a.inlineRequest = nil
+	a.imageEdit = nil
+	a.noteJump, a.pendingNote = footnoteJump{}, editor.Pos{}
+	a.revealTitle = false
+	a.inlinePause, a.inlineClick = editor.Pos{}, editor.Pos{}
+	a.editScroll.Y = 0
+	a.diagramClosed, a.diagramPreviewFocus = 0, 0
+	a.focus, a.focusReq, a.reveal = 0, 0, 0
+	a.lastType = editor.Pos{}
+	a.closeFind()
+	a.statText = ""
+	a.markSaved()
+	a.ResetBuffers()
+}
+
+func (a *App) markSaved() {
+	a.savedGeneration = a.core.Generation
+	a.savedText = a.markdownSource()
+	a.dirty = false
+}
+
+func (a *App) updateDirty() {
+	if a.sourceDocument != nil {
+		a.dirty = a.sourceDocument.text() != a.savedText
+	} else {
+		a.dirty = a.core.Generation != a.savedGeneration
+	}
 }
 
 // restoreSelection asks the text input of id to put its caret back, once.
@@ -516,45 +712,40 @@ func (a *App) restoreSelection(id doc.BlockID, start, end int) {
 	a.pending[id] = [2]int{start, end}
 }
 
-func (a *App) buf(id doc.BlockID) *string {
-	if s, ok := a.bufs[id]; ok {
-		return s
-	}
-	s := ""
-	a.bufs[id] = &s
-	return &s
-}
-
 func (a *App) sync(b *doc.Block) {
-	if b == nil || !b.Kind.HasText() {
+	if b == nil {
 		return
 	}
-	s := a.buf(b.ID)
-	if *s == b.Text.Text {
-		return
+	if p := a.bufs[b.ID]; p != nil {
+		a.syncBlockBuffer(b, p)
 	}
-	// One undo step per run of typing, as an editor is expected to have.
-	a.core.Checkpoint(editor.EditInsert)
-	old := b.Text.Text
-	// Resync keeps the marks that still line up, so typing next to a bold word
-	// does not flatten it.
-	b.Text.Resync(*s)
-	// A format toggled with nothing selected (Ctrl+B, Ctrl+E) applies to the
-	// text typed next, as Typora does.
-	if pm := a.core.PendingMk; pm != nil {
-		if start, end, ok := typedSpan(old, *s); ok {
-			applyRangeMarks(&b.Text, start, end, *pm)
-			a.core.PendingMk = nil
-		}
-	}
-	a.dirty = true
 }
 
 func (a *App) syncAll() {
+	a.finishImageSource(true)
+	a.syncTitle()
+	a.syncRangeInput()
 	a.core.Doc.ForEachBlock(func(b *doc.Block) { a.sync(b) })
 }
 
+func (a *App) syncRangeInput() {
+	if a.core.Sel.AcrossBlocks() {
+		a.sync(a.core.Block(a.focus))
+	}
+}
+
+func (a *App) syncTitle() {
+	if *a.title != a.core.Doc.Title.Text {
+		a.core.Sel = editor.Caret(editor.Pos{Block: editor.Title})
+		a.core.SyncText(editor.Title, *a.title)
+		a.updateDirty()
+	}
+}
+
 func (a *App) focused() *doc.Block {
+	if a.source != nil || a.mode == ModePreview {
+		return nil
+	}
 	if b := a.core.Block(a.focus); b != nil {
 		return b
 	}
@@ -564,17 +755,45 @@ func (a *App) focused() *doc.Block {
 	return nil
 }
 
-func (a *App) markdownSource() string {
-	a.syncAll()
-	a.core.Doc.Title = doc.PlainRich(*a.title)
-	return doc.Export(a.core.Doc, doc.Options{}).Text
+func (a *App) setCoreSelection(b *doc.Block) {
+	if a.core.Sel.AcrossBlocks() {
+		return
+	}
+	lo, hi := a.selectionOf(b)
+	a.core.Sel = editor.Selection{
+		Anchor: editor.Pos{Block: b.ID, Offset: lo},
+		Head:   editor.Pos{Block: b.ID, Offset: hi},
+	}
 }
 
-func (a *App) setStatus(s string) { a.status = s }
+func (a *App) focusAt(sel editor.Selection) {
+	a.closeInlineSource(true)
+	a.core.Sel = sel
+	p := sel.Head
+	b := a.core.Block(p.Block)
+	if b == nil || !b.Kind.HasText() {
+		return
+	}
+	start := p.Offset
+	if sel.Anchor.Block == p.Block {
+		start = sel.Anchor.Offset
+	}
+	a.focus, a.focusReq, a.reveal = p.Block, p.Block, p.Block
+	if sel.AcrossBlocks() {
+		a.projectBlockSelection(b, a.bufs[b.ID])
+		return
+	}
+	a.restoreSelection(p.Block, doc.ByteToRune(b.Text.Text, start), doc.ByteToRune(b.Text.Text, p.Offset))
+}
 
 // setMode switches the pane layout and remembers it.
 func (a *App) setMode(m Mode) {
+	a.endWorkspaceTemplateSession()
+	a.leaveSource()
 	a.mode = m
+	if m == ModePreview {
+		a.drag = nil
+	}
 	a.remember()
 }
 
@@ -584,9 +803,10 @@ func (a *App) bullet() {
 		return
 	}
 	a.syncAll()
-	a.core.Sel = editor.Caret(editor.Pos{Block: b.ID})
+	a.setCoreSelection(b)
 	a.core.ToggleList()
 	a.ResetBuffers()
+	a.focusAt(a.core.Sel)
 }
 
 func (a *App) ordered() {
@@ -595,9 +815,10 @@ func (a *App) ordered() {
 		return
 	}
 	a.syncAll()
-	a.core.Sel = editor.Caret(editor.Pos{Block: b.ID})
+	a.setCoreSelection(b)
 	a.core.ToggleOrdered()
 	a.ResetBuffers()
+	a.focusAt(a.core.Sel)
 }
 
 func (a *App) todo() {
@@ -606,9 +827,10 @@ func (a *App) todo() {
 		return
 	}
 	a.syncAll()
-	a.core.Sel = editor.Caret(editor.Pos{Block: b.ID})
+	a.setCoreSelection(b)
 	a.core.ToggleTodo()
 	a.ResetBuffers()
+	a.focusAt(a.core.Sel)
 }
 
 func (a *App) quote() {
@@ -617,9 +839,10 @@ func (a *App) quote() {
 		return
 	}
 	a.syncAll()
-	a.core.Sel = editor.Caret(editor.Pos{Block: b.ID})
+	a.setCoreSelection(b)
 	a.core.ToggleQuote()
 	a.ResetBuffers()
+	a.focusAt(a.core.Sel)
 }
 
 func (a *App) code() {
@@ -628,9 +851,10 @@ func (a *App) code() {
 		return
 	}
 	a.syncAll()
-	a.core.Sel = editor.Caret(editor.Pos{Block: b.ID})
+	a.setCoreSelection(b)
 	a.core.ToggleCode()
 	a.ResetBuffers()
+	a.focusAt(a.core.Sel)
 }
 
 func (a *App) divider() {
@@ -639,36 +863,37 @@ func (a *App) divider() {
 		return
 	}
 	a.syncAll()
-	nb := doc.NewBlock(doc.DividerKind{}, doc.RichText{})
-	a.core.InsertBlockAfter(b.ID, nb)
-	after := doc.NewBlock(doc.TextKind{}, doc.RichText{})
-	a.core.InsertBlockAfter(nb.ID, after)
-	a.focus = after.ID
-	a.focusReq = after.ID
-	a.ResetBuffers()
-	a.restoreSelection(after.ID, 0, 0)
+	a.insertBlock(doc.NewBlock(doc.DividerKind{}, doc.RichText{}))
 }
 
 // insertTable adds a 3×3 table after the focused block.
-func (a *App) insertTable() {
+func (a *App) insertSizedTable(rows, cols int) {
+	if a.focused() == nil {
+		return
+	}
 	a.syncAll()
 	t := &doc.Table{HeaderRows: 1}
-	t.ColWidths = []float32{200, 200, 200}
-	t.Rows = make([][]doc.TableCell, 3)
-	for r := 0; r < 3; r++ {
-		t.Rows[r] = make([]doc.TableCell, 3)
-		for c := 0; c < 3; c++ {
-			cell := doc.EmptyCell()
-			cell.Blocks = []*doc.Block{doc.TextBlock("")}
-			t.Rows[r][c] = cell
+	t.ColWidths = make([]float32, cols)
+	for i := range t.ColWidths {
+		t.ColWidths[i] = doc.TableDefaultWidth
+	}
+	t.Rows = make([][]doc.TableCell, rows)
+	for r := range t.Rows {
+		t.Rows[r] = make([]doc.TableCell, cols)
+		for c := range t.Rows[r] {
+			t.Rows[r][c] = doc.EmptyCell()
 		}
 	}
 	t.Repair()
 	a.insertBlock(doc.NewBlock(doc.TableKind{Table: t}, doc.RichText{}))
+	a.focusAt(editor.Caret(editor.Pos{Block: t.Rows[0][0].Blocks[0].ID}))
 }
 
 // insertImage copies a picture next to the document and inserts it.
 func (a *App) insertImage() {
+	if a.focused() == nil {
+		return
+	}
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 		Parent:  a.win,
 		Title:   "插入图片",
@@ -678,21 +903,13 @@ func (a *App) insertImage() {
 		return
 	}
 	src := paths[0]
-	rel := src
-	if a.path != "" {
-		assets := filepath.Join(filepath.Dir(a.path), "assets")
-		if err := os.MkdirAll(assets, 0o755); err == nil {
-			data, rerr := os.ReadFile(src)
-			if rerr == nil {
-				name := filepath.Base(src)
-				if werr := os.WriteFile(filepath.Join(assets, name), data, 0o644); werr == nil {
-					rel = "assets/" + name
-				}
-			}
-		}
+	ref, err := imageReference(a.path, src)
+	if err != nil {
+		a.status = "插入图片失败：" + err.Error()
+		return
 	}
 	a.syncAll()
-	a.insertBlock(doc.NewBlock(doc.ImageKind{SrcKind: "src", Src: rel}, doc.RichText{}))
+	a.insertBlock(doc.NewBlock(doc.ImageKind{SrcKind: "src", Src: ref}, doc.RichText{}))
 }
 
 // insertBlock adds a block after the focused one, then a paragraph to keep
@@ -700,16 +917,11 @@ func (a *App) insertImage() {
 func (a *App) insertBlock(b *doc.Block) {
 	cur := a.focused()
 	if cur == nil {
-		a.core.Doc.Blocks = append(a.core.Doc.Blocks, b)
-	} else {
-		a.core.InsertBlockAfter(cur.ID, b)
+		return
 	}
-	after := doc.NewBlock(doc.TextKind{}, doc.RichText{})
-	a.core.InsertBlockAfter(b.ID, after)
-	a.focus = after.ID
-	a.focusReq = after.ID
+	a.core.InsertBlocks(cur.ID, b, doc.TextBlock(""))
 	a.ResetBuffers()
-	a.restoreSelection(after.ID, 0, 0)
+	a.focusAt(a.core.Sel)
 }
 
 func (a *App) heading(level int) {
@@ -718,28 +930,22 @@ func (a *App) heading(level int) {
 		return
 	}
 	a.syncAll()
-	a.core.Sel = editor.Caret(editor.Pos{Block: b.ID})
+	a.setCoreSelection(b)
 	a.core.SetHeading(level)
 	a.ResetBuffers()
+	a.focusAt(a.core.Sel)
 }
 
 // setMark toggles a character format over the focused block's selection, or
 // arms it for the next typed text when nothing is selected.
 func (a *App) setMark(has func(*doc.Marks) bool, set func(*doc.Marks, bool)) {
-	b := a.focused()
-	if b == nil {
-		return
-	}
-	a.syncAll()
-	lo, hi := a.selectionOf(b)
-	a.core.Sel = editor.Selection{
-		Anchor: editor.Pos{Block: b.ID, Offset: lo},
-		Head:   editor.Pos{Block: b.ID, Offset: hi},
-	}
-	a.core.ToggleMark(has, set)
-	a.ResetBuffers()
-	text := b.Text.Text
-	a.restoreSelection(b.ID, doc.ByteToRune(text, lo), doc.ByteToRune(text, hi))
+	a.editFocused(func(b *doc.Block) bool {
+		if _, code := b.Kind.(doc.CodeKind); code && !a.core.Sel.AcrossBlocks() {
+			return false
+		}
+		a.core.ToggleMark(has, set)
+		return true
+	})
 }
 
 // selectionOf is the focused block's selection in byte offsets, falling back
@@ -774,10 +980,18 @@ func clampOffset(s string, n int) int {
 	return n
 }
 
-func (a *App) bold()      { a.setMark(func(m *doc.Marks) bool { return m.Bold }, func(m *doc.Marks, on bool) { m.Bold = on }) }
-func (a *App) italic()    { a.setMark(func(m *doc.Marks) bool { return m.Italic }, func(m *doc.Marks, on bool) { m.Italic = on }) }
-func (a *App) underline() { a.setMark(func(m *doc.Marks) bool { return m.Underline }, func(m *doc.Marks, on bool) { m.Underline = on }) }
-func (a *App) strike()    { a.setMark(func(m *doc.Marks) bool { return m.Strike }, func(m *doc.Marks, on bool) { m.Strike = on }) }
+func (a *App) bold() {
+	a.setMark(func(m *doc.Marks) bool { return m.Bold }, func(m *doc.Marks, on bool) { m.Bold = on })
+}
+func (a *App) italic() {
+	a.setMark(func(m *doc.Marks) bool { return m.Italic }, func(m *doc.Marks, on bool) { m.Italic = on })
+}
+func (a *App) underline() {
+	a.setMark(func(m *doc.Marks) bool { return m.Underline }, func(m *doc.Marks, on bool) { m.Underline = on })
+}
+func (a *App) strike() {
+	a.setMark(func(m *doc.Marks) bool { return m.Strike }, func(m *doc.Marks, on bool) { m.Strike = on })
+}
 func (a *App) inlineCode() {
 	a.setMark(func(m *doc.Marks) bool { return m.Code }, func(m *doc.Marks, on bool) { m.Code = on })
 }
@@ -793,14 +1007,35 @@ func (a *App) duplicate() {
 }
 
 func (a *App) undo() {
+	a.endWorkspaceTemplateSession()
+	if a.source != nil {
+		return
+	}
+	a.syncAll()
 	if a.core.Undo() {
 		a.ResetBuffers()
+		a.focusAt(a.core.Sel)
+		a.checkSavedText()
 	}
 }
 
 func (a *App) redo() {
+	a.endWorkspaceTemplateSession()
+	if a.source != nil {
+		return
+	}
+	a.syncAll()
 	if a.core.Redo() {
 		a.ResetBuffers()
+		a.focusAt(a.core.Sel)
+		a.checkSavedText()
+	}
+}
+
+func (a *App) checkSavedText() {
+	if a.markdownSource() == a.savedText {
+		a.savedGeneration = a.core.Generation
+		a.dirty = false
 	}
 }
 
@@ -820,132 +1055,37 @@ func deref(s *string, fallback string) string {
 	return fallback
 }
 
-// Run starts the desktop app.
-func Run(path string) error {
-	app := mygo.App
-	app.SetName("MarkdownX")
-	st := New(path)
-	// Files opened from Explorer/Finder, the Dock, a jump list or a second
-	// launch arrive here rather than on the command line.
-	app.OnOpenFile(func(p string) { st.OpenFile(p) })
-	app.WhenReady(func() {
-		if path == "" {
-			st.restore("")
-		}
-		app.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-			{Role: mygo.RoleAppMenu},
-			{Label: "文件", Submenu: []*mygo.MenuItem{
-				{Label: "新建", Accelerator: "CmdOrCtrl+N", Click: func(*mygo.MenuItem, *mygo.Window) { st.NewDocument() }},
-				{Label: "打开…", Accelerator: "CmdOrCtrl+O", Click: func(*mygo.MenuItem, *mygo.Window) { st.ChooseFile() }},
-				{Label: "打开文件夹…", Accelerator: "CmdOrCtrl+Shift+O", Click: func(*mygo.MenuItem, *mygo.Window) { st.ChooseFolder() }},
-				mygo.Separator(),
-				{Label: "保存", Accelerator: "CmdOrCtrl+S", Click: func(*mygo.MenuItem, *mygo.Window) { st.Save() }},
-				{Label: "密码保存…", Accelerator: "CmdOrCtrl+Shift+S", Click: func(*mygo.MenuItem, *mygo.Window) { st.EncryptSave() }},
-				{Label: "导出 HTML…", Accelerator: "CmdOrCtrl+Shift+E", Click: func(*mygo.MenuItem, *mygo.Window) { st.ExportHTML() }},
-				{Label: "导出书籍 (.mdxb)…", Click: func(*mygo.MenuItem, *mygo.Window) { st.ExportBook() }},
-				{Label: "存为模板…", Click: func(*mygo.MenuItem, *mygo.Window) { st.SaveAsTemplate() }},
-				mygo.Separator(),
-				{Role: mygo.RoleClose},
-			}},
-			{Label: "视图", Submenu: []*mygo.MenuItem{
-				{Label: "仅编辑", Accelerator: "CmdOrCtrl+Alt+1", Click: func(*mygo.MenuItem, *mygo.Window) { st.setMode(ModeEdit) }},
-				{Label: "分栏", Accelerator: "CmdOrCtrl+Alt+2", Click: func(*mygo.MenuItem, *mygo.Window) { st.setMode(ModeSplit) }},
-				{Label: "仅预览", Accelerator: "CmdOrCtrl+Alt+3", Click: func(*mygo.MenuItem, *mygo.Window) { st.setMode(ModePreview) }},
-			}},
-			{Label: "格式", Submenu: []*mygo.MenuItem{
-				{Label: "标题 1", Accelerator: "CmdOrCtrl+1", Click: func(*mygo.MenuItem, *mygo.Window) { st.heading(1) }},
-				{Label: "标题 2", Accelerator: "CmdOrCtrl+2", Click: func(*mygo.MenuItem, *mygo.Window) { st.heading(2) }},
-				{Label: "标题 3", Accelerator: "CmdOrCtrl+3", Click: func(*mygo.MenuItem, *mygo.Window) { st.heading(3) }},
-				{Label: "正文", Accelerator: "CmdOrCtrl+0", Click: func(*mygo.MenuItem, *mygo.Window) { st.heading(0) }},
-				mygo.Separator(),
-				{Label: "加粗", Accelerator: "CmdOrCtrl+B", Click: func(*mygo.MenuItem, *mygo.Window) { st.bold() }},
-				{Label: "斜体", Accelerator: "CmdOrCtrl+I", Click: func(*mygo.MenuItem, *mygo.Window) { st.italic() }},
-				{Label: "下划线", Accelerator: "CmdOrCtrl+U", Click: func(*mygo.MenuItem, *mygo.Window) { st.underline() }},
-				{Label: "删除线", Click: func(*mygo.MenuItem, *mygo.Window) { st.strike() }},
-				{Label: "行内代码", Accelerator: "CmdOrCtrl+E", Click: func(*mygo.MenuItem, *mygo.Window) { st.inlineCode() }},
-				{Label: "链接…", Accelerator: "CmdOrCtrl+K", Click: func(*mygo.MenuItem, *mygo.Window) { st.openLink() }},
-				mygo.Separator(),
-				{Label: "项目符号", Accelerator: "CmdOrCtrl+Shift+[", Click: func(*mygo.MenuItem, *mygo.Window) { st.bullet() }},
-				{Label: "编号列表", Accelerator: "CmdOrCtrl+Shift+]", Click: func(*mygo.MenuItem, *mygo.Window) { st.ordered() }},
-				{Label: "待办列表", Accelerator: "CmdOrCtrl+Shift+C", Click: func(*mygo.MenuItem, *mygo.Window) { st.todo() }},
-				{Label: "引用", Accelerator: "CmdOrCtrl+Shift+Q", Click: func(*mygo.MenuItem, *mygo.Window) { st.quote() }},
-				{Label: "代码块", Accelerator: "CmdOrCtrl+Shift+K", Click: func(*mygo.MenuItem, *mygo.Window) { st.code() }},
-				{Label: "表格", Accelerator: "CmdOrCtrl+T", Click: func(*mygo.MenuItem, *mygo.Window) { st.insertTable() }},
-				{Label: "分割线", Click: func(*mygo.MenuItem, *mygo.Window) { st.divider() }},
-				mygo.Separator(),
-				{Label: "下方插入行", Accelerator: "CmdOrCtrl+Shift+Enter", Click: func(*mygo.MenuItem, *mygo.Window) { st.insertBelow() }},
-				{Label: "查找…", Accelerator: "CmdOrCtrl+F", Click: func(*mygo.MenuItem, *mygo.Window) { st.finding = true; st.findFocus = true; st.findKey = "" }},
-				{Label: "替换…", Accelerator: "CmdOrCtrl+H", Click: func(*mygo.MenuItem, *mygo.Window) { st.finding = true; st.findFocus = true; st.findKey = "" }},
-			}},
-			{Role: mygo.RoleEditMenu},
-			{Role: mygo.RoleWindowMenu},
-		}))
-		w := mygo.NewWindow(mygo.WindowOptions{
-			Title:     "MarkdownX",
-			Width:     1120,
-			Height:    760,
-			MinWidth:  760,
-			MinHeight: 420,
-			Content:   ui.View(st.View),
-		})
-		st.win = w
-		st.winID = w.ID()
-		st.SyncTitle()
-		// Keep unsaved work from disappearing when the window closes.
-		w.OnClose(func(e *mygo.CloseEvent) {
-			if !st.dirty {
-				return
-			}
-			res, err := mygo.Dialog.Message(mygo.MessageOptions{
-				Parent:        w,
-				Type:          mygo.MessageWarning,
-				Title:         "未保存的修改",
-				Message:       "关闭前要保存 " + st.DisplayName() + " 吗？",
-				Buttons:       []string{"保存", "不保存", "取消"},
-				DefaultButton: 0,
-				CancelButton:  2,
-			})
-			if err != nil {
-				e.PreventDefault()
-				return
-			}
-			switch res.Button {
-			case 0:
-				st.Save()
-				if st.dirty {
-					e.PreventDefault()
-				}
-			case 2:
-				e.PreventDefault()
-			}
-		})
-	})
-	return app.Run()
-}
-
 // NewDocument starts an empty document.
 func (a *App) NewDocument() {
-	if !a.confirmDiscard() {
+	shared := a.hasOtherPane(a.documentTab)
+	if !shared && !a.confirmDiscard() {
 		return
 	}
-	a.core = editor.New(doc.NewDocument())
-	a.path = ""
-	a.dirty = false
-	a.status = ""
-	a.ResetBuffers()
+	a.parkDocumentTab()
+	if !shared {
+		a.rememberClosedTab(a.documentTab, a.tabIndex())
+	}
+	a.replaceDocumentPane(newDocumentTab(doc.NewDocument()))
+	a.resetPreview()
 }
 
 // confirmDiscard asks what to do about unsaved changes before replacing the
 // open document. It reports whether the caller may continue.
 func (a *App) confirmDiscard() bool {
+	a.syncAll()
+	a.updateDirty()
 	if !a.dirty {
 		return true
 	}
+	return a.confirmUnsaved(a.documentTab)
+}
+
+func (a *App) confirmUnsaved(tab *documentTab) bool {
 	res, err := mygo.Dialog.Message(mygo.MessageOptions{
 		Parent:        a.win,
 		Type:          mygo.MessageWarning,
 		Title:         "未保存的修改",
-		Message:       "要先保存 " + a.DisplayName() + " 吗？",
+		Message:       "要先保存 " + tab.DisplayName() + " 吗？",
 		Buttons:       []string{"保存", "不保存", "取消"},
 		DefaultButton: 0,
 		CancelButton:  2,
@@ -955,8 +1095,9 @@ func (a *App) confirmDiscard() bool {
 	}
 	switch res.Button {
 	case 0:
+		a.selectDocumentTab(tab, false)
 		a.Save()
-		return !a.dirty
+		return !tab.dirty
 	case 1:
 		return true
 	default:
@@ -986,8 +1127,7 @@ func (a *App) doEncryptSave() {
 		return
 	}
 	a.syncAll()
-	a.core.Doc.Title = doc.PlainRich(*a.title)
-	src := doc.Export(a.core.Doc, doc.Options{}).Text
+	src := a.markdownSource()
 	enc, err := rage.EncryptPage([]byte(src), a.encPw1)
 	if err != nil {
 		a.status = "加密失败：" + err.Error()
@@ -1012,7 +1152,7 @@ func (a *App) doEncryptSave() {
 		return
 	}
 	a.path = target
-	a.dirty = false
+	a.markSaved()
 	a.status = "已加密保存 " + filepath.Base(target)
 	a.encPw1 = ""
 	a.encPw2 = ""

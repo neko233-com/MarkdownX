@@ -1,115 +1,258 @@
 package app
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
-
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 
+	"github.com/neko233/markdownx/internal/diagram"
 	"github.com/neko233/markdownx/internal/doc"
 	"github.com/neko233/markdownx/internal/editor"
 )
 
-// View draws the window: sidebar, toolbar, editor, preview.
+// View draws the workspace and the active document.
 func (a *App) View(c *ui.Context) {
-	a.shortcuts(c)
-	a.SyncTitle()
-	t := c.Theme()
-	ui.Row(c).Fill().Children(func() {
-		a.sidebar(c)
-		ui.Column(c).Grow(1).Fill().Children(func() {
-			a.toolbar(c)
-			a.findBar(c)
-			ui.Row(c).Grow(1).Fill().Children(func() {
-				if a.mode != ModePreview {
-					ui.Scroll(c).Grow(1).Fill().Children(func() {
-						ui.Column(c).Gap(8).Padding(24, 36).Children(func() {
-							ui.TextInput(c, a.title).FontSize(30).Bold().Placeholder(doc.Untitled).Label("标题")
-							for i, b := range a.core.Doc.Blocks {
-								a.block(c, b, i)
-							}
-						})
-					})
-				}
-				if a.mode != ModeEdit {
-					ui.Scroll(c).Grow(1).Fill().Background(t.Background).Children(func() {
-						ui.Column(c).Padding(24, 36).Children(func() {
-							markdown.View(c, a.markdownSource(), &a.md)
-						})
-					})
-				}
-			})
-			ui.Row(c).Padding(6, 12).Background(t.Surface).Gap(12).Children(func() {
-				ui.Text(c, a.status).FontSize(11).TextColor(t.TextMuted)
-				ui.Spacer(c).Grow(1)
-				ui.Text(c, a.Stats()).FontSize(11).TextColor(t.TextMuted)
-			})
+	if len(a.tabs) == 0 {
+		return
+	}
+	a.services = c.Services()
+	a.documentTab.ensureSourceView()
+	a.documentTab.claimSelection()
+	if s := a.templateSession; s != nil {
+		c.Root().ObserveInput(func(ev ui.InputEvent) {
+			if ev.Kind == ui.InputPointerDown {
+				s.outsideClick = true
+			}
 		})
+	}
+	if !a.sidebarVisible() {
+		a.sidebarDrag = nil
+		a.stopWorkspaceWatch()
+		a.treeSearch.stop()
+	}
+	a.pollPDF()
+	if target := a.pendingLink; target != "" {
+		a.pendingLink = ""
+		a.followDocumentLink(target)
+	}
+	if target := a.pendingNote; target.Block != 0 {
+		a.pendingNote = editor.Pos{}
+		a.focusAt(editor.Caret(target))
+	}
+	a.syncRangeInput()
+	c.SetZoom(a.zoom)
+	a.shortcuts(c)
+	if a.treeView != nil && (!a.sidebarVisible() || a.sidebarPage == sidebarOutline || a.treeSearch.open) {
+		a.treeView.closeContextMenu()
+	}
+	t := c.Theme()
+	a.inlineColor = documentInk(t)
+	a.inlineAccent = t.Accent
+	a.treePointerHeld = false
+	ui.Column(c).Fill().Children(func() {
+		if !a.zenMode && (len(a.tabs) > 1 || a.split != nil) {
+			a.tabStrip(c)
+		}
+		a.workspaceEditor(c)
 	})
 	a.encryptionDialog(c)
+	a.showTemplates(c)
 	a.templateDialog(c)
-	a.linkDialog(c)
+	a.tableDialog(c)
+	a.mathDialog(c)
+	a.preferences(c)
+	a.showPDFDialog(c)
+	a.quickOpenDialog(c)
+	a.commandPaletteDialog(c)
+	a.workspaceDialog(c)
+	a.workspaceFilterDialog(c)
+	if s := a.templateSession; s != nil && (s.outsideClick || s.source == nil && s.generation != a.core.Generation) {
+		a.endWorkspaceTemplateSession()
+	}
+	a.tickAutoSave(c)
+	a.SyncTitle()
+	a.publishDocumentUpdates()
 }
 
-// sidebar is the left panel: 近期浏览 and 模板参考.
-func (a *App) sidebar(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Width(232).FillHeight().Background(t.Surface).Padding(10, 8).Gap(8).Children(func() {
-		if ui.Tabs(c, &a.sideTab, "近期浏览", "模板参考").FontSize(12).Changed() {
-			a.remember()
+func (a *App) workspaceEditor(c *ui.Context) {
+	ui.Row(c).Grow(1).Fill().Children(func() {
+		if a.sidebarVisible() {
+			a.sidebar(c)
 		}
-		if a.sideTab == 1 {
-			a.templatePane(c)
-		} else {
-			a.recentPane(c)
+		ui.Column(c.Key("editor-column")).MinWidth(0).Grow(1).Fill().Children(func() {
+			a.findBar(c)
+			a.documentPanesView(c)
+			a.documentStatus(c)
+		})
+	})
+	if a.outline.owner != nil && a.outline.owner != a.documentState {
+		a.outline = documentOutline{focus: a.outline.focus}
+	}
+	if a.sidebarVisible() && a.sidebarPage == sidebarOutline && a.source == nil &&
+		a.outline.model == a.core.Doc && a.outline.generation != a.core.Generation {
+		c.Invalidate()
+	}
+	if pane := a.pendingPane; pane != nil {
+		a.pendingPane = nil
+		if pane.tabOwner() == a.documentTab.tabOwner() && pane != a.documentTab {
+			a.selectDocumentTab(pane, true)
+			c.Invalidate()
+		}
+	}
+}
+
+func (a *App) documentStatus(c *ui.Context) {
+	if a.zenMode && !a.dirty && a.status == "" {
+		return
+	}
+	t := c.Theme()
+	ui.Row(c.Key("document-status")).Height(workspaceFooterHeight).Padding(0, 12).Gap(10).AlignItems(ui.Center).Background(t.Surface).Children(func() {
+		if !a.zenMode {
+			sideLabel, glyph := "显示侧栏", "›"
+			if a.sidebarVisible() {
+				sideLabel, glyph = "隐藏侧栏", "‹"
+			}
+			side := ui.ButtonBase(c.Key("sidebar-toggle")).Size(24, 24).Center().Radius(t.Radius).
+				Label(sideLabel).Tooltip(sideLabel)
+			if side.Hovered() {
+				side.Background(t.Selection)
+			}
+			side.Children(func() { ui.Text(c, glyph).FontSize(18).TextColor(t.TextMuted).Role(ui.RoleNone) })
+			if side.Clicked() {
+				a.toggleSidebar()
+			}
+			label := "源码"
+			if a.source != nil {
+				label = "正文"
+			}
+			source := ui.ButtonBase(c.Key("source-mode")).Height(24).Padding(0, 8).Radius(t.Radius).
+				Label("切换 Markdown 源码").Tooltip("切换 Markdown 源码")
+			if source.Hovered() {
+				source.Background(t.Selection)
+			}
+			source.Children(func() { ui.Text(c, label).FontSize(12).TextColor(t.TextMuted) })
+			if source.Clicked() {
+				a.toggleSource()
+			}
+		}
+		if a.dirty {
+			ui.Text(c, "未保存").FontSize(11).TextColor(t.TextMuted).Shrink(0)
+		}
+		if a.status != "" {
+			ui.Text(c, a.status).SingleLine().TruncateMiddle().MinWidth(0).FontSize(11).TextColor(t.TextMuted)
+		}
+		if !a.zenMode {
+			ui.Spacer(c).Grow(1)
+			ui.Text(c, a.Stats()).FontSize(11).TextColor(t.TextMuted).Shrink(0)
 		}
 	})
 }
 
-// recentPane lists the documents opened lately, then the workspace files.
-func (a *App) recentPane(c *ui.Context) {
-	t := c.Theme()
-	ui.Scroll(c).Fill().Children(func() {
-		ui.Column(c).Gap(2).Children(func() {
-			if len(a.recents) == 0 {
-				ui.Text(c, "还没有打开过文档").FontSize(11).TextColor(t.TextMuted)
+func (a *App) documentPaneView(c *ui.Context, pane *documentTab) {
+	a.withDocumentPane(pane, func() {
+		pane.ensureSourceView()
+		pane.ensurePreview(a)
+		ui.Row(c.Key("document-pane")).Grow(1).Fill().Children(func() {
+			if a.source != nil {
+				a.sourcePane(c)
+				return
 			}
-			shown := map[string]bool{}
-			for _, p := range a.recents {
-				if _, err := os.Stat(p); err != nil {
-					continue
+			if a.mode != ModePreview {
+				a.editPane(c)
+			}
+			if a.mode != ModeEdit {
+				pad := float32(36)
+				if pane.split != nil {
+					pad = 14
 				}
-				shown[p] = true
-				a.fileRow(c, "recent:"+p, p, filepath.Base(p), filepath.Dir(p), 0)
+				ui.Scroll(c.Key("document-preview")).Grow(1).Fill().TrackScroll(&pane.previewScroll).
+					Background(c.Theme().Background).Children(func() {
+					ui.Column(c).Padding(24, pad).Children(func() {
+						markdown.View(c, a.markdownSource(), &a.md)
+					})
+				})
 			}
-			if a.root != "" {
-				ui.Text(c, "工作区").FontSize(11).TextColor(t.TextMuted).Padding(0, 8, 4, 0)
-				for _, rel := range a.files {
-					full := filepath.Join(a.root, rel)
-					if shown[full] {
-						continue
-					}
-					label := strings.TrimSuffix(rel, filepath.Ext(rel))
-					a.fileRow(c, "file:"+rel, full, label, "", 2)
-				}
-			}
+		}).ObserveInput(func(ev ui.InputEvent) {
+			a.observePaneInput(pane, ev)
 		})
 	})
 }
 
-// fileRow is one clickable document entry; indent separates the sections.
-func (a *App) fileRow(c *ui.Context, key, full, label, tip string, indent float32) {
-	t := c.Theme()
-	b := ui.Button(c.Key(key), label).Label(tip).FontSize(12).Height(24).
-		Justify(ui.Start).Padding(0, 8+indent)
-	if a.path != "" && samePath(a.path, full) {
-		b = b.Background(t.Selection)
+func (a *App) editPane(c *ui.Context) {
+	scroll := ui.Scroll(c.Key("document")).Grow(1).Fill().TrackScroll(&a.editScroll)
+	a.editBounds = scroll.Bounds()
+	var body ui.Rect
+	scroll.Children(func() {
+		pad := float32(30)
+		if a.split != nil {
+			pad = 14
+		}
+		windowWidth, _ := c.Size()
+		paperWidth := float32(860)
+		if windowWidth >= 1800 {
+			paperWidth = 1200
+		} else if windowWidth >= 1400 {
+			paperWidth = 1024
+		}
+		column := ui.Column(c).WidthPercent(100).MaxWidth(paperWidth).AlignSelf(ui.Center).
+			Padding(43, pad, 100, pad).Children(func() {
+			if a.typeMode {
+				_, h := c.Size()
+				ui.Spacer(c).Height(max(0, h/2-105))
+			}
+			if a.path == "" || *a.title != "" {
+				e := ui.TextInputBase(c.Key("title"), a.title).FontSize(30).Bold().
+					Placeholder(doc.Untitled).Label("标题").FocusRing(false)
+				if a.revealTitle {
+					if a.split == nil && !a.keepViewportFocus {
+						e.Focus().ScrollIntoView()
+					} else {
+						e.Focus(ui.FocusOptions{PreventScroll: true})
+					}
+					a.keepViewportFocus = false
+					a.revealTitle = false
+				}
+				if a.core.Sel.All && *a.title != "" {
+					e.Background(c.Theme().Selection)
+				}
+				e.ObserveInput(func(ev ui.InputEvent) {
+					if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
+						a.core.Sel = editor.Caret(editor.Pos{Block: editor.Title})
+						a.drag = nil
+					}
+				})
+				if e.Changed() {
+					a.syncTitle()
+				}
+			}
+			blocks := a.core.Doc.Blocks
+			for i, b := range blocks {
+				if i > 0 {
+					ui.Box(c).Height(blockSpacing(blocks[i-1], b)).Shrink(0)
+				} else if a.path == "" || *a.title != "" {
+					ui.Box(c).Height(16).Shrink(0)
+				}
+				a.block(c, b, blocks, i)
+			}
+			if a.typeMode {
+				_, h := c.Size()
+				ui.Spacer(c).Height(max(0, h/2-105))
+			}
+		})
+		body = column.Bounds()
+	})
+	a.dropFilesOnDocument(c, scroll, body)
+}
+
+func (a *App) showTemplates(c *ui.Context) {
+	if !a.templateLibraryOpen || a.tmplOpen {
+		return
 	}
-	if b.Clicked() {
-		a.OpenFile(full)
-	}
+	ui.Modal(c, &a.templateLibraryOpen, func() {
+		ui.Column(c).Width(420).Height(420).Gap(8).Padding(16).Radius(10).Background(c.Theme().Surface).Children(func() {
+			ui.Text(c, "文档模板").Bold()
+			a.templatePane(c)
+		})
+	})
 }
 
 // templatePane lists the built-in and the user's templates.
@@ -215,42 +358,11 @@ func (a *App) templateDialog(c *ui.Context) {
 	})
 }
 
-// linkDialog asks for the URL of a link mark.
-func (a *App) linkDialog(c *ui.Context) {
-	if !a.linkOpen {
-		return
-	}
-	t := c.Theme()
-	ui.Modal(c, &a.linkOpen, func() {
-		ui.Column(c).Width(380).Padding(20, 20).Gap(12).Background(t.Surface).Radius(10).Children(func() {
-			ui.Text(c, "插入链接").FontSize(18).Bold()
-			ui.Text(c, "选中文字后按 Ctrl+K，链接会加到选区上；没有选区时作用于接下来输入的文字。").FontSize(12).TextColor(t.TextMuted)
-			e := ui.TextInput(c, &a.linkURL).Placeholder("https://").Label("链接地址")
-			if a.linkFocus {
-				e.Focus()
-				a.linkFocus = false
-			}
-			e.OnSubmit(func() { a.doInsertLink() })
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Spacer(c).Grow(1)
-				if ui.Button(c.Key("link-cancel"), "取消").Clicked() {
-					a.linkOpen = false
-					a.status = "已取消插入链接"
-				}
-				if ui.PrimaryButton(c.Key("link-ok"), "插入").Clicked() {
-					a.doInsertLink()
-				}
-			})
-		})
-	})
-}
-
 // findBar draws the find field, match navigation and replace controls.
 func (a *App) findBar(c *ui.Context) {
-	if !a.finding {
+	if !a.finding || a.source != nil {
 		return
 	}
-	a.refreshMatches()
 	t := c.Theme()
 	ui.Row(c).Padding(6, 12).Gap(6).Background(t.Surface).Children(func() {
 		e := ui.TextInput(c.Key("find-q"), &a.findQuery).Placeholder("查找").Label("查找").FontSize(12).Width(220)
@@ -261,6 +373,18 @@ func (a *App) findBar(c *ui.Context) {
 		if e.Changed() {
 			a.matchIndex = 0
 		}
+		e.OnTextKey(func(k ui.TextKey) bool {
+			if k.Key != ui.KeyEnter {
+				return false
+			}
+			delta := 1
+			if k.Mods&ui.Shift != 0 {
+				delta = -1
+			}
+			a.stepMatch(delta)
+			return true
+		})
+		a.refreshMatches()
 		count := "0 / 0"
 		if len(a.matches) > 0 {
 			count = itoa(a.matchIndex+1) + " / " + itoa(len(a.matches))
@@ -277,15 +401,17 @@ func (a *App) findBar(c *ui.Context) {
 			a.closeFind()
 		}
 	})
-	ui.Row(c).Padding(4, 12).Gap(8).Background(t.Surface).Children(func() {
-		ui.TextInput(c, &a.findReplace).Placeholder("替换为").Label("替换为").FontSize(12).Width(200)
-		if ui.Button(c.Key("repl-one"), "替换").Label("替换当前").FontSize(12).Height(24).Padding(0, 8).Clicked() {
-			a.replaceOne(a.findReplace)
-		}
-		if ui.Button(c.Key("repl-all"), "全部替换").Label("全部替换").FontSize(12).Height(24).Padding(0, 8).Clicked() {
-			a.replaceAll(a.findReplace)
-		}
-	})
+	if a.replacing {
+		ui.Row(c).Padding(4, 12).Gap(8).Background(t.Surface).Children(func() {
+			ui.TextInput(c, &a.findReplace).Placeholder("替换为").Label("替换为").FontSize(12).Width(200)
+			if ui.Button(c.Key("repl-one"), "替换").Label("替换当前").FontSize(12).Height(24).Padding(0, 8).Clicked() {
+				a.replaceOne(a.findReplace)
+			}
+			if ui.Button(c.Key("repl-all"), "全部替换").Label("全部替换").FontSize(12).Height(24).Padding(0, 8).Clicked() {
+				a.replaceAll(a.findReplace)
+			}
+		})
+	}
 }
 
 // closeFind hides the find bar and drops its state.
@@ -295,6 +421,7 @@ func (a *App) closeFind() {
 	a.matches = nil
 	a.findKey = ""
 	a.matchIndex = 0
+	a.replacing = false
 }
 
 // stepMatch moves to the next or previous hit, wrapping around.
@@ -307,115 +434,60 @@ func (a *App) stepMatch(delta int) {
 	a.jumpToMatch()
 }
 
-// toolbar is the formatting strip above the editor.
-func (a *App) toolbar(c *ui.Context) {
-	t := c.Theme()
-	ui.Row(c).Padding(6, 8).Gap(1).Background(t.Surface).Children(func() {
-		btn := func(key, label, tip string, fn func()) {
-			if ui.Button(c.Key(key), label).Label(tip).FontSize(11).Height(26).Padding(0, 6).Clicked() {
-				fn()
-			}
-		}
-		btn("h1", "H1", "标题 1", func() { a.heading(1) })
-		btn("h2", "H2", "标题 2", func() { a.heading(2) })
-		btn("h3", "H3", "标题 3", func() { a.heading(3) })
-		btn("p", "¶", "正文", func() { a.heading(0) })
-		ui.Divider(c)
-		btn("b", "B", "加粗", a.bold)
-		btn("i", "I", "斜体", a.italic)
-		btn("u", "U", "下划线", a.underline)
-		btn("s", "S", "删除线", a.strike)
-		btn("code", "</>", "行内代码", a.inlineCode)
-		ui.Divider(c)
-		btn("ul", "•", "项目符号", a.bullet)
-		btn("ol", "1.", "编号列表", a.ordered)
-		btn("todo", "☑", "待办", a.todo)
-		btn("quote", "❝", "引用", a.quote)
-		btn("pre", "{ }", "代码块", a.code)
-		btn("hr", "—", "分割线", a.divider)
-		btn("table", "▦", "插入表格", a.insertTable)
-		btn("img", "🖼", "插入图片", a.insertImage)
-		ui.Divider(c)
-		btn("undo", "↶", "撤销", a.undo)
-		btn("redo", "↷", "重做", a.redo)
-		ui.Divider(c)
-		modeLabel := "分栏"
-		switch a.mode {
-		case ModeEdit:
-			modeLabel = "编辑"
-		case ModePreview:
-			modeLabel = "预览"
-		}
-		btn("mode", modeLabel, "切换视图", func() { a.setMode((a.mode + 1) % 3) })
-		btn("save", "保存", "保存", a.Save)
-	})
-}
-
-func (a *App) block(c *ui.Context, b *doc.Block, index int) {
+func (a *App) block(c *ui.Context, b *doc.Block, siblings []*doc.Block, index int) {
 	switch k := b.Kind.(type) {
 	case doc.TextKind:
 		a.textArea(c, b, 0)
-	case doc.HeadingKind:
-		size := float32(30 - int(k.Level)*2)
-		if size < 16 {
-			size = 16
+		if _, formula := displayEquation(b); formula && a.focus == b.ID {
+			if ui.Button(c.Key("edit-formula"+itoa(int(b.ID))), "编辑公式").FontSize(11).Clicked() {
+				a.openEquationFor(b)
+			}
 		}
+	case doc.HeadingKind:
+		size, _ := headingMetrics(k.Level)
 		a.textArea(c, b, size)
+		if k.Level <= 2 {
+			ui.Divider(c).Background(c.Theme().Background.Mix(c.Theme().Border, 0.42))
+		}
+	case doc.DefinitionKind:
+		a.definitionBlock(c, b)
+	case doc.TOCKind:
+		a.contents(c, b)
 	case doc.BulletKind:
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Text(c, "•").FontSize(16)
-			ui.Column(c).Grow(1).Children(func() {
-				a.textArea(c, b, 15)
-				a.children(c, b)
-			})
-		})
+		a.listItem(c, b, "•")
 	case doc.OrderedKind:
-		n := editor.OrderedNumber(a.core.Doc.Blocks, index)
+		n := editor.OrderedNumber(siblings, index)
 		if k.Seq != nil {
 			n = *k.Seq
 		}
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Textf(c, "%d.", n).FontSize(15)
-			ui.Column(c).Grow(1).Children(func() {
-				a.textArea(c, b, 15)
-				a.children(c, b)
-			})
-		})
+		a.listItem(c, b, itoa(int(n))+".")
 	case doc.TodoKind:
-		ui.Row(c).Gap(8).Children(func() {
-			box := "☐"
-			if k.Done {
-				box = "☑"
-			}
-			if ui.Button(c.Key(b.ID), box).Label("已完成").Width(30).Clicked() {
-				a.core.ToggleTodoDone(b.ID)
-			}
-			ui.Column(c).Grow(1).Children(func() {
-				a.textArea(c, b, 15)
-				a.children(c, b)
-			})
-		})
+		a.listItem(c, b, "")
 	case doc.CodeKind:
-		ui.Column(c).Padding(12).Radius(6).Background(c.Theme().Surface).Children(func() {
-			a.textArea(c, b, 13)
-		})
+		if lang := diagram.Language(k.Lang); a.diagrams && lang != "" {
+			a.editableDiagram(c, b, lang)
+			return
+		}
+		a.codeEditor(c.Key(b.ID), b)
 	case doc.QuoteKind:
-		ui.Row(c).Gap(10).Children(func() {
-			ui.Column(c).Width(3).Background(c.Theme().Border)
-			ui.Column(c).Grow(1).Children(func() { a.children(c, b) })
+		ui.Column(c).BorderColor(c.Theme().Border).BorderWidth(0, 0, 0, 4).Padding(0, 0, 0, 9).Children(func() {
+			color := a.inlineColor
+			a.inlineColor = c.Theme().TextMuted
+			a.children(c, b)
+			a.inlineColor = color
 		})
 	case doc.DividerKind:
-		ui.Divider(c)
+		a.drawSelectedObject(c, ui.Divider(c), b.ID)
 	case doc.ImageKind:
-		ui.Text(c, "🖼 "+deref(k.Caption, k.Src)).FontSize(13).TextColor(c.Theme().TextMuted)
+		a.editableImage(c, b)
 	case doc.TableKind:
-		a.table(c, k.Table)
+		a.table(c, b.ID, k.Table)
 	case doc.FileKind:
-		ui.Text(c, "📎 "+k.File.Name).FontSize(13).TextColor(c.Theme().TextMuted)
+		a.drawSelectedObject(c, ui.Text(c, "📎 "+k.File.Name).FontSize(13).TextColor(c.Theme().TextMuted), b.ID)
 	case doc.InteractiveKindBlock:
-		ui.Text(c, "▶ "+firstNonEmpty(k.Interactive.Title, "交互组件")).FontSize(13).TextColor(c.Theme().TextMuted)
+		a.drawSelectedObject(c, ui.Text(c, "▶ "+firstNonEmpty(k.Interactive.Title, "交互组件")).FontSize(13).TextColor(c.Theme().TextMuted), b.ID)
 	default:
-		ui.Text(c, firstNonEmpty(b.Text.Text, "（未支持的内容）")).FontSize(13).TextColor(c.Theme().TextMuted)
+		a.drawSelectedObject(c, ui.Text(c, firstNonEmpty(b.Text.Text, "（未支持的内容）")).FontSize(13).TextColor(c.Theme().TextMuted), b.ID)
 	}
 }
 
@@ -423,129 +495,15 @@ func (a *App) children(c *ui.Context, b *doc.Block) {
 	if len(b.Children) == 0 {
 		return
 	}
-	ui.Column(c).Padding(0, 0, 0, 14).Gap(6).Children(func() {
+	ui.Column(c).Gap(8).Children(func() {
 		for i, child := range b.Children {
-			a.block(c, child, i)
-		}
-	})
-}
-
-func (a *App) table(c *ui.Context, t *doc.Table) {
-	if t == nil {
-		return
-	}
-	ui.Column(c).Gap(1).Children(func() {
-		for r := range t.Rows {
-			ui.Row(c).Gap(1).Children(func() {
-				for cidx := range t.Rows[r] {
-					cell := &t.Rows[r][cidx]
-					if cell.IsCovered() {
-						continue
-					}
-					inHeader := r < t.HeaderRows
-					ui.Column(c).Grow(1).Padding(4, 6).Children(func() {
-						for _, cb := range cell.Blocks {
-							if !cb.Kind.HasText() {
-								continue
-							}
-							e := a.blockInput(c, cb, 13)
-							if inHeader {
-								e.Bold()
-							}
-						}
-					})
-				}
-			})
+			a.block(c, child, b.Children, i)
 		}
 	})
 }
 
 func (a *App) textArea(c *ui.Context, b *doc.Block, size float32) {
 	a.blockInput(c, b, size)
-}
-
-// blockInput renders one editable line and returns its element, so a caller
-// can style it.
-func (a *App) blockInput(c *ui.Context, b *doc.Block, size float32) ui.Element {
-	e := ui.TextArea(c, a.buf(b.ID)).Lines(1, 40).Label("正文")
-	if size > 0 {
-		e.FontSize(size)
-	}
-	if e.Changed() {
-		a.focus = b.ID
-		a.sync(b)
-		// Typora-style: a Markdown marker typed at the start turns the
-		// paragraph into the block it names. The block it becomes owns the
-		// caret from here on, so this input stops updating the focus.
-		start, end := e.TextSelection()
-		text := *a.buf(b.ID)
-		at := doc.RuneToByte(text, start)
-		if start == end {
-			a.sel[b.ID] = [2]int{at, at}
-			if a.autoFormat(b, at) {
-				return e
-			}
-		}
-	}
-	if e.Focused() {
-		a.focus = b.ID
-		start, end := e.TextSelection()
-		text := *a.buf(b.ID)
-		a.sel[b.ID] = [2]int{doc.RuneToByte(text, start), doc.RuneToByte(text, end)}
-		if p, ok := a.pending[b.ID]; ok {
-			e.SetTextSelection(p[0], p[1])
-			delete(a.pending, b.ID)
-		}
-	} else if a.focusReq == b.ID {
-		// A find match asks for the focus once.
-		e.Focus()
-		if p, ok := a.pending[b.ID]; ok {
-			e.SetTextSelection(p[0], p[1])
-			delete(a.pending, b.ID)
-		}
-		a.focusReq = 0
-	}
-	e.OnTextKey(func(k ui.TextKey) bool {
-		a.focus = b.ID
-		return a.onKey(k, b)
-	})
-	return e
-}
-
-func (a *App) onKey(k ui.TextKey, b *doc.Block) bool {
-	switch k.Key {
-	case ui.KeyEnter:
-		a.sync(b)
-		a.core.Sel = editor.Caret(editor.Pos{Block: b.ID, Offset: a.caretOf(b)})
-		a.core.Enter()
-		// Typing continues in the block Enter created, not the one it split.
-		target := a.core.Sel.Head.Block
-		a.ResetBuffers()
-		a.focus = target
-		a.focusReq = target
-		a.restoreSelection(target, 0, 0)
-		return true
-	case ui.KeyTab:
-		a.sync(b)
-		a.core.Sel = editor.Caret(editor.Pos{Block: b.ID})
-		if k.Mods&ui.Shift != 0 {
-			a.core.Outdent()
-		} else {
-			a.core.Indent()
-		}
-		a.ResetBuffers()
-		return true
-	case ui.KeyBackspace:
-		if a.caretOf(b) > 0 {
-			return false // the input deletes the character
-		}
-		a.sync(b)
-		a.core.Sel = editor.Caret(editor.Pos{Block: b.ID})
-		a.core.Backspace()
-		a.ResetBuffers()
-		return true
-	}
-	return false
 }
 
 // caretOf is the focused block's caret in byte offsets.
@@ -557,80 +515,4 @@ func (a *App) caretOf(b *doc.Block) int {
 		}
 	}
 	return b.Text.Len()
-}
-
-func (a *App) shortcuts(c *ui.Context) {
-	switch {
-	case c.Shortcut(ui.Cmd, ui.KeyS):
-		a.Save()
-	case c.Shortcut(ui.Cmd, ui.KeyO):
-		a.ChooseFile()
-	case c.Shortcut(ui.Cmd, ui.KeyN):
-		a.NewDocument()
-	case c.Shortcut(ui.Cmd, ui.KeyB):
-		a.bold()
-	case c.Shortcut(ui.Cmd, ui.KeyI):
-		a.italic()
-	case c.Shortcut(ui.Cmd, ui.KeyU):
-		a.underline()
-	case c.Shortcut(ui.Cmd, ui.KeyD):
-		a.duplicate()
-	case c.Shortcut(ui.Cmd, ui.KeyE):
-		a.inlineCode()
-	case c.Shortcut(ui.Cmd, ui.KeyK):
-		a.openLink()
-	case c.Shortcut(ui.Cmd, ui.KeyT):
-		a.insertTable()
-	case c.Shortcut(ui.Cmd, ui.KeyZ):
-		a.undo()
-	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyZ):
-		a.redo()
-	case c.Shortcut(ui.Cmd, ui.KeyY):
-		a.redo()
-	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyK):
-		a.code()
-	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyQ):
-		a.quote()
-	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyC):
-		a.todo()
-	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketLeft):
-		a.bullet()
-	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketRight):
-		a.ordered()
-	case c.Shortcut(ui.Cmd|ui.Shift, ui.KeyEnter):
-		a.insertBelow()
-	case c.Shortcut(ui.Cmd, ui.KeyF):
-		a.finding = true
-		a.findFocus = true
-		a.findKey = ""
-	case c.Shortcut(ui.Cmd, ui.KeyH):
-		a.finding = true
-		a.findFocus = true
-		a.findKey = ""
-	}
-	for level := 0; level <= 6; level++ {
-		if c.Shortcut(ui.Cmd, digitKey(level)) {
-			a.heading(level)
-			return
-		}
-	}
-}
-
-func digitKey(n int) ui.Key {
-	switch n {
-	case 1:
-		return ui.Key1
-	case 2:
-		return ui.Key2
-	case 3:
-		return ui.Key3
-	case 4:
-		return ui.Key4
-	case 5:
-		return ui.Key5
-	case 6:
-		return ui.Key6
-	default:
-		return ui.Key0
-	}
 }

@@ -263,8 +263,9 @@ type Run struct {
 // RichText is plain text plus a run-length list of marks. Runs always cover the
 // text exactly (the lengths sum to len(Text)).
 type RichText struct {
-	Text string
-	Runs []Run
+	Text          string
+	Runs          []Run
+	inlineSources []InlineSource
 }
 
 // PlainRich makes unstyled rich text.
@@ -297,10 +298,16 @@ func (t *RichText) Push(s string, m Marks) {
 
 // Append adds another rich text.
 func (t *RichText) Append(other RichText) {
+	base := t.Len()
 	off := 0
 	for _, r := range other.Runs {
 		t.Push(other.Text[off:off+r.Len], r.Marks)
 		off += r.Len
+	}
+	for _, src := range other.inlineSources {
+		src.Start += base
+		src.End += base
+		t.inlineSources = append(t.inlineSources, src)
 	}
 }
 
@@ -386,6 +393,13 @@ func (t *RichText) Slice(start, end int) RichText {
 			out.Push(t.Text[s:e], sp.Marks)
 		}
 	}
+	for _, src := range t.inlineSources {
+		if src.Start >= start && src.End <= end {
+			src.Start -= start
+			src.End -= start
+			out.inlineSources = append(out.inlineSources, src)
+		}
+	}
 	return out
 }
 
@@ -427,6 +441,11 @@ func (t *RichText) UpdateMarks(start, end int, f func(*Marks)) {
 		f(&m)
 		out.Push(t.Text[s:e], m)
 		out.Push(t.Text[e:b], sp.Marks)
+	}
+	for _, src := range t.inlineSources {
+		if src.End <= start || src.Start >= end {
+			out.inlineSources = append(out.inlineSources, src)
+		}
 	}
 	*t = out
 }
@@ -470,6 +489,10 @@ func (t *RichText) PlainText() string {
 		}
 		if img, ok := sp.Marks.Inline.Image(); ok {
 			b.WriteString(strings.Repeat(img.Alt, utf8.RuneCountInString(seg)))
+			continue
+		}
+		if ref, ok := sp.Marks.Inline.Reference(); ok {
+			b.WriteString(strings.Repeat(ref.PlainText(), utf8.RuneCountInString(seg)))
 			continue
 		}
 		b.WriteString(strings.ReplaceAll(seg, Obj, ""))
@@ -963,14 +986,22 @@ type BulletKind struct{}
 type OrderedKind struct{ Seq *uint32 }
 type TodoKind struct{ Done bool }
 type CodeKind struct {
-	Lang    string
-	Caption *string
-	Wrap    bool
+	Lang        string
+	Caption     *string
+	Wrap        bool
+	FrontMatter bool
+	fence       fenceStyle
+}
+
+type fenceStyle struct {
+	marker                rune
+	open, close           int
+	beforeLang, afterLang string
 }
 type QuoteKind struct{}
 type CalloutKind struct {
-	Emoji                    string
-	BG, Border, TextColor    *string
+	Emoji                 string
+	BG, Border, TextColor *string
 }
 type DividerKind struct{}
 
@@ -982,7 +1013,8 @@ type ImageKind struct {
 	Height  *float32
 	Caption *string
 	// Crop is [left, top, right, bottom] fractions of the full image.
-	Crop *[4]float32
+	Crop   *[4]float32
+	markup string
 }
 
 type TableKind struct{ Table *Table }
@@ -1019,24 +1051,24 @@ func (FileKind) blockKind()             {}
 func (RawKind) blockKind()              {}
 
 // HasText reports whether the caret can enter a text line here.
-func (TextKind) HasText() bool        { return true }
-func (HeadingKind) HasText() bool     { return true }
-func (BulletKind) HasText() bool      { return true }
-func (OrderedKind) HasText() bool     { return true }
-func (TodoKind) HasText() bool        { return true }
-func (CodeKind) HasText() bool        { return true }
-func (QuoteKind) HasText() bool       { return false }
-func (CalloutKind) HasText() bool     { return false }
-func (DividerKind) HasText() bool     { return false }
-func (ImageKind) HasText() bool       { return false }
-func (TableKind) HasText() bool       { return false }
-func (GridKind) HasText() bool        { return false }
-func (ColumnKind) HasText() bool      { return false }
-func (SubPageListKind) HasText() bool { return false }
-func (CountdownKind) HasText() bool   { return false }
+func (TextKind) HasText() bool             { return true }
+func (HeadingKind) HasText() bool          { return true }
+func (BulletKind) HasText() bool           { return true }
+func (OrderedKind) HasText() bool          { return true }
+func (TodoKind) HasText() bool             { return true }
+func (CodeKind) HasText() bool             { return true }
+func (QuoteKind) HasText() bool            { return false }
+func (CalloutKind) HasText() bool          { return false }
+func (DividerKind) HasText() bool          { return false }
+func (ImageKind) HasText() bool            { return false }
+func (TableKind) HasText() bool            { return false }
+func (GridKind) HasText() bool             { return false }
+func (ColumnKind) HasText() bool           { return false }
+func (SubPageListKind) HasText() bool      { return false }
+func (CountdownKind) HasText() bool        { return false }
 func (InteractiveKindBlock) HasText() bool { return false }
-func (FileKind) HasText() bool        { return false }
-func (RawKind) HasText() bool         { return false }
+func (FileKind) HasText() bool             { return false }
+func (RawKind) HasText() bool              { return false }
 
 // IsContainer reports whether children render inside the block.
 func (TextKind) IsContainer() bool             { return false }
@@ -1059,24 +1091,24 @@ func (FileKind) IsContainer() bool             { return false }
 func (RawKind) IsContainer() bool              { return false }
 
 // Nests reports whether the block takes indented children.
-func (TextKind) Nests() bool        { return true }
-func (HeadingKind) Nests() bool     { return true }
-func (BulletKind) Nests() bool      { return true }
-func (OrderedKind) Nests() bool     { return true }
-func (TodoKind) Nests() bool        { return true }
-func (CodeKind) Nests() bool        { return false }
-func (QuoteKind) Nests() bool       { return false }
-func (CalloutKind) Nests() bool     { return false }
-func (DividerKind) Nests() bool     { return false }
-func (ImageKind) Nests() bool       { return false }
-func (TableKind) Nests() bool       { return false }
-func (GridKind) Nests() bool        { return false }
-func (ColumnKind) Nests() bool      { return false }
-func (SubPageListKind) Nests() bool { return false }
-func (CountdownKind) Nests() bool   { return false }
+func (TextKind) Nests() bool             { return true }
+func (HeadingKind) Nests() bool          { return true }
+func (BulletKind) Nests() bool           { return true }
+func (OrderedKind) Nests() bool          { return true }
+func (TodoKind) Nests() bool             { return true }
+func (CodeKind) Nests() bool             { return false }
+func (QuoteKind) Nests() bool            { return false }
+func (CalloutKind) Nests() bool          { return false }
+func (DividerKind) Nests() bool          { return false }
+func (ImageKind) Nests() bool            { return false }
+func (TableKind) Nests() bool            { return false }
+func (GridKind) Nests() bool             { return false }
+func (ColumnKind) Nests() bool           { return false }
+func (SubPageListKind) Nests() bool      { return false }
+func (CountdownKind) Nests() bool        { return false }
 func (InteractiveKindBlock) Nests() bool { return false }
-func (FileKind) Nests() bool        { return false }
-func (RawKind) Nests() bool         { return false }
+func (FileKind) Nests() bool             { return false }
+func (RawKind) Nests() bool              { return false }
 
 // IsList reports whether the block is a list item.
 func (TextKind) IsList() bool             { return false }
@@ -1283,6 +1315,7 @@ func (b *Block) Clone() *Block {
 func cloneRich(t RichText) RichText {
 	out := RichText{Text: t.Text}
 	out.Runs = append(out.Runs, t.Runs...)
+	out.inlineSources = append(out.inlineSources, t.inlineSources...)
 	return out
 }
 
@@ -1317,6 +1350,7 @@ type Document struct {
 	Icon   *string
 	Cover  *Cover
 	Blocks []*Block
+	source *Source
 }
 
 // NewDocument is a fresh, untouched document.
@@ -1326,7 +1360,7 @@ func NewDocument() *Document {
 
 // Clone deep-copies the document, ids included.
 func (d *Document) Clone() *Document {
-	c := &Document{Title: cloneRich(d.Title), Icon: d.Icon}
+	c := &Document{Title: cloneRich(d.Title), Icon: d.Icon, source: d.source}
 	if d.Cover != nil {
 		cover := *d.Cover
 		c.Cover = &cover
@@ -1342,13 +1376,13 @@ func (d *Document) Clone() *Document {
 // the common prefix and suffix keep theirs, and the inserted middle takes the
 // marks at the insertion point. It is what an edit made in a plain text input
 // needs, so a bold word elsewhere in the line survives typing.
-func (t *RichText) Resync(s string) {
+func (t *RichText) Resync(s string) (int, int) {
 	if s == t.Text {
-		return
+		return 0, 0
 	}
 	if t.Text == "" || s == "" {
 		*t = PlainRich(s)
-		return
+		return 0, len(s)
 	}
 	old := t.Text
 	// Common prefix, on rune boundaries.
@@ -1365,9 +1399,8 @@ func (t *RichText) Resync(s string) {
 	for q < len(old)-p && q < len(s)-p && old[len(old)-1-q] == s[len(s)-1-q] {
 		q++
 	}
-	q = len(old) - floorBoundary(old, len(old)-q)
-	if len(s)-q < p {
-		q = len(s) - p
+	for q > 0 && (!utf8.RuneStart(old[len(old)-q]) || !utf8.RuneStart(s[len(s)-q])) {
+		q--
 	}
 	ins := s[p : len(s)-q]
 	marks := t.marksAtForResync(p)
@@ -1379,6 +1412,7 @@ func (t *RichText) Resync(s string) {
 	}
 	out.Append(t.Slice(len(old)-q, len(old)))
 	*t = out
+	return p, len(s) - q
 }
 
 // marksAtForResync is MarksAt for an insertion that replaces text: it prefers
@@ -1506,8 +1540,8 @@ type DocLink struct {
 
 // LinkSegment is a piece of a line: text, or a mention when ID is set.
 type LinkSegment struct {
-	Text string
-	ID   string
+	Text   string
+	ID     string
 	IsLink bool
 }
 

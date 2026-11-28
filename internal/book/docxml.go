@@ -1,4 +1,4 @@
-﻿package book
+package book
 
 import (
 	"strconv"
@@ -88,7 +88,7 @@ func isBlockTag(tag string) bool {
 	case "h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "ul", "ol", "li",
 		"blockquote", "callout", "checkbox", "todo", "pre", "table", "grid",
 		"column", "interactive", "image", "hr", "figure", "sub-page-list",
-		"countdown", "section", "article":
+		"countdown", "section", "article", "markdown-toc", "markdown-definition":
 		return true
 	}
 	return false
@@ -228,6 +228,10 @@ func blocksOf(n *node) []*doc.Block {
 		return []*doc.Block{b}
 	case "hr":
 		return []*doc.Block{doc.NewBlock(doc.DividerKind{}, doc.RichText{})}
+	case "markdown-toc":
+		return []*doc.Block{doc.NewBlock(doc.TOCKind{Marker: n.attr("source")}, doc.RichText{})}
+	case "markdown-definition":
+		return []*doc.Block{doc.NewBlock(doc.DefinitionKind{}, doc.PlainRich(n.textOf()))}
 	case "sub-page-list":
 		return []*doc.Block{doc.NewBlock(doc.SubPageListKind{}, doc.RichText{})}
 	case "countdown":
@@ -399,6 +403,15 @@ func inlineOf(nodes []*node, marks doc.Marks) doc.RichText {
 				m.Link = &href
 			}
 			out.Append(inlineOf(n.kids, m))
+		case "markdown-reference":
+			source := n.attr("source")
+			if in, ok := doc.ReferenceObject(source); ok {
+				m := marks
+				m.Inline = &in
+				out.Push(doc.Obj, m)
+			} else {
+				out.Push(source, marks)
+			}
 		case "image":
 			src := n.attrAny("src", "path", "href")
 			if src == "" {
@@ -580,6 +593,10 @@ func writeBlock(b *strings.Builder, blk *doc.Block) {
 		b.WriteString("</callout>")
 	case doc.DividerKind:
 		b.WriteString("<hr/>")
+	case doc.TOCKind:
+		b.WriteString(`<markdown-toc source="` + escapeAttr(k.Marker) + `"/>`)
+	case doc.DefinitionKind:
+		b.WriteString("<markdown-definition>" + escapeXML(blk.Text.Text) + "</markdown-definition>")
 	case doc.ImageKind:
 		attrs := ` src="` + escapeAttr(k.Src) + `" src-kind="` + escapeAttr(k.SrcKind) + `"`
 		if k.Caption != nil {

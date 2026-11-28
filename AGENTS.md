@@ -46,14 +46,14 @@ Windows x64 与 macOS arm64。Rust 实现已经完全移除。
 - **主题颜色用 `c.Theme()` 的语义 token**，不要写死十六进制。
 - `go vet ./...` 与 `go test ./...` 每次都必须是干净的。
 
-## 提交前
+## 批量验收与产物保留
 
-```sh
-go vet ./...
-go test ./...
-CGO_ENABLED=0 go build ./...
-CGO_ENABLED=0 go tool mygo build -platform windows/amd64 -o dist
-```
+- 主流程使用左侧文件树和文档大纲，右侧原位阅读与编辑当前文档。顶部「文件／大纲」和左下角按钮切换这两页，底栏箭头显隐侧栏。单击文件或按 Enter 原位打开，单击大纲标题定位正文并保持侧栏展开。单文档窗口使用系统标题栏和菜单，底部提供源码开关、编辑状态及字数。
+- 每批先列齐目标、差异、实现和用例，再集中验收。主流程覆盖空目录、文件夹展开、同窗切换、两页切换、实时大纲、标题定位、源码往返和无损保存。目录功能的回归保留排序、筛选、搜索、键盘与右键、外部文件变化、拖放和撤销。
+- 一次跑完 `python -B scripts/check.py --native`，包含 Go 检查、全量测试、Windows amd64 和 macOS arm64 编译、隔离的原生窗口交互与截图。逐场景审阅默认宽度、窄窗口、高 DPI、浅色和深色布局。集中修复发现的失败后重跑同一验收入口。
+- 分别记录编译、无窗口截图、原生窗口和系统拖放的实际验证范围。macOS 交叉编译只证明目标可编译，原生窗口与系统手势需在对应桌面验证。
+- 一轮使用一个临时目录，结束时关闭测试进程并清理临时工作区、设置、工具副本、套接字和日志。截图及清单固定保存在 `dist/qa/desktop`，覆盖上一次验收的报告。保留失败现场时只留下定位问题所需的文件。
+- 发布包输出到 `dist/release/<version>`。校验并安装当前 Windows 版本后，先用 `python -B scripts/clean_test_artifacts.py --prune-releases --dry-run` 核对范围，再移除超出保留量的本地包。常规保留当前版本、最近两个通过校验的版本及仍安装的版本。只处理该目录内结构及校验和均匹配的产物。
 
 ## 构建产物
 
@@ -68,12 +68,15 @@ CGO_ENABLED=0 go tool mygo build -platform windows/amd64 -o dist
 ./scripts/cross-build.sh
 
 # Windows 本地完整打包（含 SHA256SUMS）
-powershell -ExecutionPolicy Bypass -File scripts/package.ps1
+pwsh -File scripts/package.ps1
 ```
 
 MyGo 负责应用包本身：Windows 的 per-user NSIS 安装器、图标、文件关联、无控制台窗口；
 macOS 的 `.app`、ad-hoc 签名和 `.dmg`。不要再手写 `Info.plist`、`codesign` 或
 `hdiutil` 流程。
+
+- Windows 首次安装默认用 `C:\App\MarkdownX`，安装向导支持选择其他有写入权限的目录。覆盖安装沿用已安装路径。换目录时先卸载，再运行安装包选择新目录。
+- `scripts/windows-installer.nsh` 通过 MyGo 的安装钩子执行上述路径约定并清理明确的包内文件。卸载只移除程序文件与系统注册，保留同目录中的其他文件以及用户配置。调整 `resources/licenses` 时同步卸载文件表。
 
 ## 发布
 
@@ -98,5 +101,5 @@ macOS 的 `.app`、ad-hoc 签名和 `.dmg`。不要再手写 `Info.plist`、`cod
 
 ## 环境注意（Windows）
 
-- shell 是 PowerShell 5：不支持 `&&`、`||`、三元、`??`、`?.`。
+- 本地开发和打包使用 64 位 PowerShell 7（`pwsh`）。
 - 需要 VS 环境变量时，先 `call vcvars64.bat` 或显式设置 `LIB` / `INCLUDE` / `Path`。

@@ -21,23 +21,27 @@ type Pos struct {
 	Offset int
 }
 
-// Selection is an anchor and a head; equal means a collapsed caret.
+// Selection has a fixed anchor and a moving head. All also covers atomic
+// blocks and folded content beyond the first and last visible text stops.
 type Selection struct {
 	Anchor Pos
 	Head   Pos
+	All    bool
 }
 
 // Caret makes a collapsed selection.
 func Caret(p Pos) Selection { return Selection{Anchor: p, Head: p} }
 
 // Collapsed reports whether nothing is selected.
-func (s Selection) Collapsed() bool { return s.Anchor == s.Head }
+func (s Selection) Collapsed() bool { return !s.All && s.Anchor == s.Head }
+
+func (s Selection) AcrossBlocks() bool { return s.All || s.Anchor.Block != s.Head.Block }
 
 // Seg is one step of a block path: a child index, or a table cell's block.
 type Seg struct {
-	IsCell  bool
-	R, C    int
-	Index   int
+	IsCell bool
+	R, C   int
+	Index  int
 }
 
 // Path locates a block from the document root.
@@ -299,6 +303,12 @@ func (c *Core) Redo() bool {
 // Ordered returns the selection's start and end in document order.
 func (c *Core) Ordered() (Pos, Pos) {
 	a, b := c.Sel.Anchor, c.Sel.Head
+	if a.Block == b.Block {
+		if a.Offset > b.Offset {
+			return b, a
+		}
+		return a, b
+	}
 	us := c.Units()
 	ia, ib := -1, -1
 	for i, u := range us {
@@ -320,8 +330,8 @@ func (c *Core) SelectedText() string {
 	if c.Sel.Collapsed() {
 		return ""
 	}
-	from, to := c.Ordered()
-	if from.Block == to.Block {
+	if !c.Sel.AcrossBlocks() {
+		from, to := c.Ordered()
 		t := c.TextOf(from.Block)
 		if t == nil {
 			return ""
@@ -329,35 +339,8 @@ func (c *Core) SelectedText() string {
 		part := t.Slice(from.Offset, to.Offset)
 		return part.PlainText()
 	}
-	var b strings.Builder
-	if t := c.TextOf(from.Block); t != nil {
-		part := t.Slice(from.Offset, t.Len())
-		b.WriteString(part.PlainText())
-	}
-	us := c.Units()
-	seen := false
-	for _, u := range us {
-		if u.ID == from.Block {
-			seen = true
-			continue
-		}
-		if !seen || !u.Text {
-			continue
-		}
-		if u.ID == to.Block {
-			break
-		}
-		if t := c.TextOf(u.ID); t != nil {
-			b.WriteString("\n")
-			b.WriteString(t.PlainText())
-		}
-	}
-	b.WriteString("\n")
-	if t := c.TextOf(to.Block); t != nil {
-		part := t.Slice(0, to.Offset)
-		b.WriteString(part.PlainText())
-	}
-	return b.String()
+	d := c.SelectedDocument()
+	return strings.TrimPrefix(d.Title.PlainText()+"\n"+d.PlainText(), "\n")
 }
 
 // InsertText types at the caret.
@@ -365,7 +348,11 @@ func (c *Core) InsertText(s string) {
 	if s == "" {
 		return
 	}
-	c.Checkpoint(EditInsert)
+	kind := EditInsert
+	if !c.Sel.Collapsed() {
+		kind = EditOther
+	}
+	c.Checkpoint(kind)
 	c.DeleteSelection()
 	p := c.Sel.Head
 	t := c.TextOf(p.Block)
@@ -397,43 +384,13 @@ func (c *Core) DeleteSelection() {
 	if c.Sel.Collapsed() {
 		return
 	}
-	from, to := c.Ordered()
-	if from.Block == to.Block {
-		if t := c.TextOf(from.Block); t != nil {
-			t.Replace(from.Offset, to.Offset, doc.RichText{})
-		}
-		c.Sel = Caret(from)
-		c.touch()
+	if c.Sel.AcrossBlocks() {
+		c.deleteDocumentRange()
 		return
 	}
-	fromText := c.TextOf(from.Block)
-	toText := c.TextOf(to.Block)
-	if fromText != nil && toText != nil {
-		// Keep the head's prefix and the tail's suffix in one block.
-		suffix := toText.Slice(to.Offset, toText.Len())
-		*fromText = fromText.Slice(0, from.Offset)
-		fromText.Append(suffix)
-	}
-	// Remove every block the selection covers beyond the first, plus the
-	// units in between.
-	us := c.Units()
-	started := false
-	var kill []doc.BlockID
-	for _, u := range us {
-		if u.ID == from.Block {
-			started = true
-			continue
-		}
-		if !started {
-			continue
-		}
-		kill = append(kill, u.ID)
-		if u.ID == to.Block {
-			break
-		}
-	}
-	for _, id := range kill {
-		c.RemoveSubtree(id)
+	from, to := c.Ordered()
+	if t := c.TextOf(from.Block); t != nil {
+		t.Replace(from.Offset, to.Offset, doc.RichText{})
 	}
 	c.Sel = Caret(from)
 	c.touch()
@@ -521,7 +478,7 @@ func (c *Core) Enter() {
 	// falls back to a paragraph after a heading, as Typora does.
 	nextKind := block.Kind
 	switch block.Kind.(type) {
-	case doc.HeadingKind:
+	case doc.HeadingKind, doc.DefinitionKind:
 		nextKind = doc.TextKind{}
 	case doc.OrderedKind:
 		nextKind = doc.OrderedKind{}
@@ -630,7 +587,9 @@ func (c *Core) Backspace() {
 		return
 	}
 	if c.parentHasText(p.Block) {
-		c.OutdentOne(p.Block)
+		if c.OutdentOne(p.Block) {
+			c.touch()
+		}
 		return
 	}
 	c.MergeIntoPrevious(p.Block)
@@ -663,7 +622,11 @@ func (c *Core) DeleteForward() {
 			continue
 		}
 		next := us[i+1]
+		if u.Scope != next.Scope {
+			return
+		}
 		if !next.Text {
+			c.Checkpoint(EditOther)
 			c.RemoveSubtree(next.ID)
 			c.touch()
 			return
@@ -694,7 +657,7 @@ func (c *Core) MergeIntoPrevious(id doc.BlockID) {
 		return
 	}
 	cur, prev := us[idx], us[idx-1]
-	if prev.Scope != cur.Scope {
+	if prev.Scope != cur.Scope || prev.ID == Title {
 		return
 	}
 	if !prev.Text {
@@ -760,42 +723,44 @@ func (c *Core) Indent() {
 		return
 	}
 	c.Checkpoint(EditOther)
-	c.detach(id)
-	prev.Children = append(prev.Children, c.Block(id))
+	prev.Children = append(prev.Children, c.detach(id))
 	c.touch()
 }
 
 // Outdent lifts a nested block to its parent's level.
 func (c *Core) Outdent() {
+	p, ok := c.Path(c.Sel.Head.Block)
+	if !ok || len(p) < 2 || p[len(p)-2].IsCell {
+		return
+	}
 	c.Checkpoint(EditOther)
-	c.OutdentOne(c.Sel.Head.Block)
-	c.touch()
+	if c.OutdentOne(c.Sel.Head.Block) {
+		c.touch()
+	}
 }
 
 // OutdentOne lifts one block one level.
-func (c *Core) OutdentOne(id doc.BlockID) {
+func (c *Core) OutdentOne(id doc.BlockID) bool {
 	p, ok := c.Path(id)
 	if !ok || len(p) < 2 {
-		return
+		return false
 	}
 	list, idx := c.siblings(p)
 	if list == nil || idx < 0 || idx >= len(*list) {
-		return
+		return false
+	}
+	parentPath := p[:len(p)-1]
+	glist, gidx := c.siblings(parentPath)
+	if glist == nil || gidx < 0 || gidx >= len(*glist) {
+		return false
 	}
 	b := (*list)[idx]
 	*list = append((*list)[:idx], (*list)[idx+1:]...)
-	parentPath := p[:len(p)-1]
-	if len(parentPath) == 0 {
-		return
-	}
-	glist, gidx := c.siblings(parentPath)
-	if glist == nil || gidx < 0 || gidx >= len(*glist) {
-		return
-	}
 	// Place the lifted block right after its former parent.
 	*glist = append(*glist, nil)
 	copy((*glist)[gidx+2:], (*glist)[gidx+1:])
 	(*glist)[gidx+1] = b
+	return true
 }
 
 func (c *Core) siblings(p Path) (*[]*doc.Block, int) {
@@ -823,8 +788,7 @@ func (c *Core) siblings(p Path) (*[]*doc.Block, int) {
 		if cellSeg.R >= len(tk.Table.Rows) || cellSeg.C >= len(tk.Table.Rows[cellSeg.R]) {
 			return nil, 0
 		}
-		blocks := tk.Table.Rows[cellSeg.R][cellSeg.C].Blocks
-		return &blocks, last.Index
+		return &tk.Table.Rows[cellSeg.R][cellSeg.C].Blocks, last.Index
 	}
 	parent := BlockAt(c.Doc.Blocks, parentPath)
 	if parent == nil {
@@ -916,13 +880,13 @@ func (c *Core) FoldEnd(id doc.BlockID) doc.BlockID {
 
 // ToggleMark turns a character format on or off.
 func (c *Core) ToggleMark(get func(*doc.Marks) bool, set func(*doc.Marks, bool)) {
-	from, to := c.Ordered()
 	if c.Sel.Collapsed() {
-		m := c.TextOf(from.Block)
+		p := c.Sel.Head
+		m := c.TextOf(p.Block)
 		if m == nil {
 			return
 		}
-		cur := m.MarksAt(from.Offset)
+		cur := m.MarksAt(p.Offset)
 		on := !get(&cur)
 		set(&cur, on)
 		c.PendingMk = &cur
@@ -930,7 +894,7 @@ func (c *Core) ToggleMark(get func(*doc.Marks) bool, set func(*doc.Marks, bool))
 	}
 	c.Checkpoint(EditOther)
 	allOn := true
-	c.forEachSelectionSpan(from, to, func(t *doc.RichText, start, end int) {
+	c.forEachSelectionSpan(func(t *doc.RichText, start, end int) {
 		seg := t.Slice(start, end)
 		ok := true
 		for i := range seg.Runs {
@@ -943,7 +907,7 @@ func (c *Core) ToggleMark(get func(*doc.Marks) bool, set func(*doc.Marks, bool))
 			allOn = false
 		}
 	})
-	c.forEachSelectionSpan(from, to, func(t *doc.RichText, start, end int) {
+	c.forEachSelectionSpan(func(t *doc.RichText, start, end int) {
 		t.UpdateMarks(start, end, func(m *doc.Marks) { set(m, !allOn) })
 	})
 	c.touch()
@@ -951,19 +915,19 @@ func (c *Core) ToggleMark(get func(*doc.Marks) bool, set func(*doc.Marks, bool))
 
 // ApplyMarks rewrites marks over the selection.
 func (c *Core) ApplyMarks(f func(*doc.Marks)) {
-	from, to := c.Ordered()
 	if c.Sel.Collapsed() {
-		m := c.TextOf(from.Block)
+		p := c.Sel.Head
+		m := c.TextOf(p.Block)
 		if m == nil {
 			return
 		}
-		cur := m.MarksAt(from.Offset)
+		cur := m.MarksAt(p.Offset)
 		f(&cur)
 		c.PendingMk = &cur
 		return
 	}
 	c.Checkpoint(EditOther)
-	c.forEachSelectionSpan(from, to, func(t *doc.RichText, start, end int) {
+	c.forEachSelectionSpan(func(t *doc.RichText, start, end int) {
 		t.UpdateMarks(start, end, f)
 	})
 	c.touch()
@@ -971,38 +935,22 @@ func (c *Core) ApplyMarks(f func(*doc.Marks)) {
 
 // forEachSelectionSpan calls f for every (text, start, end) the selection
 // covers.
-func (c *Core) forEachSelectionSpan(from, to Pos, f func(*doc.RichText, int, int)) {
-	if from.Block == to.Block {
-		if t := c.TextOf(from.Block); t != nil {
-			f(t, from.Offset, to.Offset)
-		}
+func (c *Core) forEachSelectionSpan(f func(*doc.RichText, int, int)) {
+	r, ok := c.documentRange()
+	if !ok {
 		return
 	}
-	if t := c.TextOf(from.Block); t != nil {
-		f(t, from.Offset, t.Len())
+	if span, ok := r.span(Title, c.Doc.Title.Len()); ok && span.Start < span.End {
+		f(&c.Doc.Title, span.Start, span.End)
 	}
-	us := c.Units()
-	seen := false
-	for _, u := range us {
-		if u.ID == from.Block {
-			seen = true
-			continue
+	c.Doc.ForEachBlock(func(b *doc.Block) {
+		if _, code := b.Kind.(doc.CodeKind); code || !b.Kind.HasText() {
+			return
 		}
-		if !seen {
-			continue
+		if span, ok := r.span(b.ID, b.Text.Len()); ok && span.Start < span.End {
+			f(&b.Text, span.Start, span.End)
 		}
-		if u.ID == to.Block {
-			break
-		}
-		if u.Text {
-			if t := c.TextOf(u.ID); t != nil {
-				f(t, 0, t.Len())
-			}
-		}
-	}
-	if t := c.TextOf(to.Block); t != nil {
-		f(t, 0, to.Offset)
-	}
+	})
 }
 
 // SetKind replaces the selected blocks' kind.
@@ -1237,6 +1185,7 @@ func (c *Core) MoveCaret(down bool, extend bool) {
 func (c *Core) setCaret(p Pos, extend bool) {
 	if extend {
 		c.Sel.Head = p
+		c.Sel.All = false
 		return
 	}
 	c.Sel = Caret(p)
@@ -1245,14 +1194,15 @@ func (c *Core) setCaret(p Pos, extend bool) {
 // OrderedNumber is the marker number for a list item at an index.
 func OrderedNumber(siblings []*doc.Block, index int) uint32 {
 	n := uint32(1)
-	for i := 0; i < index && i < len(siblings); i++ {
-		if o, ok := siblings[i].Kind.(doc.OrderedKind); ok {
-			if o.Seq != nil {
-				n = *o.Seq + 1
-			} else {
-				n++
-			}
+	for i := min(index, len(siblings)) - 1; i >= 0; i-- {
+		o, ok := siblings[i].Kind.(doc.OrderedKind)
+		if !ok {
+			break
 		}
+		if o.Seq != nil {
+			return *o.Seq + n
+		}
+		n++
 	}
 	return n
 }

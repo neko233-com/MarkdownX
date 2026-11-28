@@ -113,6 +113,10 @@ func TestTypingMarkersSwitchesBlocks(t *testing.T) {
 		tr.Frame()
 		tr.Type(c.typed)
 		tr.Frame()
+		if strings.HasPrefix(c.typed, "```") {
+			tr.Key(0, ui.KeyEnter)
+			tr.Frame()
+		}
 		if got := a.core.Doc.Blocks[0]; !c.check(got) {
 			t.Fatalf("%s: 输入 %q 后 kind = %T", c.name, c.typed, got.Kind)
 		}
@@ -276,14 +280,18 @@ func TestEnterLeavesAnEmptyQuote(t *testing.T) {
 }
 
 func TestInsertLinkMarksTheSelection(t *testing.T) {
-	a := New("")
-	a.core = editor.New(&doc.Document{Blocks: []*doc.Block{doc.TextBlock("示例文字")}})
-	a.ResetBuffers()
+	isolateConfig(t)
+	a := newTestApp("示例文字")
 	b := a.core.Doc.Blocks[0]
-	a.focus = b.ID
-	a.sel[b.ID] = [2]int{0, len("示例文字")}
-	a.linkURL = "https://example.com"
-	a.doInsertLink()
+	a.focusAt(editor.Selection{Anchor: editor.Pos{Block: b.ID}, Head: editor.Pos{Block: b.ID, Offset: len("示例文字")}})
+	tr := ui.NewTester(a.View, 900, 640)
+	tr.Frame()
+	tr.Key(ui.Cmd, ui.KeyK)
+	if p := a.bufs[b.ID]; a.inlineEdit == nil || p.visible != "[示例文字]()" || a.dirty {
+		t.Fatal("link template did not open in place")
+	}
+	tr.Type("https://example.com")
+	tr.Key(0, ui.KeyEscape)
 	md := doc.Export(a.core.Doc, doc.Options{}).Text
 	if !strings.Contains(md, "[示例文字](https://example.com)") {
 		t.Fatalf("Markdown 缺少链接:\n%s", md)

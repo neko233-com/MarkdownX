@@ -12,8 +12,7 @@ import (
 	"github.com/neko233/markdownx/internal/editor"
 )
 
-// TestOpeningAFileShowsItInRecents checks the 近期浏览 list reacts to a real
-// open, which is what the sidebar rows read.
+// The open file is visible in the workspace tree and recorded in recents.
 func TestOpeningAFileShowsItInRecents(t *testing.T) {
 	dir := isolateConfig(t)
 	p := filepath.Join(dir, "笔记.md")
@@ -28,11 +27,11 @@ func TestOpeningAFileShowsItInRecents(t *testing.T) {
 	tr := ui.NewTester(a.View, 1120, 760)
 	tr.Frame()
 	if _, ok := tr.Find("笔记.md"); !ok {
-		t.Fatalf("近期浏览里没有新打开的文档：%v", a.recents)
+		t.Fatal("the opened file was not visible in the tree")
 	}
 }
 
-// TestTemplateFlowThroughTheUI drives the real widgets: switch to 模板参考,
+// TestTemplateFlowThroughTheUI drives the native template library,
 // insert a template, and save the document as a new one.
 func TestTemplateFlowThroughTheUI(t *testing.T) {
 	isolateConfig(t)
@@ -43,11 +42,15 @@ func TestTemplateFlowThroughTheUI(t *testing.T) {
 	tr := ui.NewTester(a.View, 1120, 760)
 	tr.Frame()
 
-	if err := tr.Click("模板参考"); err != nil {
-		t.Fatalf("click tab: %v", err)
+	for _, cmd := range commands {
+		if cmd.label == "模板…" {
+			cmd.run(a)
+			break
+		}
 	}
-	if a.sideTab != 1 {
-		t.Fatalf("sideTab = %d, want 1", a.sideTab)
+	tr.Frame()
+	if !tr.HasText("文档模板") {
+		t.Fatal("template library menu did not open the dialogue")
 	}
 
 	before := len(a.core.Doc.Blocks)

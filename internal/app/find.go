@@ -1,10 +1,13 @@
 package app
 
 import (
+	"regexp"
 	"strings"
-	"unicode/utf8"
+
+	sourceeditor "github.com/egoist/mygo/ui/editor"
 
 	"github.com/neko233/markdownx/internal/doc"
+	"github.com/neko233/markdownx/internal/editor"
 )
 
 // findHit is one match of the find query.
@@ -16,48 +19,35 @@ type findHit struct {
 
 // findMatches lists every match of query in the document, case-insensitively.
 func (a *App) findMatches(query string) []findHit {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
+	if strings.TrimSpace(query) == "" {
 		return nil
 	}
+	q := regexp.MustCompile("(?i)" + regexp.QuoteMeta(query))
 	var out []findHit
-	for _, b := range a.core.Doc.Blocks {
-		collectHits(b, q, &out)
-	}
+	a.core.Doc.ForEachBlock(func(b *doc.Block) {
+		if b.Kind.HasText() {
+			for _, at := range q.FindAllStringIndex(b.Text.Text, -1) {
+				out = append(out, findHit{block: b.ID, start: at[0], end: at[1]})
+			}
+		}
+	})
 	return out
 }
 
-func collectHits(b *doc.Block, query string, out *[]findHit) {
-	if b.Kind.HasText() {
-		text := strings.ToLower(b.Text.Text)
-		from := 0
-		for {
-			k := strings.Index(text[from:], query)
-			if k < 0 {
-				break
-			}
-			at := from + k
-			*out = append(*out, findHit{block: b.ID, start: at, end: at + len(query)})
-			// Step one rune so overlapping matches are still found.
-			_, size := utf8.DecodeRuneInString(text[at:])
-			if size < 1 {
-				size = 1
-			}
-			from = at + size
+func (a *App) openFind(replace bool) {
+	if a.source != nil {
+		cmd := sourceeditor.Find
+		if replace {
+			cmd = sourceeditor.FindReplace
 		}
+		a.source.edit.Run(cmd)
+		return
 	}
-	for _, c := range b.Children {
-		collectHits(c, query, out)
+	if a.mode == ModePreview {
+		a.setMode(ModeEdit)
 	}
-	if tk, ok := b.Kind.(doc.TableKind); ok && tk.Table != nil {
-		for r := range tk.Table.Rows {
-			for c := range tk.Table.Rows[r] {
-				for _, cb := range tk.Table.Rows[r][c].Blocks {
-					collectHits(cb, query, out)
-				}
-			}
-		}
-	}
+	a.finding, a.findFocus, a.replacing = true, true, replace
+	a.findKey = ""
 }
 
 // refreshMatches recomputes the hits when the query or the document changed.
@@ -71,7 +61,6 @@ func (a *App) refreshMatches() {
 	if a.matchIndex >= len(a.matches) {
 		a.matchIndex = 0
 	}
-	a.jumpToMatch()
 }
 
 // jumpToMatch selects and focuses the current match.
@@ -84,35 +73,26 @@ func (a *App) jumpToMatch() {
 		i = 0
 	}
 	hit := a.matches[i]
-	b := a.core.Block(hit.block)
-	if b == nil {
-		return
-	}
-	text := b.Text.Text
-	a.pending[hit.block] = [2]int{doc.ByteToRune(text, hit.start), doc.ByteToRune(text, hit.end)}
-	a.focusReq = hit.block
+	a.focusAt(editor.Selection{
+		Anchor: editor.Pos{Block: hit.block, Offset: hit.start},
+		Head:   editor.Pos{Block: hit.block, Offset: hit.end},
+	})
 }
 
 // replaceAll swaps every match of the query for the replacement text.
 func (a *App) replaceAll(with string) {
 	a.syncAll()
-	hits := a.matchMatches()
+	hits := a.findMatches(a.findQuery)
 	if len(hits) == 0 {
 		return
 	}
+	a.core.Checkpoint(editor.EditOther)
 	// Replace from the end so earlier offsets stay valid.
 	for i := len(hits) - 1; i >= 0; i-- {
 		h := hits[i]
-		b := a.core.Block(h.block)
-		if b == nil {
-			continue
-		}
-		b.Text.Replace(h.start, h.end, doc.PlainRich(with))
+		a.core.ReplaceInBlock(h.block, h.start, h.end, with)
 	}
-	a.core.Dirty = true
-	a.core.Generation++
 	a.ResetBuffers()
-	a.findKey = ""
 	a.refreshMatches()
 	a.status = "已全部替换"
 }
@@ -120,23 +100,14 @@ func (a *App) replaceAll(with string) {
 // replaceOne swaps the current match for the replacement text.
 func (a *App) replaceOne(with string) {
 	a.syncAll()
+	a.refreshMatches()
 	if len(a.matches) == 0 {
 		return
 	}
 	h := a.matches[a.matchIndex]
-	b := a.core.Block(h.block)
-	if b == nil {
-		return
-	}
-	b.Text.Replace(h.start, h.end, doc.PlainRich(with))
-	a.core.Dirty = true
-	a.core.Generation++
+	a.core.Checkpoint(editor.EditOther)
+	a.core.ReplaceInBlock(h.block, h.start, h.end, with)
 	a.ResetBuffers()
-	a.findKey = ""
 	a.refreshMatches()
-}
-
-// matchMatches is the live hit list, recomputed when it is stale.
-func (a *App) matchMatches() []findHit {
-	return a.findMatches(a.findQuery)
+	a.jumpToMatch()
 }

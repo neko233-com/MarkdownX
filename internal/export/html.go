@@ -2,10 +2,13 @@
 package export
 
 import (
+	"encoding/base64"
 	"fmt"
 	"html"
 	"strings"
 
+	"github.com/egoist/mygo/ui/markdown"
+	"github.com/neko233/markdownx/internal/diagram"
 	"github.com/neko233/markdownx/internal/doc"
 )
 
@@ -15,6 +18,8 @@ type Options struct {
 	Title string
 	// CSS replaces the built-in stylesheet.
 	CSS string
+	// Diagrams writes fenced diagrams as embedded SVG images.
+	Diagrams bool
 }
 
 const baseCSS = `
@@ -39,6 +44,12 @@ table{border-collapse:collapse;width:100%;margin:0 0 1em;font-size:.95em}
 th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
 th{background:var(--code);font-weight:600}
 img{max-width:100%}
+.diagram{margin:1.25em 0;text-align:center}
+.diagram img{height:auto}
+.toc ul{margin:.15em 0;padding-left:1.3em}
+.toc{margin:0 0 1.5em;padding-left:.5em}
+.footnotes{margin-top:2rem;border-top:1px solid var(--line);padding-top:.8rem;font-size:.9em}
+.footnote-backlinks{margin-bottom:1em}
 del{color:var(--muted)}
 `
 
@@ -59,42 +70,64 @@ func Page(d *doc.Document, opts Options) string {
 		css = opts.CSS
 	}
 	b.WriteString("<style>" + css + "</style>\n</head>\n<body>\n<main>\n")
-	if t := strings.TrimSpace(d.Title.Text); t != "" {
-		b.WriteString("<h1>" + html.EscapeString(t) + "</h1>\n")
-	}
-	for _, blk := range d.Blocks {
-		writeBlock(&b, blk)
-	}
+	writeDocument(&b, d, d, opts.Diagrams)
 	b.WriteString("</main>\n</body>\n</html>\n")
 	return b.String()
 }
 
-func writeBlock(b *strings.Builder, blk *doc.Block) {
+// Fragment renders document content for rich clipboard formats.
+func Fragment(d *doc.Document) string {
+	return FragmentWithDefinitions(d, d)
+}
+
+// FragmentWithDefinitions resolves links and notes outside the fragment.
+func FragmentWithDefinitions(d, definitions *doc.Document) string {
+	var b strings.Builder
+	writeDocument(&b, d, definitions, false)
+	return b.String()
+}
+
+func writeDocument(b *strings.Builder, d, definitions *doc.Document, diagrams bool) {
+	w := documentHTML{
+		Builder: b, diagrams: diagrams, headings: d.Headings(markdown.Slug), refs: d.ReferencesFrom(definitions),
+		anchors: make(map[doc.BlockID]string), used: make(map[string]bool), notes: make(map[doc.BlockID]*htmlFootnote),
+	}
+	for _, h := range w.headings {
+		w.anchors[h.Block] = h.Slug
+		w.used[h.Slug] = true
+	}
+	if !d.Title.IsEmpty() {
+		w.heading(0, 1, d.Title)
+	}
+	for _, blk := range d.Blocks {
+		w.block(blk)
+	}
+	w.footnotes()
+}
+
+func (w *documentHTML) block(blk *doc.Block) {
+	b := w.Builder
 	switch k := blk.Kind.(type) {
 	case doc.TextKind:
-		writeParagraph(b, blk.Text)
+		w.paragraph(blk.Text)
 	case doc.HeadingKind:
-		lvl := int(k.Level)
-		if lvl < 1 {
-			lvl = 1
-		}
-		if lvl > 6 {
-			lvl = 6
-		}
-		fmt.Fprintf(b, "<h%d>%s</h%d>\n", lvl, inlineHTML(blk.Text), lvl)
+		w.heading(blk.ID, min(6, max(1, k.Level)), blk.Text)
 	case doc.BulletKind:
-		writeList(b, "ul", blk)
+		w.list("ul", blk)
 	case doc.OrderedKind:
-		writeList(b, "ol", blk)
+		w.list("ol", blk)
 	case doc.TodoKind:
 		mark := "☐"
 		if k.Done {
 			mark = "☑"
 		}
-		fmt.Fprintf(b, "<ul><li>%s %s</li></ul>\n", mark, inlineHTML(blk.Text))
-		writeChildren(b, blk)
+		fmt.Fprintf(b, "<ul><li>%s %s</li></ul>\n", mark, w.inline(blk.Text, true))
+		w.children(blk)
 	case doc.CodeKind:
 		lang := k.Lang
+		if w.diagrams && diagram.Language(lang) != "" && writeDiagram(b, lang, blk.Text.Text) {
+			return
+		}
 		if strings.EqualFold(lang, "plain text") {
 			lang = ""
 		}
@@ -107,14 +140,21 @@ func writeBlock(b *strings.Builder, blk *doc.Block) {
 		b.WriteString("</code></pre>\n")
 	case doc.QuoteKind:
 		b.WriteString("<blockquote>\n")
-		writeChildren(b, blk)
+		w.children(blk)
 		b.WriteString("</blockquote>\n")
 	case doc.CalloutKind:
 		b.WriteString("<blockquote>\n<p>" + html.EscapeString(k.Emoji) + "</p>\n")
-		writeChildren(b, blk)
+		w.children(blk)
 		b.WriteString("</blockquote>\n")
 	case doc.DividerKind:
 		b.WriteString("<hr>\n")
+	case doc.TOCKind:
+		w.contents()
+	case doc.DefinitionKind:
+		if doc.DefinitionBlock(blk.Text.Text) == nil {
+			w.paragraph(blk.Text)
+		}
+		w.children(blk)
 	case doc.ImageKind:
 		if k.Src != "" {
 			alt := ""
@@ -125,9 +165,9 @@ func writeBlock(b *strings.Builder, blk *doc.Block) {
 				html.EscapeString(k.Src), html.EscapeString(alt))
 		}
 	case doc.TableKind:
-		writeTable(b, k.Table)
+		w.table(k.Table)
 	case doc.GridKind, doc.ColumnKind:
-		writeChildren(b, blk)
+		w.children(blk)
 	case doc.FileKind:
 		fmt.Fprintf(b, "<p>📎 <a href=\"%s\">%s</a></p>\n",
 			html.EscapeString(k.File.Src), html.EscapeString(k.File.Name))
@@ -138,36 +178,45 @@ func writeBlock(b *strings.Builder, blk *doc.Block) {
 	}
 }
 
-func writeChildren(b *strings.Builder, blk *doc.Block) {
+func writeDiagram(b *strings.Builder, language, source string) bool {
+	svg, err := diagram.Render(language, source, "sans-serif", false)
+	if err != nil {
+		return false
+	}
+	const dataURL = "data:image/svg+xml;base64,"
+	b.WriteString("<figure class=\"diagram\"><picture>")
+	if dark, err := diagram.Render(language, source, "sans-serif", true); err == nil {
+		fmt.Fprintf(b, "<source media=\"(prefers-color-scheme: dark)\" srcset=\"%s%s\">", dataURL, base64.StdEncoding.EncodeToString(dark))
+	}
+	fmt.Fprintf(b, "<img src=\"%s%s\" alt=\"%s 图表\"></picture></figure>\n", dataURL, base64.StdEncoding.EncodeToString(svg), diagram.Language(language))
+	return true
+}
+
+func (w *documentHTML) children(blk *doc.Block) {
 	for _, c := range blk.Children {
-		writeBlock(b, c)
+		w.block(c)
 	}
 }
 
-func writeParagraph(b *strings.Builder, t doc.RichText) {
-	s := inlineHTML(t)
+func (w *documentHTML) paragraph(t doc.RichText) {
+	s := w.inline(t, true)
 	if strings.TrimSpace(s) == "" {
 		return
 	}
-	b.WriteString("<p>" + s + "</p>\n")
+	w.WriteString("<p>" + s + "</p>\n")
 }
 
-func writeList(b *strings.Builder, tag string, blk *doc.Block) {
-	fmt.Fprintf(b, "<%s><li>%s", tag, inlineHTML(blk.Text))
+func (w *documentHTML) list(tag string, blk *doc.Block) {
+	fmt.Fprintf(w, "<%s><li>%s", tag, w.inline(blk.Text, true))
 	if len(blk.Children) > 0 {
-		b.WriteString("\n")
-		for _, c := range blk.Children {
-			if c.Kind.IsList() {
-				writeBlock(b, c)
-				continue
-			}
-			fmt.Fprintf(b, "<p>%s</p>\n", inlineHTML(c.Text))
-		}
+		w.WriteByte('\n')
+		w.children(blk)
 	}
-	b.WriteString("</li></" + tag + ">\n")
+	w.WriteString("</li></" + tag + ">\n")
 }
 
-func writeTable(b *strings.Builder, t *doc.Table) {
+func (w *documentHTML) table(t *doc.Table) {
+	b := w.Builder
 	if t == nil || len(t.Rows) == 0 {
 		return
 	}
@@ -186,7 +235,7 @@ func writeTable(b *strings.Builder, t *doc.Table) {
 			var inner []string
 			for _, cb := range cell.Blocks {
 				if cb.Text.Text != "" {
-					inner = append(inner, inlineHTML(cb.Text))
+					inner = append(inner, w.inline(cb.Text, true))
 				}
 			}
 			fmt.Fprintf(b, "<%s>%s</%s>", tag, strings.Join(inner, "<br>"), tag)
@@ -196,14 +245,20 @@ func writeTable(b *strings.Builder, t *doc.Table) {
 	b.WriteString("</table>\n")
 }
 
-// inlineHTML renders one rich-text line, keeping the marks Markdown carries.
-func inlineHTML(t doc.RichText) string {
+// inline renders one rich-text line, including references from the document.
+func (w *documentHTML) inline(t doc.RichText, links bool) string {
 	var b strings.Builder
-	link := ""
 	for _, sp := range t.Spans() {
 		src := t.Text[sp.Start:sp.End]
 		var text string
 		switch {
+		case isReference(sp.Marks.Inline):
+			ref, _ := sp.Marks.Inline.Reference()
+			var rendered strings.Builder
+			for range src {
+				rendered.WriteString(w.reference(ref, links))
+			}
+			text = rendered.String()
 		case sp.Marks.Inline != nil && isEquation(sp.Marks.Inline):
 			src, _ := sp.Marks.Inline.Equation()
 			text = html.EscapeString("$" + src + "$")
@@ -235,16 +290,18 @@ func inlineHTML(t doc.RichText) string {
 		if sp.Marks.Bold {
 			text = "<strong>" + text + "</strong>"
 		}
-		if sp.Marks.Link != nil && *sp.Marks.Link != link {
-			link = *sp.Marks.Link
-		}
-		if link != "" && !sp.Marks.Code && sp.Marks.Inline == nil {
-			text = "<a href=\"" + html.EscapeString(link) + "\">" + text + "</a>"
+		if links && sp.Marks.Link != nil && sp.Marks.Inline == nil {
+			text = htmlLink(text, *sp.Marks.Link, "")
 		}
 		b.WriteString(text)
 	}
 	// A paragraph's own newlines are hard breaks.
 	return strings.ReplaceAll(b.String(), "\n", "<br>")
+}
+
+func isReference(in *doc.Inline) bool {
+	_, ok := in.Reference()
+	return ok
 }
 
 func isEquation(in *doc.Inline) bool {

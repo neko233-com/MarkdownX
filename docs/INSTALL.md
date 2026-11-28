@@ -12,9 +12,13 @@ MarkdownX 只发布 **Windows x64** 与 **macOS arm64** 两个目标。所有安
 | `markdownx-setup-<version>-amd64.exe` | 推荐。当前用户安装，创建开始菜单项、文件关联和卸载项 |
 | `MarkdownX.exe` | 便携版，不安装，直接运行 |
 
-安装器不需要管理员权限，默认装到 `%LOCALAPPDATA%\Programs\MarkdownX`，并注册
-`.md` / `.markdown` / `.mdxb` 文件关联。安装包没有 Authenticode 签名，SmartScreen
+安装器按当前用户安装，首次默认装到 `C:\App\MarkdownX`，并注册
+`.md` / `.markdown` / `.mdxb` 文件关联。在目录页可浏览或输入其他有写入权限的文件夹。
+安装包没有 Authenticode 签名，SmartScreen
 可能提示“更多信息 → 仍要运行”。
+
+覆盖安装沿用已安装的目录。要更换路径，关闭 MarkdownX 后在 Windows「设置 → 应用 → 已安装的应用」
+卸载，再运行安装包并选择新目录。用户配置和模板存放在 `%APPDATA%\markdownx`，卸载会保留它们。
 
 > **从 0.1.46 或更早的 MSI 升级：** 先在“设置 → 应用”里卸载旧的 MarkdownX，
 > 再安装 0.1.47。旧版和 Go 版使用不同的安装器和卸载项，直接覆盖会在同一目录里
@@ -24,7 +28,9 @@ MarkdownX 只发布 **Windows x64** 与 **macOS arm64** 两个目标。所有安
 ## macOS arm64
 
 下载 `markdownx-<version>-arm64.dmg`，打开后把 `MarkdownX.app` 拖进
-“应用程序”。应用使用 ad-hoc 签名；没有 Apple Developer ID 公证时，首次打开需要
+“应用程序”。提供 `markdownx-<version>-darwin-arm64.tar.gz` 的版本可用
+`tar -xzf` 解出同名应用，再拖进“应用程序”。
+本机 macOS 构建使用 ad-hoc 签名，交叉构建保留 Go 链接器的签名。首次打开时可按系统提示
 右键 →“打开”，或在“系统设置 → 隐私与安全性”里允许。
 
 ## 命令行工具

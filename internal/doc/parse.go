@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -265,12 +266,39 @@ func tableCells(line string) []string {
 	return cells
 }
 
+// TableFromHeader builds a GFM table when a typed pipe-delimited row is
+// confirmed with Enter.
+func TableFromHeader(line string) *Block {
+	trim := strings.TrimSpace(line)
+	if !strings.HasPrefix(trim, "|") || !strings.HasSuffix(trim, "|") {
+		return nil
+	}
+	cols := len(tableCells(trim))
+	if cols < 2 || cols > 64 {
+		return nil
+	}
+	b, _, _ := pipeTable([]string{trim, "|" + strings.Repeat("---|", cols), "|" + strings.Repeat(" |", cols)}, true)
+	return b
+}
+
 // mdBlocks parses physical lines into blocks.
 func mdBlocks(lines []string, off Off) []*Block {
+	return mdBlocksLocated(lines, off, nil)
+}
+
+func mdBlocksLocated(lines []string, off Off, locate func(*Block, int, int)) []*Block {
 	var out []*Block
 	i := 0
+	start, count := 0, 0
+	record := func() {
+		if locate != nil && len(out) > count {
+			locate(out[count], start, i)
+		}
+	}
 	lastList := false
 	for i < len(lines) {
+		record()
+		start, count = i, len(out)
 		line := lines[i]
 		if strings.TrimSpace(line) == "" {
 			if len(out) > 0 && !off.File {
@@ -282,11 +310,26 @@ func mdBlocks(lines []string, off Off) []*Block {
 		}
 		ind := IndentOf(line)
 		body := strings.TrimSpace(line)
+		if off.File && i == 0 && line == "---" {
+			for end := i + 1; end < len(lines); end++ {
+				if lines[end] == "---" || lines[end] == "..." {
+					out = append(out, NewBlock(CodeKind{Lang: "yaml", FrontMatter: true},
+						PlainRich(strings.Join(lines[i+1:end], "\n"))))
+					i = end + 1
+					break
+				}
+			}
+			if i != 0 {
+				continue
+			}
+		}
 		if ch, n, info, ok := fence(line); ok && !off.CodeDivider {
 			var code []string
+			closing := n
 			j := i + 1
 			for j < len(lines) {
 				if c2, n2, rest, ok2 := fence(lines[j]); ok2 && c2 == ch && n2 >= n && rest == "" {
+					closing = n2
 					break
 				}
 				code = append(code, Dedent(lines[j], ind))
@@ -305,20 +348,27 @@ func mdBlocks(lines []string, off Off) []*Block {
 			if f := strings.Fields(info); len(f) > 0 {
 				langToken = f[0]
 			}
-			out = append(out, NewBlock(CodeKind{Lang: langToken}, PlainRich(bodyText)))
+			raw := strings.TrimLeft(line, " \t")[n:]
+			left := strings.TrimLeftFunc(raw, unicode.IsSpace)
+			layout := fenceStyle{marker: ch, open: n, close: closing, beforeLang: raw[:len(raw)-len(left)], afterLang: left[len(langToken):]}
+			out = append(out, NewBlock(CodeKind{Lang: langToken, fence: layout}, PlainRich(bodyText)))
 			i = min(j+1, len(lines))
 			lastList = false
 			continue
 		}
 		// A complete display formula is one equation object; an unclosed
 		// delimiter stays plain text.
-		if ind <= 3 && !off.CodeDivider && strings.HasPrefix(body, "$$") {
+		open, close := "$$", "$$"
+		if strings.HasPrefix(body, `\[`) {
+			open, close = `\[`, `\]`
+		}
+		if ind <= 3 && !off.CodeDivider && strings.HasPrefix(body, open) {
 			var src string
 			var end int
 			found := false
-			if body == "$$" {
+			if body == open {
 				e := i + 1
-				for e < len(lines) && strings.TrimSpace(lines[e]) != "$$" {
+				for e < len(lines) && strings.TrimSpace(lines[e]) != close {
 					e++
 				}
 				if e < len(lines) {
@@ -326,8 +376,8 @@ func mdBlocks(lines []string, off Off) []*Block {
 					end = e + 1
 					found = true
 				}
-			} else if inner, ok := strings.CutPrefix(body, "$$"); ok {
-				if inner, ok := strings.CutSuffix(inner, "$$"); ok {
+			} else if inner, ok := strings.CutPrefix(body, open); ok {
+				if inner, ok := strings.CutSuffix(inner, close); ok {
 					src = strings.TrimSpace(inner)
 					end = i + 1
 					found = true
@@ -337,7 +387,9 @@ func mdBlocks(lines []string, off Off) []*Block {
 				var t RichText
 				inline := DisplayEquationInline(src)
 				t.Push(Obj, Marks{Inline: &inline})
-				out = append(out, NewBlock(TextKind{}, t))
+				b := NewBlock(TextKind{}, t)
+				b.Align = AlignCenter
+				out = append(out, b)
 				i = end
 				lastList = false
 				continue
@@ -400,15 +452,13 @@ func mdBlocks(lines []string, off Off) []*Block {
 		for hashes < len(body) && body[hashes] == '#' {
 			hashes++
 		}
-		if hashes >= 1 && hashes <= 9 && hashes < len(body) && (body[hashes] == ' ' || body[hashes] == '\t') {
+		if ind <= 3 && hashes >= 1 && hashes <= 6 && (hashes == len(body) || body[hashes] == ' ' || body[hashes] == '\t') {
 			t := strings.TrimSpace(body[hashes:])
-			t = strings.TrimRight(t, "#")
-			t = strings.TrimRight(t, " \t")
-			lvl := uint8(hashes)
-			if lvl > 6 {
-				lvl = 6
+			if trimmed := strings.TrimRight(t, "#"); len(trimmed) < len(t) &&
+				(trimmed == "" || strings.HasSuffix(trimmed, " ") || strings.HasSuffix(trimmed, "\t")) {
+				t = strings.TrimRight(trimmed, " \t")
 			}
-			out = append(out, NewBlock(HeadingKind{Level: lvl}, mdInlineMode(t, off.File)))
+			out = append(out, NewBlock(HeadingKind{Level: uint8(hashes)}, mdInlineMode(t, off.File)))
 			i++
 			continue
 		}
@@ -417,8 +467,17 @@ func mdBlocks(lines []string, off Off) []*Block {
 			i++
 			continue
 		}
+		if ind <= 3 && IsTOCMarker(body) {
+			out = append(out, NewBlock(TOCKind{Marker: body}, RichText{}))
+			i++
+			continue
+		}
+		if n := definitionLines(lines[i:]); n != 0 {
+			out = append(out, NewBlock(DefinitionKind{}, PlainRich(strings.Join(lines[i:i+n], "\n"))))
+			i += n
+			continue
+		}
 		if _, ok := quoteLine(body); ok && !off.Quote {
-			start := i
 			var sub []string
 			for i < len(lines) {
 				r, ok := quoteLine(strings.TrimSpace(lines[i]))
@@ -429,10 +488,10 @@ func mdBlocks(lines []string, off Off) []*Block {
 				i++
 			}
 			kids := mdBlocks(sub, Off{Bullet: off.Bullet, Ordered: off.Ordered, Todo: off.Todo, Quote: true, CodeDivider: off.CodeDivider, File: off.File})
-			if len(kids) > 0 {
-				out = append(out, NewBlock(QuoteKind{}, RichText{}).WithChildren(kids...))
-				_ = start
+			if len(kids) == 0 {
+				kids = []*Block{TextBlock("")}
 			}
+			out = append(out, NewBlock(QuoteKind{}, RichText{}).WithChildren(kids...))
 			continue
 		}
 		if t, n, ok := pipeTable(lines[i:], off.File); ok {
@@ -447,7 +506,7 @@ func mdBlocks(lines []string, off Off) []*Block {
 				continue
 			}
 			if img, w, h, used, ok := htmlImageBlockAt(lines[i:]); ok {
-				b := NewBlock(ImageKind{SrcKind: img.SrcKind, Src: img.Src, Width: w, Height: h, Caption: optStr(img.Alt)}, RichText{})
+				b := NewBlock(ImageKind{SrcKind: img.SrcKind, Src: img.Src, Width: w, Height: h, Caption: optStr(img.Alt), markup: strings.Join(lines[i:i+used], "\n")}, RichText{})
 				b.Align = AlignCenter
 				out = append(out, b)
 				i += used
@@ -455,16 +514,33 @@ func mdBlocks(lines []string, off Off) []*Block {
 			}
 		}
 		if src, alt, ok := imageLine(body); ok && off.File {
-			b := NewBlock(ImageKind{SrcKind: "src", Src: unescapeImage(src), Caption: optStr(unescapeImage(alt))}, RichText{})
+			b := NewBlock(ImageKind{SrcKind: "src", Src: unescapeImage(src), Caption: optStr(unescapeImage(alt)), markup: body}, RichText{})
 			b.Align = AlignCenter
 			out = append(out, b)
 			i++
 			continue
 		}
+		// A Setext underline belongs to the preceding paragraph.
+		if off.File && ind <= 3 && i+1 < len(lines) {
+			underline := strings.TrimSpace(lines[i+1])
+			if len(underline) > 0 && IndentOf(lines[i+1]) <= 3 {
+				level := uint8(0)
+				switch {
+				case strings.Trim(underline, "=") == "":
+					level = 1
+				case strings.Trim(underline, "-") == "":
+					level = 2
+				}
+				if level != 0 {
+					out = append(out, NewBlock(HeadingKind{Level: level}, mdInlineMode(body, true)))
+					i += 2
+					continue
+				}
+			}
+		}
 		// Consecutive plain lines belong to one paragraph: merge them into a
 		// single Text block separated by `\n`, so hard breaks round-trip.
-		startLine := i
-		standalone := strings.HasPrefix(strings.TrimSpace(line), "$$") && !off.CodeDivider
+		standalone := (strings.HasPrefix(body, "$$") || strings.HasPrefix(body, `\[`)) && !off.CodeDivider
 		para := []string{tabs(line)}
 		i++
 		if !standalone {
@@ -476,6 +552,9 @@ func mdBlocks(lines []string, off Off) []*Block {
 				nind := IndentOf(next)
 				nbody := strings.TrimSpace(next)
 				if nind < 4 {
+					if IsTOCMarker(nbody) || definitionLines(lines[i:]) != 0 {
+						break
+					}
 					if _, _, _, ok := fence(next); ok {
 						break
 					}
@@ -483,7 +562,7 @@ func mdBlocks(lines []string, off Off) []*Block {
 					for h < len(nbody) && nbody[h] == '#' {
 						h++
 					}
-					if h >= 1 && h <= 9 && strings.ContainsRune(nbody, ' ') {
+					if h >= 1 && h <= 6 && (h == len(nbody) || nbody[h] == ' ' || nbody[h] == '\t') {
 						break
 					}
 					if divider(nbody) {
@@ -501,7 +580,7 @@ func mdBlocks(lines []string, off Off) []*Block {
 					if _, _, ok := pipeTable(lines[i:], off.File); ok {
 						break
 					}
-					if !off.CodeDivider && strings.HasPrefix(nbody, "$$") {
+					if !off.CodeDivider && (strings.HasPrefix(nbody, "$$") || strings.HasPrefix(nbody, `\[`)) {
 						break
 					}
 					if off.File {
@@ -516,8 +595,8 @@ func mdBlocks(lines []string, off Off) []*Block {
 		}
 		merged := mergeParagraphLines(para)
 		out = append(out, NewBlock(TextKind{}, mdInlineMode(merged, off.File)))
-		_ = startLine
 	}
+	record()
 	return out
 }
 

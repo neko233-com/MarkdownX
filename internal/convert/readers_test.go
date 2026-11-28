@@ -78,9 +78,9 @@ func TestOfd(t *testing.T) {
 <ofd:TextObject><ofd:TextCode X="10" Y="30">第二段</ofd:TextCode></ofd:TextObject>
 </ofd:Layer></ofd:Content></ofd:Page>`
 	z := zipBytes(t, map[string]string{
-		"OFD.xml":                                 `<ofd:OFD xmlns:ofd="x"/>`,
-		"Doc_0/Pages/Page_0/Content.xml":          content,
-		"Doc_0/Pages/Page_1/Content.xml":          `<ofd:Page xmlns:ofd="x"><ofd:Content><ofd:Layer><ofd:TextObject><ofd:TextCode>第三段</ofd:TextCode></ofd:TextObject></ofd:Layer></ofd:Content></ofd:Page>`,
+		"OFD.xml":                        `<ofd:OFD xmlns:ofd="x"/>`,
+		"Doc_0/Pages/Page_0/Content.xml": content,
+		"Doc_0/Pages/Page_1/Content.xml": `<ofd:Page xmlns:ofd="x"><ofd:Content><ofd:Layer><ofd:TextObject><ofd:TextCode>第三段</ofd:TextCode></ofd:TextObject></ofd:Layer></ofd:Content></ofd:Page>`,
 	})
 	md, err := Ofd(z)
 	if err != nil {
@@ -142,7 +142,7 @@ func TestPDFReadsLiteralStrings(t *testing.T) {
 
 func TestDetect(t *testing.T) {
 	cases := map[string]Format{
-		"a.md": FormatMarkdown, "a.markdown": FormatMarkdown, "a.txt": FormatMarkdown,
+		"a.md": FormatMarkdown, "a.markdown": FormatMarkdown, "a.txt": FormatMarkdown, "a.text": FormatMarkdown,
 		"a.docx": FormatDocx, "a.xlsx": FormatXlsx, "a.epub": FormatEpub,
 		"a.ofd": FormatOfd, "a.pdf": FormatPDF, "a.rtf": FormatRtf,
 		"a.html": FormatHTML, "a.bin": FormatUnknown,

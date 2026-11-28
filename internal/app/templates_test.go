@@ -126,8 +126,8 @@ func TestImportTemplateFromMarkdownFile(t *testing.T) {
 	if err := a.ImportTemplateFile(src); err != nil {
 		t.Fatal(err)
 	}
-	if a.sideTab != 1 {
-		t.Fatalf("导入了模板，侧栏应切到模板 tab，实际 %d", a.sideTab)
+	if !a.templateLibraryOpen {
+		t.Fatal("导入模板后应打开模板库")
 	}
 	var found *template
 	for _, tpl := range a.templates {

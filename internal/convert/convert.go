@@ -58,7 +58,7 @@ func (f Format) String() string {
 // Detect guesses a format from a file name.
 func Detect(name string) Format {
 	switch strings.ToLower(filepath.Ext(name)) {
-	case ".md", ".markdown", ".mdown", ".mkd", ".txt", ".qmd":
+	case ".md", ".markdown", ".mdown", ".mkd", ".text", ".txt", ".qmd":
 		return FormatMarkdown
 	case ".docx":
 		return FormatDocx

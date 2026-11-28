@@ -9,6 +9,18 @@ import (
 	"github.com/neko233/markdownx/internal/doc"
 )
 
+func TestDocxXMLPreservesMarkdownReferences(t *testing.T) {
+	const source = "[toc]\n\n[\"章节\"][Ref] 和 [^note]。\n\n[Ref]: #目的 \"说明\"\n\n[^note]: 第一段。\n\n    第二段。\n"
+	before := doc.ReadSource(source)
+	after := &doc.Document{Blocks: ParseDocxXML(ToDocxXML(before.Blocks))}
+	if got, _ := after.WorkspaceMarkdown(); got != source {
+		t.Fatalf("book changed Markdown reference source: %q", got)
+	}
+	if l, ok := after.References().Link("ref"); !ok || l.Destination != "#目的" {
+		t.Fatalf("book lost the link definition: %+v", l)
+	}
+}
+
 func TestParseRejectsBadBooks(t *testing.T) {
 	cases := []string{
 		`not json`,

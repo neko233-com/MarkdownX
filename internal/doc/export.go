@@ -11,6 +11,8 @@ import (
 
 // Options are the 导出 Markdown settings.
 type Options struct {
+	// KeepPaths writes Markdown references in place, without copying assets.
+	KeepPaths bool
 	// Resolve turns a library-relative source into an absolute file path.
 	// Nil means local assets cannot be resolved and count as missing.
 	Resolve func(src string) (string, bool)
@@ -65,6 +67,16 @@ type writer struct {
 // tight.
 func (w *writer) blocks(bs []*Block) string {
 	var out strings.Builder
+	w.eachBlock(bs, func(_ *Block, text, separator string) {
+		if out.Len() > 0 {
+			out.WriteString(separator)
+		}
+		out.WriteString(text)
+	})
+	return out.String()
+}
+
+func (w *writer) eachBlock(bs []*Block, emit func(*Block, string, string)) {
 	prevList := false
 	var seq uint32
 	for _, b := range bs {
@@ -84,21 +96,14 @@ func (w *writer) blocks(bs []*Block) string {
 		if s == "" && !list {
 			continue
 		}
-		if out.Len() > 0 {
-			explicit := false
-			if o, ok := b.Kind.(OrderedKind); ok && o.Seq != nil {
-				explicit = true
-			}
-			if list && prevList && !explicit {
-				out.WriteString("\n")
-			} else {
-				out.WriteString("\n\n")
-			}
+		separator := "\n\n"
+		o, ordered := b.Kind.(OrderedKind)
+		if list && prevList && (!ordered || o.Seq == nil) {
+			separator = "\n"
 		}
-		out.WriteString(s)
+		emit(b, s, separator)
 		prevList = list
 	}
-	return out.String()
 }
 
 func (w *writer) block(b *Block, seq uint32) string {
@@ -135,7 +140,11 @@ func (w *writer) block(b *Block, seq uint32) string {
 	case TextKind:
 		rendered := text
 		if display == nil {
-			rendered = ReplaceHardBreaksInParagraph(text)
+			lines := strings.Split(text, "\n")
+			for i, line := range lines {
+				lines[i] = escapeParagraphStart(line)
+			}
+			rendered = ReplaceHardBreaksInParagraph(strings.Join(lines, "\n"))
 		}
 		leading := 0
 		for leading < len(rendered) && rendered[leading] == ' ' {
@@ -162,15 +171,22 @@ func (w *writer) block(b *Block, seq uint32) string {
 		}
 		return nested("- [" + mark + "] " + text)
 	case CodeKind:
+		if k.FrontMatter {
+			return "---\n" + b.Text.Text + "\n---"
+		}
 		lang := k.Lang
 		if strings.EqualFold(lang, "plain text") {
 			lang = ""
-		} else {
+		} else if k.fence.marker == 0 {
 			lang = strings.ToLower(strings.ReplaceAll(lang, " ", ""))
+		}
+		marker := k.fence.marker
+		if marker == 0 {
+			marker = '`'
 		}
 		longest, run := 0, 0
 		for _, c := range b.Text.Text {
-			if c == '`' {
+			if c == marker {
 				run++
 				if run > longest {
 					longest = run
@@ -179,23 +195,35 @@ func (w *writer) block(b *Block, seq uint32) string {
 				run = 0
 			}
 		}
-		fence := strings.Repeat("`", max(longest+1, 3))
-		return fence + lang + "\n" + b.Text.Text + "\n" + fence
+		width := max(longest+1, k.fence.open, 3)
+		opening := strings.Repeat(string(marker), width)
+		closing := strings.Repeat(string(marker), max(width, k.fence.close))
+		return opening + k.fence.beforeLang + lang + k.fence.afterLang + "\n" + b.Text.Text + "\n" + closing
 	case QuoteKind:
 		return indent(w.blocks(b.Children), "> ")
 	case CalloutKind:
 		return indent(k.Emoji+" "+w.blocks(b.Children), "> ")
 	case DividerKind:
 		return "---"
+	case TOCKind:
+		if IsTOCMarker(k.Marker) {
+			return k.Marker
+		}
+		return "[toc]"
+	case DefinitionKind:
+		return nested(b.Text.Text)
 	case ImageKind:
-		if w.opts.Assets == nil {
+		if w.opts.KeepPaths && k.markup != "" {
+			return k.markup
+		}
+		if !w.opts.KeepPaths && w.opts.Assets == nil {
 			return ""
 		}
 		alt := ""
 		if k.Caption != nil {
 			alt = *k.Caption
 		}
-		link := w.image(k.Src, *w.opts.Assets)
+		link := w.image(k.Src)
 		return "![" + escapeText(alt, false) + "](" + w.assetURL(link) + ")"
 	case TableKind:
 		return w.table(k.Table)
@@ -250,8 +278,104 @@ func (w *writer) block(b *Block, seq uint32) string {
 	return ""
 }
 
+// MarkdownInline serializes a selection without turning it into a paragraph.
+func MarkdownInline(t RichText) string {
+	w := writer{opts: Options{KeepPaths: true}}
+	return w.rich(&t)
+}
+
+// MarkdownTableRow serializes one GFM row for copying.
+func MarkdownTableRow(t *Table, row int) string {
+	w := writer{opts: Options{KeepPaths: true}}
+	return w.tableRow(t.Rows[row], t.NCols())
+}
+
+func escapeParagraphStart(line string) string {
+	trimmed := strings.TrimLeft(line, " ")
+	if trimmed == "" {
+		return line
+	}
+	start := len(line) - len(trimmed)
+	if head := strings.TrimLeft(trimmed, "#"); len(trimmed)-len(head) <= 6 && len(head) < len(trimmed) &&
+		(head == "" || head[0] == ' ' || head[0] == '\t') {
+		return line[:start] + "\\" + trimmed
+	}
+	switch trimmed[0] {
+	case '>':
+		return line[:start] + "\\" + trimmed
+	case '-':
+		if strings.Trim(strings.TrimSpace(trimmed), "-") == "" || divider(trimmed) ||
+			strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "-\t") {
+			return line[:start] + "\\" + trimmed
+		}
+	case '+':
+		if strings.HasPrefix(trimmed, "+ ") || strings.HasPrefix(trimmed, "+\t") {
+			return line[:start] + "\\" + trimmed
+		}
+	case '=':
+		if strings.Trim(strings.TrimSpace(trimmed), "=") == "" {
+			return line[:start] + "\\" + trimmed
+		}
+	}
+	if mark, _, _, ok := listItem(trimmed); ok && !mark.bullet {
+		i := strings.IndexAny(trimmed, ".)")
+		if i > 0 {
+			return line[:start+i] + "\\" + line[start+i:]
+		}
+	}
+	return line
+}
+
 func (w *writer) rich(t *RichText) string {
-	if w.opts.Assets == nil {
+	if w.opts.KeepPaths && len(t.inlineSources) != 0 {
+		var out strings.Builder
+		at := 0
+		for i := 0; i < len(t.inlineSources); {
+			src := t.inlineSources[i]
+			before := t.Slice(at, src.Start)
+			out.WriteString(w.formattedRich(&before))
+			start, end := src.Start, src.End
+			var raw strings.Builder
+			raw.WriteString(src.Markup)
+			i++
+			for i < len(t.inlineSources) && t.inlineSources[i].Start == end {
+				next := t.inlineSources[i]
+				raw.WriteString(next.Markup)
+				end = next.End
+				i++
+			}
+			part := t.Slice(start, end)
+			markup := raw.String()
+			// When editing joins two styled tokens or brings underscore
+			// emphasis next to a word, its original delimiters may become
+			// ambiguous. Re-encode that span while keeping other spellings.
+			lo, hi := start, end
+			if lo > 0 {
+				_, n := utf8.DecodeLastRuneInString(t.Text[:lo])
+				lo -= n
+			}
+			if hi < t.Len() {
+				_, n := utf8.DecodeRuneInString(t.Text[hi:])
+				hi += n
+			}
+			context := escapeText(t.Text[lo:start], false) + markup + escapeText(t.Text[end:hi], false)
+			parsed := mdInlineWith(context, true, true)
+			if parsed.Len() == hi-lo && parsed.Slice(start-lo, end-lo).sameInlineContent(part) {
+				out.WriteString(markup)
+			} else {
+				out.WriteString(w.formattedRich(&part))
+			}
+			at = end
+		}
+		after := t.Slice(at, t.Len())
+		out.WriteString(w.formattedRich(&after))
+		return out.String()
+	}
+	return w.formattedRich(t)
+}
+
+func (w *writer) formattedRich(t *RichText) string {
+	if !w.opts.KeepPaths && w.opts.Assets == nil {
 		return renderInline(t, func(asset inlineAsset) (string, bool) { return "", false })
 	}
 	return renderInline(t, func(asset inlineAsset) (string, bool) {
@@ -259,10 +383,7 @@ func (w *writer) rich(t *RichText) string {
 		case inlineFile:
 			return w.fileLink(a.File)
 		case inlineImage:
-			if w.opts.Assets == nil {
-				return "", false
-			}
-			link := w.image(a.Image.Src, *w.opts.Assets)
+			link := w.image(a.Image.Src)
 			if link == "" {
 				return "", false
 			}
@@ -273,10 +394,10 @@ func (w *writer) rich(t *RichText) string {
 }
 
 func (w *writer) fileLink(f FileBlock) (string, bool) {
-	if w.opts.Assets == nil || f.SrcKind != "path" {
+	if (!w.opts.KeepPaths && w.opts.Assets == nil) || f.SrcKind != "path" {
 		return "", false
 	}
-	link := w.image(f.Src, *w.opts.Assets)
+	link := w.image(f.Src)
 	if link == "" {
 		return "", false
 	}
@@ -304,7 +425,7 @@ func (w *writer) interactiveSource(i Interactive) string {
 			strings.HasPrefix(src, "#") || strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
 			return "", false
 		}
-		rel := w.image(src, *w.opts.Assets)
+		rel := w.image(src)
 		if rel == "" {
 			return "", false
 		}
@@ -324,38 +445,11 @@ func (w *writer) table(t *Table) string {
 	for _, r := range t.Rows {
 		cols = max(cols, len(r))
 	}
-	row := func(r []TableCell) string {
-		var cells []string
-		for _, cell := range r {
-			var parts []string
-			for _, b := range cell.Blocks {
-				switch k := b.Kind.(type) {
-				case ImageKind:
-					parts = append(parts, w.block(b, 0))
-				case InteractiveKindBlock:
-					parts = append(parts, w.tableWidget(k.Interactive))
-				default:
-					parts = append(parts, w.rich(&b.Text))
-				}
-			}
-			var kept []string
-			for _, p := range parts {
-				if p != "" {
-					kept = append(kept, p)
-				}
-			}
-			cells = append(cells, strings.ReplaceAll(strings.Join(kept, "<br>"), "|", `\|`))
-		}
-		for len(cells) < cols {
-			cells = append(cells, "")
-		}
-		return "| " + strings.Join(cells, " | ") + " |"
-	}
 	var lines []string
 	if len(t.Rows) > 0 {
-		lines = append(lines, row(t.Rows[0]))
+		lines = append(lines, w.tableRow(t.Rows[0], cols))
 	} else {
-		lines = append(lines, row(nil))
+		lines = append(lines, w.tableRow(nil, cols))
 	}
 	markers := make([]string, cols)
 	for c := 0; c < cols; c++ {
@@ -376,15 +470,42 @@ func (w *writer) table(t *Table) string {
 		}
 	}
 	lines = append(lines, "| "+strings.Join(markers, " | ")+" |")
-	for _, r := range t.Rows[1:] {
-		lines = append(lines, row(r))
+	for _, r := range t.Rows[min(len(t.Rows), 1):] {
+		lines = append(lines, w.tableRow(r, cols))
 	}
 	return strings.Join(lines, "\n")
 }
 
+func (w *writer) tableRow(row []TableCell, cols int) string {
+	cells := make([]string, max(len(row), cols))
+	for i, cell := range row {
+		var parts []string
+		for _, b := range cell.Blocks {
+			var text string
+			switch k := b.Kind.(type) {
+			case ImageKind:
+				text = w.block(b, 0)
+			case InteractiveKindBlock:
+				text = w.tableWidget(k.Interactive)
+			default:
+				text = w.rich(&b.Text)
+			}
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		cellText := strings.ReplaceAll(strings.Join(parts, "<br>"), "\n", "<br>")
+		cells[i] = strings.ReplaceAll(cellText, "|", `\|`)
+	}
+	return "| " + strings.Join(cells, " | ") + " |"
+}
+
 // image returns the link for a local file: a copy in the assets folder, same
 // name, numbered on clashes.
-func (w *writer) image(src, dir string) string {
+func (w *writer) image(src string) string {
+	if w.opts.KeepPaths {
+		return src
+	}
 	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") || strings.HasPrefix(src, "data:image/") {
 		return src
 	}
@@ -404,6 +525,7 @@ func (w *writer) image(src, dir string) string {
 	}
 	stem := strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
 	ext := filepath.Ext(abs)
+	dir := *w.opts.Assets
 	rel := dir + "/" + stem + ext
 	n := 1
 	for {
@@ -453,7 +575,7 @@ func escapeText(s string, preserveLinks bool) string {
 			}
 		}
 		c, size := utf8.DecodeRuneInString(rest)
-		if strings.ContainsRune("\\*_`[]<~&", c) || strings.HasPrefix(rest, "&#32;") {
+		if strings.ContainsRune("\\*_`[]<~&$", c) || strings.HasPrefix(rest, "&#32;") {
 			out.WriteByte('\\')
 		}
 		out.WriteRune(c)
@@ -512,14 +634,14 @@ func plainLinkLen(s string) int {
 
 // mdStyle is the subset of marks Markdown can express.
 type mdStyle struct {
-	bold, italic, strike, underline, code, image, equation bool
-	link                                                   string
+	bold, italic, strike, underline, code, image, equation, reference bool
+	link                                                              string
 }
 
 func (m mdStyle) equal(o mdStyle) bool {
 	return m.bold == o.bold && m.italic == o.italic && m.strike == o.strike &&
 		m.underline == o.underline && m.code == o.code && m.image == o.image &&
-		m.equation == o.equation && m.link == o.link
+		m.equation == o.equation && m.reference == o.reference && m.link == o.link
 }
 
 type inlineAsset interface{ asset() }
@@ -540,6 +662,7 @@ func renderInline(t *RichText, assets func(inlineAsset) (string, bool)) string {
 	for _, sp := range t.Spans() {
 		src := t.Text[sp.Start:sp.End]
 		var s string
+		ref, reference := sp.Marks.Inline.Reference()
 		if eq, ok := sp.Marks.Inline.Equation(); ok {
 			var b strings.Builder
 			for range src {
@@ -554,6 +677,8 @@ func renderInline(t *RichText, assets func(inlineAsset) (string, bool)) string {
 				markup = "![" + escapeText(img.Alt, false) + "](" + u + ")"
 			}
 			s = strings.Repeat(markup, utf8.RuneCountInString(src))
+		} else if reference {
+			s = strings.Repeat(ref.Markup, utf8.RuneCountInString(src))
 		} else if sp.Marks.Inline != nil {
 			text, link := rawSummary(sp.Marks.Inline.XML)
 			_, isButton := sp.Marks.Inline.Button()
@@ -571,15 +696,19 @@ func renderInline(t *RichText, assets func(inlineAsset) (string, bool)) string {
 			strike:    sp.Marks.Strike,
 			underline: sp.Marks.Underline,
 			code:      sp.Marks.Code,
-			image:     sp.Marks.Inline != nil && sp.Marks.Inline.hasImage(),
-			equation:  sp.Marks.Inline != nil && sp.Marks.Inline.hasEquation(),
+			image:     sp.Marks.Inline.hasImage(),
+			equation:  sp.Marks.Inline.hasEquation(),
+			reference: reference,
 		}
 		if f, ok := sp.Marks.Inline.File(); ok {
 			if u, ok := assets(inlineFile{f}); ok {
 				style.link = u
 			}
-		} else if sp.Marks.Link != nil && (LinkOK(*sp.Marks.Link) || RelativeLinkOK(*sp.Marks.Link)) {
-			style.link = *sp.Marks.Link
+		} else if link := sp.Marks.Link; link != nil {
+			_, local := LocalFileURLPath(*link)
+			if LinkOK(*link) || RelativeLinkOK(*link) || local {
+				style.link = *link
+			}
 		}
 		if n := len(runs); n > 0 && runs[n-1].style.equal(style) {
 			runs[n-1].text += s
@@ -622,7 +751,7 @@ func renderInline(t *RichText, assets func(inlineAsset) (string, bool)) string {
 		}
 		var x string
 		switch {
-		case p.style.image || p.style.equation:
+		case p.style.image || p.style.equation || p.style.reference:
 			x = body
 		case p.style.code:
 			longest, run := 0, 0

@@ -34,6 +34,20 @@ func attrIf(name, v string) string {
 // MdInline parses inline Markdown without whole-file rules.
 func MdInline(s string) RichText { return mdInlineMode(s, false) }
 
+// CompleteInline recognizes a closed inline expression at the typing caret.
+// Open delimiters and plain escapes stay available to edit as typed.
+func CompleteInline(s string) (RichText, bool) {
+	if s == "" || len(s) > 8192 || !strings.ContainsRune("*_`~)$>]", rune(s[len(s)-1])) {
+		return RichText{}, false
+	}
+	t := mdInlineWith(s, true, false)
+	if len(t.Runs) == 0 || t.Text == s {
+		return RichText{}, false
+	}
+	last := t.Runs[len(t.Runs)-1].Marks
+	return t, last.Bold || last.Italic || last.Code || last.Underline || last.Strike || last.Link != nil || last.Inline != nil
+}
+
 func mdInlineMode(s string, file bool) RichText { return mdInlineWith(s, file, true) }
 
 // findUnescaped finds a needle not preceded by an odd run of backslashes.
@@ -139,7 +153,7 @@ func linkAt(s string, file bool) (label, url string, used int, ok bool) {
 			return "", "", 0, false
 		}
 		u := unescapeImage(src)
-		if !(LinkOK(u) || strings.HasPrefix(u, "www.") || RelativeLinkOK(u)) {
+		if _, local := LocalFileURLPath(u); !(LinkOK(u) || strings.HasPrefix(u, "www.") || RelativeLinkOK(u) || local) {
 			return "", "", 0, false
 		}
 		return alt, u, usedImg - 1, true
@@ -171,20 +185,11 @@ func linkAt(s string, file bool) (label, url string, used int, ok bool) {
 	if !ok {
 		return "", "", 0, false
 	}
-	end := strings.Index(inner, ")")
-	if end < 0 {
+	u, used, ok := inlineDestination(inner)
+	if !ok || !(LinkOK(u) || strings.HasPrefix(u, "www.")) {
 		return "", "", 0, false
 	}
-	target := strings.TrimSpace(inner[:end])
-	fields := strings.Fields(target)
-	u := ""
-	if len(fields) > 0 {
-		u = strings.Trim(fields[0], "<>")
-	}
-	if u == "" || !(LinkOK(u) || strings.HasPrefix(u, "www.")) {
-		return "", "", 0, false
-	}
-	return s[1:closeAt], u, closeAt + 1 + 1 + end + 1, true
+	return s[1:closeAt], u, closeAt + 2 + used, true
 }
 
 // imageAt parses `![alt](src "title")` at the start of s.
@@ -219,20 +224,84 @@ func imageAt(s string) (src, alt string, used int, ok bool) {
 	if !ok {
 		return "", "", 0, false
 	}
-	end := strings.Index(inner, ")")
-	if end < 0 {
+	u, used, ok := inlineDestination(inner)
+	if !ok {
 		return "", "", 0, false
 	}
-	target := strings.TrimSpace(inner[:end])
-	fields := strings.Fields(target)
-	if len(fields) == 0 {
-		return "", "", 0, false
+	return u, s[2:closeAt], closeAt + 2 + used, true
+}
+
+// inlineDestination reads the destination and optional title after the
+// opening parenthesis. An angle-wrapped destination can contain spaces.
+func inlineDestination(s string) (string, int, bool) {
+	space := func(at int) int {
+		for at < len(s) && strings.ContainsRune(" \t\r\n", rune(s[at])) {
+			at++
+		}
+		return at
 	}
-	u := strings.Trim(fields[0], "<>")
-	if u == "" {
-		return "", "", 0, false
+	start := space(0)
+	if start >= len(s) {
+		return "", 0, false
 	}
-	return u, s[2:closeAt], closeAt + 1 + 1 + end + 1, true
+	at := start
+	var target string
+	if s[at] == '<' {
+		end, ok := findUnescaped(s[at+1:], ">")
+		if !ok {
+			return "", 0, false
+		}
+		at += end + 2
+		target = s[start+1 : at-1]
+		if strings.ContainsAny(target, "<\r\n") {
+			return "", 0, false
+		}
+	} else {
+		depth := 0
+		for at < len(s) {
+			c := s[at]
+			if c == '\\' && at+1 < len(s) {
+				at += 2
+				continue
+			}
+			if c == '(' {
+				depth++
+			}
+			if c == ')' {
+				if depth == 0 {
+					break
+				}
+				depth--
+			}
+			if strings.ContainsRune(" \t\r\n", rune(c)) {
+				break
+			}
+			at++
+		}
+		if depth != 0 {
+			return "", 0, false
+		}
+		target = s[start:at]
+	}
+	if target == "" {
+		return "", 0, false
+	}
+	end := space(at)
+	if end > at && end < len(s) && strings.ContainsRune("\"'(", rune(s[end])) {
+		quote := s[end]
+		if quote == '(' {
+			quote = ')'
+		}
+		close, ok := findUnescaped(s[end+1:], string(quote))
+		if !ok {
+			return "", 0, false
+		}
+		end = space(end + close + 2)
+	}
+	if end < len(s) && s[end] == ')' {
+		return target, end + 1, true
+	}
+	return "", 0, false
 }
 
 // imageLine matches a line that holds only an image.
@@ -306,6 +375,12 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 			plain.Reset()
 		}
 	}
+	object := func(raw string, in Inline) {
+		flush()
+		var value RichText
+		value.Push(Obj, Marks{Inline: &in})
+		out.appendMarkup(raw, value)
+	}
 	i := 0
 	for i < len(s) {
 		rest := s[i:]
@@ -314,6 +389,13 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 		hasPrev := i > 0
 		if hasPrev {
 			prev = lastRune(s[:i])
+		}
+		if file && strings.HasPrefix(rest, `\(`) {
+			if end, ok := findUnescaped(rest[2:], `\)`); ok && end > 0 {
+				object(rest[:end+4], EquationInlineObj(rest[2:end+2]))
+				i += end + 4
+				continue
+			}
 		}
 		if file && c == '\\' && len(rest) > 1 {
 			next, nsize := utf8.DecodeRuneInString(rest[1:])
@@ -325,18 +407,21 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 		}
 		if file && c == '!' {
 			if src, alt, used, ok := imageAt(rest); ok {
-				flush()
-				inline := ImageInlineObj(InlineImage{SrcKind: "src", Src: unescapeImage(src), Alt: unescapeImage(alt)})
-				out.Push(Obj, Marks{Inline: &inline})
+				object(rest[:used], ImageInlineObj(InlineImage{SrcKind: "src", Src: unescapeImage(src), Alt: unescapeImage(alt)}))
+				i += used
+				continue
+			}
+		}
+		if c == '!' && strings.HasPrefix(rest, "![") {
+			if ref, used, ok := referenceAt(rest); ok {
+				object(ref.Markup, referenceObject(ref))
 				i += used
 				continue
 			}
 		}
 		if file && c == '<' {
 			if img, _, _, used, ok := htmlImageAt(rest); ok {
-				flush()
-				inline := ImageInlineObj(img)
-				out.Push(Obj, Marks{Inline: &inline})
+				object(rest[:used], ImageInlineObj(img))
 				i += used
 				continue
 			}
@@ -393,8 +478,9 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 				default:
 					t.UpdateMarks(0, t.Len(), func(m *Marks) { m.Strike = true })
 				}
-				out.Append(t)
-				i += len(wrap.open) + end + len(wrap.close)
+				used := len(wrap.open) + end + len(wrap.close)
+				out.appendMarkup(rest[:used], t)
+				i += used
 				tagged = true
 				break
 			}
@@ -422,8 +508,11 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 				}
 				if inner != "" {
 					flush()
-					out.Push(inner, Marks{Code: true})
-					i += n + end + n
+					used := n + end + n
+					var value RichText
+					value.Push(inner, Marks{Code: true})
+					out.appendMarkup(rest[:used], value)
+					i += used
 					continue
 				}
 			}
@@ -434,9 +523,7 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 		// Equations.
 		if c == '$' {
 			if inner, used, _, ok := markdownMathAt(rest, prev, hasPrev); ok {
-				flush()
-				inline := EquationInlineObj(inner)
-				out.Push(Obj, Marks{Inline: &inline})
+				object(rest[:used], EquationInlineObj(inner))
 				i += used
 				continue
 			}
@@ -451,7 +538,12 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 				}
 				u := url
 				t.UpdateMarks(0, t.Len(), func(m *Marks) { m.Link = &u })
-				out.Append(t)
+				out.appendMarkup(rest[:used], t)
+				i += used
+				continue
+			}
+			if ref, used, ok := referenceAt(rest); ok {
+				object(ref.Markup, referenceObject(ref))
 				i += used
 				continue
 			}
@@ -480,7 +572,9 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 					if strings.HasPrefix(l, "www.") {
 						href = "https://" + url
 					}
-					out.Push(url, Marks{Link: &href})
+					var value RichText
+					value.Push(url, Marks{Link: &href})
+					out.appendMarkup(rest[:len(url)], value)
 					i += len(url)
 					continue
 				}
@@ -521,7 +615,7 @@ func mdInlineWith(s string, file, autolink bool) RichText {
 						flush()
 						t := mdInlineWith(inner, file, autolink)
 						t.UpdateMarks(0, t.Len(), set)
-						out.Append(t)
+						out.appendMarkup(rest[:afterIdx], t)
 						i += n + end + n
 						continue
 					}

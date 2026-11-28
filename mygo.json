@@ -2,7 +2,7 @@
   "name": "MarkdownX",
   "slug": "markdownx",
   "identifier": "com.neko233.markdownx",
-  "version": "0.1.47",
+  "version": "0.1.80",
   "copyright": "© 2026 neko233",
   "publisher": "neko233",
   "license": "MIT",
@@ -26,6 +26,7 @@
     "signingIdentity": "-"
   },
   "windows": {
-    "installDirName": "MarkdownX"
+    "installDirName": "MarkdownX",
+    "installerInclude": "scripts/windows-installer.nsh"
   }
 }

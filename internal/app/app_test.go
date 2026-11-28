@@ -86,7 +86,7 @@ func TestStatsCountsCharacters(t *testing.T) {
 func TestInsertTableRoundTrips(t *testing.T) {
 	a := newTestApp("before")
 	a.focus = a.core.Doc.Blocks[0].ID
-	a.insertTable()
+	a.insertSizedTable(3, 3)
 	a.ResetBuffers()
 
 	// The table is the second block, followed by an empty paragraph.
