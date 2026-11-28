@@ -2,6 +2,7 @@
 /build
 /out
 /.mygo/
+/cmd/markdownx/mygo_windows_amd64.syso
 /dist-preview
 .DS_Store
 mygo-update.key
